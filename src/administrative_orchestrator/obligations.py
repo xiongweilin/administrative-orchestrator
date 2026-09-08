@@ -7,7 +7,7 @@ from pydantic import Field
 from sqlalchemy import JSON, Boolean, ForeignKey, Integer, String, Uuid, select
 from sqlalchemy.orm import Mapped, Session, mapped_column
 
-from .domain import AdministrativeCase, AuthorityClass, UtcModel
+from .domain import AdministrativeCase, AuthorityClass, EffectRecord, UtcModel
 from .persistence import Base, SqlStore
 from .policy import PolicyEvaluation
 
@@ -36,6 +36,12 @@ class OnboardingObligationSet(UtcModel):
     authority_epoch: int
     governance_basis_id: UUID
     obligations: tuple[AdministrativeObligation, ...]
+
+
+class EffectObligationLink(UtcModel):
+    effect_id: UUID
+    obligation_id: UUID
+    governance_basis_id: UUID
 
 
 class ObligationSetRow(Base):
@@ -68,6 +74,18 @@ class ObligationRow(Base):
     expected_postcondition_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
     authority_class: Mapped[str] = mapped_column(String(64), nullable=False)
     required: Mapped[bool] = mapped_column(Boolean, nullable=False)
+
+
+class EffectObligationLinkRow(Base):
+    __tablename__ = "administrative_effect_obligation_link"
+
+    effect_id: Mapped[UUID] = mapped_column(
+        ForeignKey("administrative_effect.effect_id"), primary_key=True
+    )
+    obligation_id: Mapped[UUID] = mapped_column(
+        ForeignKey("administrative_obligation.obligation_id"), nullable=False, unique=True
+    )
+    governance_basis_id: Mapped[UUID] = mapped_column(Uuid, nullable=False)
 
 
 class ObligationRepository:
@@ -116,6 +134,54 @@ class ObligationRepository:
             )
         return obligation_set
 
+    def link_effect(
+        self,
+        effect: EffectRecord,
+        obligation: AdministrativeObligation,
+    ) -> EffectObligationLink:
+        if effect.case_id != obligation.case_id:
+            raise ObligationError("effect and obligation belong to different cases")
+        if effect.authority_epoch != obligation.authority_epoch:
+            raise ObligationError("effect and obligation belong to different authority epochs")
+        if (
+            effect.target_system != obligation.target_system
+            or effect.operation != obligation.required_operation
+            or effect.subject_ref != obligation.subject_ref
+            or effect.authority_class != obligation.authority_class
+        ):
+            raise ObligationError("effect does not implement the declared obligation")
+        link = EffectObligationLink(
+            effect_id=effect.effect_id,
+            obligation_id=obligation.obligation_id,
+            governance_basis_id=obligation.governance_basis_id,
+        )
+        with self.store.sessions.begin() as db:
+            row = db.get(EffectObligationLinkRow, effect.effect_id)
+            if row is not None:
+                restored = self._link_from_row(row)
+                if restored != link:
+                    raise ObligationError("effect already links to a different obligation")
+                return restored
+            existing_for_obligation = (
+                db.execute(
+                    select(EffectObligationLinkRow).where(
+                        EffectObligationLinkRow.obligation_id == obligation.obligation_id
+                    )
+                )
+                .scalars()
+                .first()
+            )
+            if existing_for_obligation is not None:
+                raise ObligationError("obligation already has a different effect")
+            db.add(
+                EffectObligationLinkRow(
+                    effect_id=effect.effect_id,
+                    obligation_id=obligation.obligation_id,
+                    governance_basis_id=obligation.governance_basis_id,
+                )
+            )
+        return link
+
     def get_current(self, case_id: UUID, authority_epoch: int) -> OnboardingObligationSet | None:
         with self.store.sessions() as db:
             row = (
@@ -132,6 +198,23 @@ class ObligationRepository:
                 .first()
             )
             return None if row is None else self._load_in_session(db, row.requirement_id)
+
+    def list_links(self, case_id: UUID, authority_epoch: int) -> list[EffectObligationLink]:
+        with self.store.sessions() as db:
+            rows = (
+                db.execute(
+                    select(EffectObligationLinkRow)
+                    .join(ObligationRow, ObligationRow.obligation_id == EffectObligationLinkRow.obligation_id)
+                    .where(
+                        ObligationRow.case_id == case_id,
+                        ObligationRow.authority_epoch == authority_epoch,
+                    )
+                    .order_by(EffectObligationLinkRow.effect_id)
+                )
+                .scalars()
+                .all()
+            )
+            return [self._link_from_row(row) for row in rows]
 
     @staticmethod
     def _load_in_session(db: Session, requirement_id: UUID) -> OnboardingObligationSet:
@@ -168,6 +251,14 @@ class ObligationRepository:
                 )
                 for item in obligation_rows
             ),
+        )
+
+    @staticmethod
+    def _link_from_row(row: EffectObligationLinkRow) -> EffectObligationLink:
+        return EffectObligationLink(
+            effect_id=row.effect_id,
+            obligation_id=row.obligation_id,
+            governance_basis_id=row.governance_basis_id,
         )
 
 
@@ -248,6 +339,8 @@ def derive_onboarding_obligations(
 
 __all__ = [
     "AdministrativeObligation",
+    "EffectObligationLink",
+    "EffectObligationLinkRow",
     "ObligationError",
     "ObligationRepository",
     "ObligationRow",
