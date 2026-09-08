@@ -26,3 +26,41 @@ jobs:
           uv run alembic upgrade head
           uv run alembic downgrade base
           uv run alembic upgrade head
+      - name: Compose config
+        run: docker compose config --quiet
+
+  dbos-integration:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: uv sync --extra dev
+      - name: PostgreSQL Alembic migration smoke
+        env:
+          ADMIN_DATABASE_URL: postgresql+psycopg://postgres:postgres@127.0.0.1:5432/postgres
+        run: |
+          uv run alembic upgrade head
+          uv run alembic downgrade base
+          uv run alembic upgrade head
+      - name: DBOS restart integration
+        env:
+          ADMIN_RUN_DBOS_INTEGRATION: "1"
+          ADMIN_TEST_PG_ADMIN_URL: postgresql://postgres:postgres@127.0.0.1:5432/postgres
+        run: uv run pytest -q tests/test_dbos_integration.py
