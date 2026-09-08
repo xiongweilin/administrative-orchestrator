@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import DateTime, ForeignKey, String, Uuid
+from sqlalchemy import DateTime, ForeignKey, String
 from sqlalchemy.orm import Mapped, Session, mapped_column
 
 from .persistence import Base, SqlStore, utcnow
