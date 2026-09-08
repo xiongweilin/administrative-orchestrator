@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from uuid import NAMESPACE_URL, UUID, uuid5
 
+from .authority import AuthorityRepository
 from .completion import assess_onboarding_completion
+from .config import get_settings
 from .domain import (
     AdministrativeCase,
     CaseStatus,
@@ -162,6 +164,27 @@ class OnboardingExecutionEngine:
         if decision.authority_epoch != case.authority_epoch:
             raise TransitionError("latest onboarding decision is stale")
 
+        if get_settings().authority_enforcement_enabled:
+            satisfaction = AuthorityRepository(self.store).get_approval_satisfaction(
+                case.case_id,
+                case.authority_epoch,
+            )
+            if satisfaction is None:
+                raise TransitionError(
+                    "governed execution requires current approval satisfaction"
+                )
+            if satisfaction.policy_ref != case.policy_ref:
+                raise TransitionError("approval satisfaction policy is stale")
+            required_roles = set(evaluation.required_decision_roles)
+            if not required_roles.issubset(set(satisfaction.satisfied_roles)):
+                raise TransitionError(
+                    "approval satisfaction does not cover current required decision roles"
+                )
+            if decision.decision_id not in satisfaction.decision_ids:
+                raise TransitionError(
+                    "latest approving decision is outside current approval satisfaction"
+                )
+
         unique_templates = {
             (template.target_system, template.operation, template.authority_class): template
             for template in evaluation.allowed_effects
@@ -239,8 +262,6 @@ class OnboardingExecutionEngine:
                     saw_unknown = True
                     continue
                 if effect.status == EffectStatus.OUTCOME_UNKNOWN:
-                    # Once the provider outcome is explicitly unknown, absence
-                    # of read-back evidence never authorizes a blind resend.
                     saw_unknown = True
                     continue
 
