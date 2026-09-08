@@ -10,10 +10,11 @@ from ..domain import CaseStatus
 from ..effect_provider import HttpEffectProvider
 from ..onboarding_execution import OnboardingExecutionEngine
 from ..persistence import SqlStore
-
-CASE_CHANGED_TOPIC = "case_changed"
-NORMAL_WAKE_TIMEOUT_SECONDS = 3600
-RECONCILIATION_POLL_SECONDS = 30
+from .protocol import (
+    CASE_CHANGED_TOPIC,
+    NORMAL_WAKE_TIMEOUT_SECONDS,
+    RECONCILIATION_POLL_SECONDS,
+)
 
 TERMINAL_STATUSES = frozenset(
     {
@@ -87,8 +88,4 @@ def onboarding_case_workflow(*, case_id: str) -> dict[str, Any]:
         DBOS.recv(topic=CASE_CHANGED_TOPIC, timeout_seconds=timeout)
 
 
-__all__ = [
-    "CASE_CHANGED_TOPIC",
-    "drive_onboarding_case_step",
-    "onboarding_case_workflow",
-]
+__all__ = ["drive_onboarding_case_step", "onboarding_case_workflow"]
