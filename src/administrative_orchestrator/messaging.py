@@ -42,6 +42,17 @@ class OutboxEvent:
     attempts: int
 
 
+@dataclass(frozen=True)
+class FailedOutboxEvent:
+    event_id: UUID
+    event_type: str
+    aggregate_id: str
+    payload: dict[str, Any]
+    attempts: int
+    last_error: str | None
+    created_at: datetime
+
+
 def emit_outbox(
     db: Session,
     *,
@@ -159,8 +170,53 @@ def mark_retry(
         row.last_error = error[:2000]
         if attempts >= max_attempts:
             row.status = OUTBOX_FAILED
+            row.next_attempt_at = None
             return True
         row.status = OUTBOX_PENDING
         delay_seconds = min(60, 2 ** max(0, attempts - 1))
         row.next_attempt_at = utcnow() + timedelta(seconds=delay_seconds)
         return False
+
+
+def list_failed_outbox(store: SqlStore, *, limit: int = 100) -> list[FailedOutboxEvent]:
+    limit = max(1, min(limit, 1000))
+    with store.sessions() as db:
+        rows = (
+            db.execute(
+                select(OutboxEventRow)
+                .where(OutboxEventRow.status == OUTBOX_FAILED)
+                .order_by(OutboxEventRow.created_at.desc(), OutboxEventRow.event_id.desc())
+                .limit(limit)
+            )
+            .scalars()
+            .all()
+        )
+        return [
+            FailedOutboxEvent(
+                event_id=row.event_id,
+                event_type=row.event_type,
+                aggregate_id=row.aggregate_id,
+                payload=dict(row.payload_json),
+                attempts=row.attempts,
+                last_error=row.last_error,
+                created_at=row.created_at,
+            )
+            for row in rows
+        ]
+
+
+__all__ = [
+    "FailedOutboxEvent",
+    "OUTBOX_DISPATCHED",
+    "OUTBOX_FAILED",
+    "OUTBOX_PENDING",
+    "OUTBOX_PROCESSING",
+    "OutboxEvent",
+    "OutboxEventRow",
+    "claim_outbox",
+    "emit_outbox",
+    "list_failed_outbox",
+    "mark_dispatched",
+    "mark_retry",
+    "recover_expired_leases",
+]

@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from uuid import NAMESPACE_URL, UUID, uuid5
 
+from .authority import AuthorityRepository
+from .completion import assess_onboarding_completion
+from .config import get_settings
 from .domain import (
     AdministrativeCase,
     CaseStatus,
@@ -13,7 +16,7 @@ from .domain import (
     RealizationDisposition,
     ReopenReason,
 )
-from .effect_provider import EffectProvider, ProviderExecutionStatus, RealityObservation
+from .effect_provider import EffectProvider, ProviderExecutionStatus
 from .execution_repository import ExecutionRepository
 from .execution_transitions import (
     begin_reconciliation,
@@ -27,9 +30,11 @@ from .service import (
     begin_execution,
     begin_verification,
     mint_execution_authorization,
+    mint_execution_authorization_from_approval,
     plan_effect,
     require_reopen,
 )
+from .verification import VerificationDisposition, verify_onboarding_observation
 
 
 class OnboardingExecutionEngine:
@@ -82,7 +87,7 @@ class OnboardingExecutionEngine:
                     case,
                     reconciling,
                     "case.reconciliation_started",
-                    {"reason": "one or more effect outcomes are unknown"},
+                    {"reason": "one or more effect outcomes are unknown or mismatched"},
                 )
                 case = reconciling
             else:
@@ -114,12 +119,34 @@ class OnboardingExecutionEngine:
                 )
                 return reconciling
 
+            outcomes = self.repository.list_outcomes(case.case_id, case.authority_epoch)
+            completion = assess_onboarding_completion(effects, outcomes)
+            if not completion.satisfied:
+                reconciling = begin_reconciliation(case)
+                self._persist_case_transition(
+                    case,
+                    reconciling,
+                    "case.completion_blocked",
+                    {
+                        "requirement_id": completion.requirement_id,
+                        "blocking_reasons": list(completion.blocking_reasons),
+                        "missing_effect_ids": [str(item) for item in completion.missing_effect_ids],
+                        "missing_outcome_kinds": list(completion.missing_outcome_kinds),
+                    },
+                )
+                return reconciling
+
             completed = complete_verified_case(
                 case,
                 expected_effect_count=len(effects),
-                verified_outcome_count=len(effects),
+                verified_outcome_count=len(outcomes),
             )
-            self._persist_case_transition(case, completed, "case.completed")
+            self._persist_case_transition(
+                case,
+                completed,
+                "case.completed",
+                {"completion_requirement_id": completion.requirement_id},
+            )
             return completed
 
         return self._require_case(case_id)
@@ -130,13 +157,30 @@ class OnboardingExecutionEngine:
         evaluation = self.store.get_latest_policy_evaluation(case.case_id)
         if evaluation is None or evaluation.policy_ref != case.policy_ref:
             raise TransitionError("onboarding execution requires the current policy evaluation")
-        decision = self.repository.get_latest_decision(case.case_id)
-        if decision is None:
-            raise TransitionError("onboarding execution requires an approving decision")
-        if decision.disposition != DecisionDisposition.APPROVE:
-            raise TransitionError("latest onboarding decision is not approving")
-        if decision.authority_epoch != case.authority_epoch:
-            raise TransitionError("latest onboarding decision is stale")
+
+        satisfaction = AuthorityRepository(self.store).get_approval_satisfaction(
+            case.case_id,
+            case.authority_epoch,
+        )
+        decision = None
+        if satisfaction is not None:
+            if satisfaction.policy_ref != case.policy_ref:
+                raise TransitionError("approval satisfaction policy is stale")
+            required_roles = set(evaluation.required_decision_roles)
+            if not required_roles.issubset(set(satisfaction.satisfied_roles)):
+                raise TransitionError(
+                    "approval satisfaction does not cover current required decision roles"
+                )
+        else:
+            if get_settings().authority_enforcement_enabled:
+                raise TransitionError("governed execution requires current approval satisfaction")
+            decision = self.repository.get_latest_decision(case.case_id)
+            if decision is None:
+                raise TransitionError("onboarding execution requires an approving decision")
+            if decision.disposition != DecisionDisposition.APPROVE:
+                raise TransitionError("latest onboarding decision is not approving")
+            if decision.authority_epoch != case.authority_epoch:
+                raise TransitionError("latest onboarding decision is stale")
 
         unique_templates = {
             (template.target_system, template.operation, template.authority_class): template
@@ -153,14 +197,26 @@ class OnboardingExecutionEngine:
                 template.target_system,
                 template.operation,
             )
-            authorization = mint_execution_authorization(
-                case,
-                decision,
-                issuer_principal_id="service:administrative-orchestrator",
-                target_system=template.target_system,
-                allowed_operations=(template.operation,),
-                authority_class=template.authority_class,
-            ).model_copy(
+            if satisfaction is not None:
+                authorization = mint_execution_authorization_from_approval(
+                    case,
+                    satisfaction,
+                    issuer_principal_id="service:administrative-orchestrator",
+                    target_system=template.target_system,
+                    allowed_operations=(template.operation,),
+                    authority_class=template.authority_class,
+                )
+            else:
+                assert decision is not None
+                authorization = mint_execution_authorization(
+                    case,
+                    decision,
+                    issuer_principal_id="service:administrative-orchestrator",
+                    target_system=template.target_system,
+                    allowed_operations=(template.operation,),
+                    authority_class=template.authority_class,
+                )
+            authorization = authorization.model_copy(
                 update={
                     "authorization_id": authorization_id,
                     "issued_at": case.updated_at,
@@ -198,12 +254,21 @@ class OnboardingExecutionEngine:
                 continue
             if effect.status in {EffectStatus.DISPATCHED, EffectStatus.OUTCOME_UNKNOWN}:
                 observation = self.provider.observe(effect)
-                if self._observation_matches(effect, observation):
+                verification = verify_onboarding_observation(effect, observation, payload)
+                if verification.disposition == VerificationDisposition.VERIFIED:
                     self.repository.set_effect_status(
                         effect.effect_id,
                         status=EffectStatus.SUCCEEDED,
                         provider_ref=observation.provider_ref,
                     )
+                    continue
+                if verification.disposition == VerificationDisposition.MISMATCH:
+                    self.repository.set_effect_status(
+                        effect.effect_id,
+                        status=EffectStatus.OUTCOME_UNKNOWN,
+                        provider_ref=observation.provider_ref,
+                    )
+                    saw_unknown = True
                     continue
                 if effect.status == EffectStatus.OUTCOME_UNKNOWN:
                     saw_unknown = True
@@ -235,6 +300,7 @@ class OnboardingExecutionEngine:
 
     def _verify_all(self, case: AdministrativeCase, effects) -> str:
         incomplete = False
+        facts = case.fact_snapshot.facts if case.fact_snapshot else {}
         for planned in effects:
             effect = self.repository.get_effect(planned.effect_id) or planned
             outcome_id = self._stable_id("outcome", case, str(effect.effect_id))
@@ -272,9 +338,10 @@ class OnboardingExecutionEngine:
                 continue
 
             observation = self.provider.observe(effect)
-            if observation.found and not self._observation_matches(effect, observation):
+            verification = verify_onboarding_observation(effect, observation, facts)
+            if verification.disposition == VerificationDisposition.MISMATCH:
                 return "mismatch"
-            if not self._observation_matches(effect, observation):
+            if verification.disposition == VerificationDisposition.NOT_FOUND:
                 incomplete = True
                 continue
 
@@ -285,7 +352,10 @@ class OnboardingExecutionEngine:
                 observed_at=observation.observed_at,
                 version=observation.provider_ref,
                 digest=observation.digest,
-                metadata={"state": observation.state},
+                metadata={
+                    "state": observation.state,
+                    "semantic_verification": verification.model_dump(mode="json"),
+                },
             )
             assessment = EffectRealizationAssessment(
                 assessment_id=realization_id,
@@ -338,15 +408,6 @@ class OnboardingExecutionEngine:
         if case is None:
             raise KeyError(f"case {case_id} not found")
         return case
-
-    @staticmethod
-    def _observation_matches(effect, observation: RealityObservation) -> bool:
-        return (
-            observation.found
-            and observation.target_system == effect.target_system
-            and observation.operation == effect.operation
-            and observation.subject_ref == effect.subject_ref
-        )
 
     @staticmethod
     def _stable_id(kind: str, case: AdministrativeCase, *parts: str) -> UUID:

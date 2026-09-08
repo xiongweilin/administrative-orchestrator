@@ -48,6 +48,20 @@ services:
       postgres:
         condition: service_healthy
 
+  foundation-bootstrap:
+    build: .
+    image: administrative-orchestrator:local
+    restart: "no"
+    command: ["python", "-m", "administrative_orchestrator.bootstrap_foundation"]
+    environment:
+      ADMIN_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-administrative}:${POSTGRES_PASSWORD:-administrative}@postgres:5432/${POSTGRES_DB:-administrative}
+      ADMIN_AUTO_CREATE_SCHEMA: "false"
+      ADMIN_BOOTSTRAP_AUTHORITY_JSON: >-
+        {"principals":[{"principal_id":"person:e2e-requester","display_name":"E2E Requester"},{"principal_id":"person:e2e-hr-approver","display_name":"E2E HR Approver"},{"principal_id":"person:e2e-manager-approver","display_name":"E2E Manager Approver"},{"principal_id":"person:e2e-access-approver","display_name":"E2E Access Approver"}],"role_assignments":[{"principal_id":"person:e2e-hr-approver","role":"hr_approver","organization_scope":"*"},{"principal_id":"person:e2e-manager-approver","role":"manager","organization_scope":"*"},{"principal_id":"person:e2e-access-approver","role":"access_approver","organization_scope":"*"}]}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
   sandbox:
     build: .
     image: administrative-orchestrator:local
@@ -74,12 +88,14 @@ services:
     environment:
       ADMIN_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-administrative}:${POSTGRES_PASSWORD:-administrative}@postgres:5432/${POSTGRES_DB:-administrative}
       ADMIN_AUTO_CREATE_SCHEMA: "false"
+      ADMIN_AUTH_MODE: "development"
+      ADMIN_AUTHORITY_ENFORCEMENT_ENABLED: "true"
       ADMIN_EXTERNAL_EFFECTS_ENABLED: "true"
       ADMIN_SANDBOX_BASE_URL: http://sandbox:8010
     ports:
       - "127.0.0.1:${API_PORT:-8000}:8000"
     depends_on:
-      migrate:
+      foundation-bootstrap:
         condition: service_completed_successfully
       sandbox:
         condition: service_healthy
@@ -99,11 +115,12 @@ services:
       ADMIN_WORKER_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-administrative}:${POSTGRES_PASSWORD:-administrative}@postgres:5432/${POSTGRES_DB:-administrative}
       ADMIN_DBOS_SYSTEM_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-administrative}:${POSTGRES_PASSWORD:-administrative}@postgres:5432/administrative_dbos
       ADMIN_AUTO_CREATE_SCHEMA: "false"
+      ADMIN_AUTHORITY_ENFORCEMENT_ENABLED: "true"
       ADMIN_EXTERNAL_EFFECTS_ENABLED: "true"
       ADMIN_SANDBOX_BASE_URL: http://sandbox:8010
       ADMIN_WORKER_POLL_SECONDS: ${WORKER_POLL_SECONDS:-0.25}
     depends_on:
-      migrate:
+      foundation-bootstrap:
         condition: service_completed_successfully
       sandbox:
         condition: service_healthy
