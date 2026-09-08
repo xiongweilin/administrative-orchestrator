@@ -22,7 +22,7 @@ class AdministrativeExecutionGrant(UtcModel):
     """Business permission to discharge exactly one administrative obligation.
 
     This object is intentionally not an Agent Kernel AuthorizationGrant or
-    InvocationPermit.  It is administrative-domain authority evidence that a
+    InvocationPermit. It is administrative-domain authority evidence that a
     later Kernel admission/authorization path may consume as provenance.
     """
 
@@ -46,7 +46,7 @@ class AdministrativeEffectIntent(UtcModel):
     """Administrative request for one future physical capability invocation.
 
     The intent carries business meaning and frozen parameters but no runtime
-    execution authority.  Physical dispatch remains illegal until Agent Kernel
+    execution authority. Physical dispatch remains illegal until Agent Kernel
     admits Work and separately authorizes the invocation.
     """
 
@@ -92,9 +92,11 @@ class KernelShadowProjection(UtcModel):
             KernelProjectionStatus.CUTOVER,
         } and not self.kernel_responsibility_ref:
             raise ValueError("submitted kernel projection requires responsibility ref")
-        if self.status in {KernelProjectionStatus.ADMITTED, KernelProjectionStatus.CUTOVER}:
-            if not self.kernel_proposal_ref:
-                raise ValueError("admitted kernel projection requires proposal ref")
+        if (
+            self.status in {KernelProjectionStatus.ADMITTED, KernelProjectionStatus.CUTOVER}
+            and not self.kernel_proposal_ref
+        ):
+            raise ValueError("admitted kernel projection requires proposal ref")
         if self.status is KernelProjectionStatus.CUTOVER and not self.kernel_work_ref:
             raise ValueError("cutover kernel projection requires Work ref")
         return self
