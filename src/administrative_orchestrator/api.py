@@ -115,7 +115,7 @@ def create_onboarding(payload: CreateOnboardingCase) -> OnboardingCaseResponse:
         subject_ref=payload.employee_ref,
         fact_snapshot=fact_snapshot,
     )
-    _store.create_case(request, original)
+    _uow.create_case(request, original)
 
     ready = start_policy_evaluation(original)
     evaluation = _ONBOARDING_POLICY.evaluate(facts)
