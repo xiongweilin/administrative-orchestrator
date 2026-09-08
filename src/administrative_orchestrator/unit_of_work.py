@@ -229,6 +229,7 @@ class AdministrativeUnitOfWork:
                     case_version=decision.case_version,
                     authority_epoch=decision.authority_epoch,
                     principal_id=decision.principal_id,
+                    decision_role=decision.decision_role,
                     disposition=decision.disposition.value,
                     rationale=decision.rationale,
                     policy_json=decision.policy_ref.model_dump(mode="json"),
