@@ -1,0 +1,113 @@
+name: administrative-orchestrator
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-administrative}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-administrative}
+      POSTGRES_DB: ${POSTGRES_DB:-administrative}
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - administrative-pgdata:/var/lib/postgresql/data
+      - ./infra/postgres/init.sql:/docker-entrypoint-initdb.d/10-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-administrative} -d ${POSTGRES_DB:-administrative}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  sandbox-postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${SANDBOX_POSTGRES_USER:-administrative_sandbox}
+      POSTGRES_PASSWORD: ${SANDBOX_POSTGRES_PASSWORD:-administrative_sandbox}
+      POSTGRES_DB: ${SANDBOX_POSTGRES_DB:-administrative_sandbox}
+    ports:
+      - "127.0.0.1:${SANDBOX_POSTGRES_PORT:-5433}:5432"
+    volumes:
+      - administrative-sandbox-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${SANDBOX_POSTGRES_USER:-administrative_sandbox} -d ${SANDBOX_POSTGRES_DB:-administrative_sandbox}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  migrate:
+    build: .
+    image: administrative-orchestrator:local
+    restart: "no"
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      ADMIN_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-administrative}:${POSTGRES_PASSWORD:-administrative}@postgres:5432/${POSTGRES_DB:-administrative}
+      ADMIN_AUTO_CREATE_SCHEMA: "false"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  sandbox:
+    build: .
+    image: administrative-orchestrator:local
+    restart: unless-stopped
+    command: ["python", "-m", "uvicorn", "administrative_orchestrator.sandbox:app", "--host", "0.0.0.0", "--port", "8010"]
+    environment:
+      ADMIN_SANDBOX_DATABASE_URL: postgresql+psycopg://${SANDBOX_POSTGRES_USER:-administrative_sandbox}:${SANDBOX_POSTGRES_PASSWORD:-administrative_sandbox}@sandbox-postgres:5432/${SANDBOX_POSTGRES_DB:-administrative_sandbox}
+    ports:
+      - "127.0.0.1:${SANDBOX_PORT:-8010}:8010"
+    depends_on:
+      sandbox-postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8010/healthz', timeout=3)"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  api:
+    build: .
+    image: administrative-orchestrator:local
+    restart: unless-stopped
+    command: ["python", "-m", "uvicorn", "administrative_orchestrator.api:app", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      ADMIN_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-administrative}:${POSTGRES_PASSWORD:-administrative}@postgres:5432/${POSTGRES_DB:-administrative}
+      ADMIN_AUTO_CREATE_SCHEMA: "false"
+      ADMIN_EXTERNAL_EFFECTS_ENABLED: "true"
+      ADMIN_SANDBOX_BASE_URL: http://sandbox:8010
+    ports:
+      - "127.0.0.1:${API_PORT:-8000}:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      sandbox:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/readyz', timeout=3)"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  worker:
+    build: .
+    image: administrative-orchestrator:local
+    restart: unless-stopped
+    command: ["python", "-m", "administrative_orchestrator.worker"]
+    environment:
+      ADMIN_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-administrative}:${POSTGRES_PASSWORD:-administrative}@postgres:5432/${POSTGRES_DB:-administrative}
+      ADMIN_WORKER_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-administrative}:${POSTGRES_PASSWORD:-administrative}@postgres:5432/${POSTGRES_DB:-administrative}
+      ADMIN_DBOS_SYSTEM_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-administrative}:${POSTGRES_PASSWORD:-administrative}@postgres:5432/administrative_dbos
+      ADMIN_AUTO_CREATE_SCHEMA: "false"
+      ADMIN_EXTERNAL_EFFECTS_ENABLED: "true"
+      ADMIN_SANDBOX_BASE_URL: http://sandbox:8010
+      ADMIN_WORKER_POLL_SECONDS: ${WORKER_POLL_SECONDS:-0.25}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      sandbox:
+        condition: service_healthy
+
+volumes:
+  administrative-pgdata:
+  administrative-sandbox-pgdata:
