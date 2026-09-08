@@ -5,7 +5,7 @@ from enum import StrEnum
 from typing import Any
 
 from pydantic import Field
-from sqlalchemy import DateTime, JSON, String, select
+from sqlalchemy import JSON, DateTime, String, select
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .domain import PolicyRef, UtcModel, normalize_datetime, utcnow
