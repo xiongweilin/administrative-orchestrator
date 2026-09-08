@@ -30,6 +30,7 @@ from .service import (
     begin_execution,
     begin_verification,
     mint_execution_authorization,
+    mint_execution_authorization_from_approval,
     plan_effect,
     require_reopen,
 )
@@ -156,23 +157,13 @@ class OnboardingExecutionEngine:
         evaluation = self.store.get_latest_policy_evaluation(case.case_id)
         if evaluation is None or evaluation.policy_ref != case.policy_ref:
             raise TransitionError("onboarding execution requires the current policy evaluation")
-        decision = self.repository.get_latest_decision(case.case_id)
-        if decision is None:
-            raise TransitionError("onboarding execution requires an approving decision")
-        if decision.disposition != DecisionDisposition.APPROVE:
-            raise TransitionError("latest onboarding decision is not approving")
-        if decision.authority_epoch != case.authority_epoch:
-            raise TransitionError("latest onboarding decision is stale")
 
-        if get_settings().authority_enforcement_enabled:
-            satisfaction = AuthorityRepository(self.store).get_approval_satisfaction(
-                case.case_id,
-                case.authority_epoch,
-            )
-            if satisfaction is None:
-                raise TransitionError(
-                    "governed execution requires current approval satisfaction"
-                )
+        satisfaction = AuthorityRepository(self.store).get_approval_satisfaction(
+            case.case_id,
+            case.authority_epoch,
+        )
+        decision = None
+        if satisfaction is not None:
             if satisfaction.policy_ref != case.policy_ref:
                 raise TransitionError("approval satisfaction policy is stale")
             required_roles = set(evaluation.required_decision_roles)
@@ -180,10 +171,16 @@ class OnboardingExecutionEngine:
                 raise TransitionError(
                     "approval satisfaction does not cover current required decision roles"
                 )
-            if decision.decision_id not in satisfaction.decision_ids:
-                raise TransitionError(
-                    "latest approving decision is outside current approval satisfaction"
-                )
+        else:
+            if get_settings().authority_enforcement_enabled:
+                raise TransitionError("governed execution requires current approval satisfaction")
+            decision = self.repository.get_latest_decision(case.case_id)
+            if decision is None:
+                raise TransitionError("onboarding execution requires an approving decision")
+            if decision.disposition != DecisionDisposition.APPROVE:
+                raise TransitionError("latest onboarding decision is not approving")
+            if decision.authority_epoch != case.authority_epoch:
+                raise TransitionError("latest onboarding decision is stale")
 
         unique_templates = {
             (template.target_system, template.operation, template.authority_class): template
@@ -200,14 +197,26 @@ class OnboardingExecutionEngine:
                 template.target_system,
                 template.operation,
             )
-            authorization = mint_execution_authorization(
-                case,
-                decision,
-                issuer_principal_id="service:administrative-orchestrator",
-                target_system=template.target_system,
-                allowed_operations=(template.operation,),
-                authority_class=template.authority_class,
-            ).model_copy(
+            if satisfaction is not None:
+                authorization = mint_execution_authorization_from_approval(
+                    case,
+                    satisfaction,
+                    issuer_principal_id="service:administrative-orchestrator",
+                    target_system=template.target_system,
+                    allowed_operations=(template.operation,),
+                    authority_class=template.authority_class,
+                )
+            else:
+                assert decision is not None
+                authorization = mint_execution_authorization(
+                    case,
+                    decision,
+                    issuer_principal_id="service:administrative-orchestrator",
+                    target_system=template.target_system,
+                    allowed_operations=(template.operation,),
+                    authority_class=template.authority_class,
+                )
+            authorization = authorization.model_copy(
                 update={
                     "authorization_id": authorization_id,
                     "issued_at": case.updated_at,
