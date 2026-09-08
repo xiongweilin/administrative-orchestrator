@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from datetime import datetime
 from typing import Any
 from uuid import NAMESPACE_URL, UUID, uuid5
 
@@ -45,13 +46,13 @@ class GovernanceBasis(UtcModel):
     qualifications: tuple[GovernanceQualification, ...]
     authority_digest: str
     basis_digest: str
-    created_at: Any = Field(default_factory=utcnow)
+    created_at: datetime = Field(default_factory=utcnow)
 
 
 class GovernanceValidation(UtcModel):
     valid: bool
     reasons: tuple[str, ...] = ()
-    checked_at: Any = Field(default_factory=utcnow)
+    checked_at: datetime = Field(default_factory=utcnow)
 
 
 class GovernanceBasisRow(Base):
@@ -72,7 +73,7 @@ class GovernanceBasisRow(Base):
     qualifications_json: Mapped[list[dict[str, Any]]] = mapped_column(JSON, nullable=False)
     authority_digest: Mapped[str] = mapped_column(String(128), nullable=False)
     basis_digest: Mapped[str] = mapped_column(String(128), nullable=False)
-    created_at: Mapped[Any] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
 class GovernanceRepository:
@@ -337,7 +338,7 @@ def _select_qualification_basis(
     principal_id: str,
     role: str,
     organization_scope: str,
-    at,
+    at: datetime,
 ) -> tuple[str, ...] | None:
     at = normalize_datetime(at)
     principal = db.get(PrincipalRow, principal_id)
@@ -377,7 +378,7 @@ def _select_qualification_basis(
     candidates: list[tuple[str, str]] = []
     for delegation in delegation_rows:
         if not (
-            delegation.valid_from <= at < delegation.valid_until
+            _window_current(delegation.valid_from, delegation.valid_until, at)
             and _scope_matches(delegation.organization_scope, organization_scope)
         ):
             continue
@@ -404,7 +405,14 @@ def _select_qualification_basis(
     return min(candidates)
 
 
-def _window_current(valid_from, valid_until, at) -> bool:
+def _window_current(
+    valid_from: datetime,
+    valid_until: datetime | None,
+    at: datetime,
+) -> bool:
+    valid_from = normalize_datetime(valid_from)
+    valid_until = normalize_datetime(valid_until) if valid_until is not None else None
+    at = normalize_datetime(at)
     return valid_from <= at and (valid_until is None or at < valid_until)
 
 
