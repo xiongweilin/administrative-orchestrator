@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import Any
 from uuid import UUID
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
+from .config import get_settings
 from .domain import (
     AdministrativeCase,
     AdministrativeRequest,
@@ -13,6 +15,7 @@ from .domain import (
     DecisionDisposition,
     PolicyRef,
 )
+from .persistence import ConcurrencyConflict, SqlStore
 from .policy import OnboardingFacts, OnboardingPolicy, PolicyEvaluation
 from .service import (
     TransitionError,
@@ -25,9 +28,9 @@ from .service import (
 
 app = FastAPI(title="Administrative Orchestrator", version="0.1.0")
 
-_cases: dict[UUID, AdministrativeCase] = {}
-_evaluations: dict[UUID, PolicyEvaluation] = {}
-_decisions: dict[UUID, Decision] = {}
+_settings = get_settings()
+_store = SqlStore(_settings.database_url)
+_store.init_schema()
 
 _ONBOARDING_POLICY_REF = PolicyRef(
     policy_id="employee-onboarding",
@@ -73,7 +76,11 @@ def healthz() -> dict[str, str]:
 
 @app.get("/readyz")
 def readyz() -> dict[str, str]:
-    return {"status": "ready", "storage": "in-memory-m0", "external_effects": "disabled"}
+    return {
+        "status": "ready",
+        "storage": "sql-m1",
+        "external_effects": "enabled" if _settings.external_effects_enabled else "disabled",
+    }
 
 
 @app.post("/v1/onboarding", response_model=OnboardingCaseResponse)
@@ -88,7 +95,10 @@ def create_onboarding(payload: CreateOnboardingCase) -> OnboardingCaseResponse:
         case_kind="employee-onboarding",
         subject_ref=payload.employee_ref,
     )
-    case = start_policy_evaluation(case)
+    _store.create_case(request, case)
+    stored_version = case.version
+
+    ready = start_policy_evaluation(case)
     evaluation = _ONBOARDING_POLICY.evaluate(
         OnboardingFacts(
             employee_ref=payload.employee_ref,
@@ -100,15 +110,23 @@ def create_onboarding(payload: CreateOnboardingCase) -> OnboardingCaseResponse:
             requires_privileged_access=payload.requires_privileged_access,
         )
     )
-    case = apply_policy_evaluation(case, evaluation)
-    _cases[case.case_id] = case
-    _evaluations[case.case_id] = evaluation
+    case = apply_policy_evaluation(ready, evaluation)
+    _store.append_policy_evaluation(case.case_id, case.version, evaluation)
+    try:
+        _store.update_case(
+            case,
+            expected_previous_version=stored_version,
+            event_type="case.policy_applied",
+            payload={"policy_disposition": evaluation.disposition.value},
+        )
+    except ConcurrencyConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return OnboardingCaseResponse(case=case, policy_evaluation=evaluation)
 
 
 @app.get("/v1/cases/{case_id}", response_model=AdministrativeCase)
 def get_case(case_id: UUID) -> AdministrativeCase:
-    case = _cases.get(case_id)
+    case = _store.get_case(case_id)
     if case is None:
         raise HTTPException(status_code=404, detail="case not found")
     return case
@@ -116,15 +134,22 @@ def get_case(case_id: UUID) -> AdministrativeCase:
 
 @app.get("/v1/cases/{case_id}/policy", response_model=PolicyEvaluation)
 def get_policy_evaluation(case_id: UUID) -> PolicyEvaluation:
-    evaluation = _evaluations.get(case_id)
+    evaluation = _store.get_latest_policy_evaluation(case_id)
     if evaluation is None:
         raise HTTPException(status_code=404, detail="policy evaluation not found")
     return evaluation
 
 
+@app.get("/v1/cases/{case_id}/audit")
+def get_case_audit(case_id: UUID) -> list[dict[str, Any]]:
+    if _store.get_case(case_id) is None:
+        raise HTTPException(status_code=404, detail="case not found")
+    return _store.list_audit_events(case_id)
+
+
 @app.post("/v1/cases/{case_id}/decisions", response_model=DecisionResponse)
 def submit_decision(case_id: UUID, payload: RecordDecisionBody) -> DecisionResponse:
-    case = _cases.get(case_id)
+    case = _store.get_case(case_id)
     if case is None:
         raise HTTPException(status_code=404, detail="case not found")
     if case.policy_ref is None:
@@ -140,22 +165,31 @@ def submit_decision(case_id: UUID, payload: RecordDecisionBody) -> DecisionRespo
     )
     try:
         updated = record_decision(case, decision)
-    except TransitionError as exc:
+        _store.append_decision(decision)
+        _store.update_case(
+            updated,
+            expected_previous_version=case.version,
+            event_type="case.decision_applied",
+            payload={"decision_id": str(decision.decision_id)},
+        )
+    except (TransitionError, ConcurrencyConflict) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
-    _decisions[decision.decision_id] = decision
-    _cases[case_id] = updated
     return DecisionResponse(decision=decision, case=updated)
 
 
 @app.post("/v1/cases/{case_id}/reopen", response_model=AdministrativeCase)
 def reopen_case(case_id: UUID) -> AdministrativeCase:
-    case = _cases.get(case_id)
+    case = _store.get_case(case_id)
     if case is None:
         raise HTTPException(status_code=404, detail="case not found")
     try:
         updated = explicit_reopen(case)
-    except TransitionError as exc:
+        _store.update_case(
+            updated,
+            expected_previous_version=case.version,
+            event_type="case.reopened",
+        )
+    except (TransitionError, ConcurrencyConflict) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    _cases[case_id] = updated
     return updated
