@@ -16,6 +16,7 @@ from administrative_orchestrator.service import (
     record_decision,
     start_policy_evaluation,
 )
+from administrative_orchestrator.unit_of_work import AdministrativeUnitOfWork
 
 
 def _policy_ref() -> PolicyRef:
@@ -40,6 +41,7 @@ def _facts() -> OnboardingFacts:
 def test_case_policy_decision_and_audit_survive_store_roundtrip() -> None:
     store = SqlStore("sqlite+pysqlite:///:memory:")
     store.init_schema()
+    uow = AdministrativeUnitOfWork(store)
 
     request = AdministrativeRequest(
         requester_principal_id="person:requester",
@@ -52,42 +54,34 @@ def test_case_policy_decision_and_audit_survive_store_roundtrip() -> None:
     ready = start_policy_evaluation(case)
     evaluation = OnboardingPolicy(_policy_ref()).evaluate(_facts())
     awaiting = apply_policy_evaluation(ready, evaluation)
-    store.update_case(
-        awaiting,
-        expected_previous_version=case.version,
-        event_type="case.policy_applied",
-    )
-    store.append_policy_evaluation(awaiting.case_id, awaiting.version, evaluation)
+    uow.apply_policy_transition(case, awaiting, evaluation)
 
     restored = store.get_case(awaiting.case_id)
     assert restored == awaiting
+    assert restored.authority_epoch == 2
     assert store.get_latest_policy_evaluation(awaiting.case_id) == evaluation
 
     decision = Decision(
         case_id=awaiting.case_id,
         case_version=awaiting.version,
+        authority_epoch=awaiting.authority_epoch,
         principal_id="person:hr-approver",
         disposition=DecisionDisposition.APPROVE,
         rationale="approved",
         policy_ref=_policy_ref(),
     )
     authorized = record_decision(awaiting, decision)
-    store.append_decision(decision)
-    store.update_case(
-        authorized,
-        expected_previous_version=awaiting.version,
-        event_type="case.decision_applied",
-        payload={"decision_id": str(decision.decision_id)},
-    )
+    uow.apply_decision_transition(awaiting, authorized, decision)
 
     assert store.get_decision(decision.decision_id) == decision
     assert store.get_case(authorized.case_id) == authorized
+    assert authorized.authority_epoch == awaiting.authority_epoch
 
     events = store.list_audit_events(authorized.case_id)
     assert [event["event_type"] for event in events] == [
         "case.created",
-        "case.policy_applied",
         "policy.evaluated",
+        "case.policy_applied",
         "decision.recorded",
         "case.decision_applied",
     ]
