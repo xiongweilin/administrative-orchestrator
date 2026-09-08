@@ -30,11 +30,11 @@ class AdministrativeUnitOfWork:
         request: AdministrativeRequest,
         case: AdministrativeCase,
     ) -> None:
-        """Create the request/case aggregate before appending its audit record.
+        """Create Request -> Case -> initial Audit in explicit FK order.
 
-        The explicit flush is a portability boundary: PostgreSQL enforces the
-        audit -> case foreign key immediately, while SQLite may otherwise hide
-        an ORM flush-order bug when unrelated mapped objects are new together.
+        PostgreSQL enforces these foreign keys immediately. The staged flushes
+        make ordering part of the transaction contract instead of relying on
+        ORM mapper ordering that SQLite may fail to expose.
         """
         if request.requester_principal_id != case.requester_principal_id:
             raise ValueError("request and case requester must match")
@@ -49,6 +49,7 @@ class AdministrativeUnitOfWork:
                     source_ref=request.source_ref,
                 )
             )
+            db.flush()
             db.add(self.store._case_row(case, request.request_id))
             db.flush()
             self.store._append_audit(
