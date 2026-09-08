@@ -5,7 +5,7 @@ from enum import StrEnum
 from typing import Any, Protocol
 
 import httpx
-from pydantic import BaseModel, Field
+from pydantic import Field
 
 from .domain import EffectRecord, UtcModel, utcnow
 
