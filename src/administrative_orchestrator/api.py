@@ -13,6 +13,7 @@ from .domain import (
     AdministrativeRequest,
     Decision,
     DecisionDisposition,
+    FactSnapshot,
     PolicyRef,
 )
 from .persistence import ConcurrencyConflict, SqlStore
@@ -94,25 +95,30 @@ def create_onboarding(payload: CreateOnboardingCase) -> OnboardingCaseResponse:
         channel=payload.channel,
         intent=f"onboard {payload.employee_ref}",
     )
+    facts = OnboardingFacts(
+        employee_ref=payload.employee_ref,
+        department_ref=payload.department_ref,
+        manager_principal_id=payload.manager_principal_id,
+        start_date=payload.start_date,
+        employment_type=payload.employment_type,
+        requested_systems=payload.requested_systems,
+        requires_privileged_access=payload.requires_privileged_access,
+    )
+    fact_snapshot = FactSnapshot(
+        source=f"ingress:{payload.channel}",
+        owner="administrative-orchestrator",
+        facts=facts.model_dump(mode="json"),
+    )
     original = create_case(
         request,
         case_kind="employee-onboarding",
         subject_ref=payload.employee_ref,
+        fact_snapshot=fact_snapshot,
     )
     _store.create_case(request, original)
 
     ready = start_policy_evaluation(original)
-    evaluation = _ONBOARDING_POLICY.evaluate(
-        OnboardingFacts(
-            employee_ref=payload.employee_ref,
-            department_ref=payload.department_ref,
-            manager_principal_id=payload.manager_principal_id,
-            start_date=payload.start_date,
-            employment_type=payload.employment_type,
-            requested_systems=payload.requested_systems,
-            requires_privileged_access=payload.requires_privileged_access,
-        )
-    )
+    evaluation = _ONBOARDING_POLICY.evaluate(facts)
     case = apply_policy_evaluation(ready, evaluation)
     try:
         _uow.apply_policy_transition(original, case, evaluation)
