@@ -57,7 +57,7 @@ services:
       ADMIN_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-administrative}:${POSTGRES_PASSWORD:-administrative}@postgres:5432/${POSTGRES_DB:-administrative}
       ADMIN_AUTO_CREATE_SCHEMA: "false"
       ADMIN_BOOTSTRAP_AUTHORITY_JSON: >-
-        {"principals":[{"principal_id":"person:e2e-requester","display_name":"E2E Requester"},{"principal_id":"person:e2e-hr-approver","display_name":"E2E HR Approver"},{"principal_id":"person:e2e-manager-approver","display_name":"E2E Manager Approver"},{"principal_id":"person:e2e-access-approver","display_name":"E2E Access Approver"}],"role_assignments":[{"principal_id":"person:e2e-hr-approver","role":"hr_approver","organization_scope":"*"},{"principal_id":"person:e2e-manager-approver","role":"manager","organization_scope":"*"},{"principal_id":"person:e2e-access-approver","role":"access_approver","organization_scope":"*"}]}
+        {"principals":[{"principal_id":"person:e2e-requester","display_name":"E2E Requester"},{"principal_id":"person:e2e-hr-approver","display_name":"E2E HR Approver"},{"principal_id":"person:e2e-manager-approver","display_name":"E2E Manager Approver"},{"principal_id":"person:e2e-access-approver","display_name":"E2E Access Approver"},{"principal_id":"person:e2e-hr-operator","display_name":"E2E HR Operator"},{"principal_id":"person:e2e-auditor","display_name":"E2E Auditor"},{"principal_id":"person:e2e-platform-operator","display_name":"E2E Platform Operator"}],"role_assignments":[{"principal_id":"person:e2e-hr-approver","role":"hr_approver","organization_scope":"*"},{"principal_id":"person:e2e-manager-approver","role":"manager","organization_scope":"*"},{"principal_id":"person:e2e-access-approver","role":"access_approver","organization_scope":"*"},{"principal_id":"person:e2e-hr-operator","role":"hr_operator","organization_scope":"*"},{"principal_id":"person:e2e-auditor","role":"administrative_auditor","organization_scope":"*"},{"principal_id":"person:e2e-platform-operator","role":"platform_operator","organization_scope":"*"}]}
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -88,8 +88,8 @@ services:
     environment:
       ADMIN_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-administrative}:${POSTGRES_PASSWORD:-administrative}@postgres:5432/${POSTGRES_DB:-administrative}
       ADMIN_AUTO_CREATE_SCHEMA: "false"
+      ADMIN_RUNTIME_PROFILE: "governed"
       ADMIN_AUTH_MODE: "development"
-      ADMIN_AUTHORITY_ENFORCEMENT_ENABLED: "true"
       ADMIN_EXTERNAL_EFFECTS_ENABLED: "true"
       ADMIN_SANDBOX_BASE_URL: http://sandbox:8010
     ports:
@@ -115,7 +115,7 @@ services:
       ADMIN_WORKER_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-administrative}:${POSTGRES_PASSWORD:-administrative}@postgres:5432/${POSTGRES_DB:-administrative}
       ADMIN_DBOS_SYSTEM_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-administrative}:${POSTGRES_PASSWORD:-administrative}@postgres:5432/administrative_dbos
       ADMIN_AUTO_CREATE_SCHEMA: "false"
-      ADMIN_AUTHORITY_ENFORCEMENT_ENABLED: "true"
+      ADMIN_RUNTIME_PROFILE: "governed"
       ADMIN_EXTERNAL_EFFECTS_ENABLED: "true"
       ADMIN_SANDBOX_BASE_URL: http://sandbox:8010
       ADMIN_WORKER_POLL_SECONDS: ${WORKER_POLL_SECONDS:-0.25}
