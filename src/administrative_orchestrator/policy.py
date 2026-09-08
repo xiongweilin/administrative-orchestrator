@@ -27,6 +27,7 @@ class PolicyEvaluation(BaseModel):
     reason: str
     missing_facts: tuple[str, ...] = ()
     required_decision_roles: tuple[str, ...] = ()
+    require_distinct_decision_principals: bool = False
     allowed_effects: tuple[AuthorizedEffectTemplate, ...] = ()
     reopen_reason: ReopenReason | None = None
 
@@ -39,6 +40,15 @@ class PolicyEvaluation(BaseModel):
             and not self.required_decision_roles
         ):
             raise ValueError("human_decision_required requires decision roles")
+        if self.require_distinct_decision_principals and len(self.required_decision_roles) < 2:
+            raise ValueError("distinct decision principals requires at least two required roles")
+        if self.disposition == PolicyDisposition.AUTO_CLOSABLE:
+            if self.required_decision_roles:
+                raise ValueError("auto_closable cannot require human decisions")
+            if self.allowed_effects:
+                raise ValueError(
+                    "auto_closable is policy-only closure and cannot authorize external effects"
+                )
         if self.disposition == PolicyDisposition.REOPEN_REQUIRED and self.reopen_reason is None:
             raise ValueError("reopen_required policy evaluation requires reopen_reason")
         if self.disposition != PolicyDisposition.REOPEN_REQUIRED and self.reopen_reason is not None:
@@ -110,8 +120,9 @@ class OnboardingPolicy:
             return PolicyEvaluation(
                 policy_ref=self.policy_ref,
                 disposition=PolicyDisposition.HUMAN_DECISION_REQUIRED,
-                reason="privileged access requires an explicit current human decision",
+                reason="privileged access requires manager and access approval",
                 required_decision_roles=("manager", "access_approver"),
+                require_distinct_decision_principals=True,
                 allowed_effects=tuple(effects),
             )
 
