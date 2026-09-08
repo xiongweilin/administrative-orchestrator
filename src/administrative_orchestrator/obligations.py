@@ -115,6 +115,11 @@ class ObligationRepository:
                 governance_basis_id=obligation_set.governance_basis_id,
             )
         )
+        # There are deliberately no ORM relationships between the immutable
+        # obligation records. Flush the parent explicitly so PostgreSQL FK
+        # ordering does not depend on SQLAlchemy unit-of-work relationship
+        # discovery.
+        db.flush()
         for item in obligation_set.obligations:
             db.add(
                 ObligationRow(
