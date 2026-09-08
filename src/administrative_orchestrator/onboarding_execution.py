@@ -237,6 +237,40 @@ class OnboardingExecutionEngine:
         incomplete = False
         for planned in effects:
             effect = self.repository.get_effect(planned.effect_id) or planned
+            outcome_id = self._stable_id("outcome", case, str(effect.effect_id))
+            existing_outcome = self.repository.get_outcome(outcome_id)
+            if existing_outcome is not None:
+                if (
+                    existing_outcome.case_id != case.case_id
+                    or existing_outcome.authority_epoch != case.authority_epoch
+                    or existing_outcome.effect_id != effect.effect_id
+                ):
+                    raise TransitionError("persisted outcome does not match current effect authority")
+                continue
+
+            realization_id = self._stable_id("realization", case, str(effect.effect_id))
+            existing_realization = self.repository.get_realization(realization_id)
+            if existing_realization is not None:
+                if (
+                    existing_realization.effect_id != effect.effect_id
+                    or existing_realization.disposition != RealizationDisposition.VERIFIED
+                ):
+                    raise TransitionError("persisted realization does not verify the current effect")
+                self.repository.put_outcome(
+                    ConfirmedOutcome(
+                        outcome_id=outcome_id,
+                        case_id=case.case_id,
+                        case_version=effect.case_version,
+                        authority_epoch=case.authority_epoch,
+                        effect_id=effect.effect_id,
+                        realization_assessment_id=existing_realization.assessment_id,
+                        outcome_kind=f"{effect.target_system}.{effect.operation}.verified",
+                        evidence=existing_realization.evidence,
+                        confirmed_at=existing_realization.assessed_at,
+                    )
+                )
+                continue
+
             observation = self.provider.observe(effect)
             if observation.found and not self._observation_matches(effect, observation):
                 return "mismatch"
@@ -254,23 +288,23 @@ class OnboardingExecutionEngine:
                 metadata={"state": observation.state},
             )
             assessment = EffectRealizationAssessment(
-                assessment_id=self._stable_id("realization", case, str(effect.effect_id)),
+                assessment_id=realization_id,
                 effect_id=effect.effect_id,
                 disposition=RealizationDisposition.VERIFIED,
                 evidence=[evidence],
                 assessed_at=observation.observed_at,
             )
-            self.repository.put_realization(assessment, case_id=case.case_id)
+            assessment = self.repository.put_realization(assessment, case_id=case.case_id)
             outcome = ConfirmedOutcome(
-                outcome_id=self._stable_id("outcome", case, str(effect.effect_id)),
+                outcome_id=outcome_id,
                 case_id=case.case_id,
-                case_version=case.version,
+                case_version=effect.case_version,
                 authority_epoch=case.authority_epoch,
                 effect_id=effect.effect_id,
                 realization_assessment_id=assessment.assessment_id,
                 outcome_kind=f"{effect.target_system}.{effect.operation}.verified",
-                evidence=[evidence],
-                confirmed_at=observation.observed_at,
+                evidence=assessment.evidence,
+                confirmed_at=assessment.assessed_at,
             )
             self.repository.put_outcome(outcome)
         return "incomplete" if incomplete else "verified"
