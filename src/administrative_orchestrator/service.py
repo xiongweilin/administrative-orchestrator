@@ -124,10 +124,12 @@ def apply_policy_evaluation(
 def record_decision(case: AdministrativeCase, decision: Decision) -> AdministrativeCase:
     if case.status != CaseStatus.AWAITING_DECISION:
         raise TransitionError("decision requires awaiting_decision state")
-    if decision.case_id != case.case_id or decision.case_version != case.version:
-        raise TransitionError("decision is not bound to the current case version")
+    if decision.case_id != case.case_id:
+        raise TransitionError("decision belongs to a different case")
     if decision.authority_epoch != case.authority_epoch:
         raise TransitionError("decision is not bound to the current authority epoch")
+    if decision.case_version != case.version:
+        raise TransitionError("decision is not bound to the current case version")
     if case.policy_ref is None or decision.policy_ref != case.policy_ref:
         raise TransitionError("decision is not bound to the current policy version")
 
@@ -167,10 +169,10 @@ def mint_execution_authorization(
         raise TransitionError("only an approving decision may support execution authorization")
     if decision.case_id != case.case_id:
         raise TransitionError("decision belongs to a different case")
-    if decision.case_version >= case.version:
-        raise TransitionError("decision must precede the current case state")
     if decision.authority_epoch != case.authority_epoch:
         raise TransitionError("decision is stale for the current authority epoch")
+    if decision.case_version >= case.version:
+        raise TransitionError("decision must precede the current case state")
     if case.policy_ref is None or decision.policy_ref != case.policy_ref:
         raise TransitionError("decision policy is not current")
 
