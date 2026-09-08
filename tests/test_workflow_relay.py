@@ -1,7 +1,7 @@
 from uuid import uuid4
 
 from administrative_orchestrator.messaging import OutboxEvent
-from administrative_orchestrator.workflows.definitions import CASE_CHANGED_TOPIC
+from administrative_orchestrator.workflows.protocol import CASE_CHANGED_TOPIC
 from administrative_orchestrator.workflows.relay import plan_outbox_action
 
 
