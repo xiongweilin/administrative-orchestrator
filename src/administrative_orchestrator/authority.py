@@ -5,12 +5,12 @@ from datetime import datetime
 from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
 from pydantic import BaseModel, Field
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, JSON, String, Uuid, select
+from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Integer, String, Uuid, select
 from sqlalchemy.orm import Mapped, Session, mapped_column
 
 from .domain import (
-    Delegation,
     Decision,
+    Delegation,
     PolicyRef,
     Principal,
     PrincipalKind,
