@@ -215,6 +215,11 @@ class ExecutionRepository:
             )
             return assessment
 
+    def get_realization(self, assessment_id: UUID) -> EffectRealizationAssessment | None:
+        with self.store.sessions() as db:
+            row = db.get(RealizationRow, assessment_id)
+            return None if row is None else self._realization_from_row(row)
+
     def put_outcome(self, outcome: ConfirmedOutcome) -> ConfirmedOutcome:
         with self.store.sessions.begin() as db:
             row = db.get(OutcomeRow, outcome.outcome_id)
