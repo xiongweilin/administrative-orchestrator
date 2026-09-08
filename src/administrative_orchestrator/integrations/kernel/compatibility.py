@@ -1,6 +1,4 @@
 from dataclasses import dataclass
-
-
 EXPECTED_CATALOG_VERSION = "portable-runtime-contracts-v1"
 EXPECTED_OWNER = "portable-runtime/contracts"
 EXPECTED_RUNTIME_PROTOCOL = "2.0"
