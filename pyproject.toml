@@ -44,10 +44,6 @@ ignore = ["E501"]
 
 [tool.ruff.lint.per-file-ignores]
 "alembic/**/*.py" = ["I001"]
-# Narrow temporary exception: the connected repository write API replaces
-# whole files, while authority.py is large. Remove after a normal local
-# `ruff check src/administrative_orchestrator/authority.py --fix` pass.
-"src/administrative_orchestrator/authority.py" = ["I001"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
