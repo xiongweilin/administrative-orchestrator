@@ -170,6 +170,26 @@ def mint_execution_authorization(
     )
 
 
+def validate_execution_authorization(
+    case: AdministrativeCase,
+    authorization: ExecutionAuthorization,
+    *,
+    operation: str,
+) -> None:
+    if case.status not in {CaseStatus.AUTHORIZED, CaseStatus.EXECUTING}:
+        raise TransitionError("authorization may be used only while authorized or executing")
+    if authorization.case_id != case.case_id:
+        raise TransitionError("authorization belongs to a different case")
+    if authorization.authority_epoch != case.authority_epoch:
+        raise TransitionError("authorization is stale for the current authority epoch")
+    if authorization.subject_ref != case.subject_ref:
+        raise TransitionError("authorization subject does not match current case subject")
+    if not authorization.is_current_at(utcnow()):
+        raise TransitionError("authorization is expired or revoked")
+    if operation not in authorization.allowed_operations:
+        raise TransitionError("operation is outside the authorization scope")
+
+
 def plan_effect(
     case: AdministrativeCase,
     authorization: ExecutionAuthorization,
@@ -177,19 +197,9 @@ def plan_effect(
     operation: str,
     reversibility: EffectReversibility,
 ) -> EffectRecord:
-    now = utcnow()
     if case.status != CaseStatus.AUTHORIZED:
         raise TransitionError("effect planning requires an authorized case")
-    if authorization.case_id != case.case_id:
-        raise TransitionError("authorization belongs to a different case")
-    if authorization.authority_epoch != case.authority_epoch:
-        raise TransitionError("authorization is stale for the current authority epoch")
-    if authorization.subject_ref != case.subject_ref:
-        raise TransitionError("authorization subject does not match current case subject")
-    if not authorization.is_current_at(now):
-        raise TransitionError("authorization is expired or revoked")
-    if operation not in authorization.allowed_operations:
-        raise TransitionError("operation is outside the authorization scope")
+    validate_execution_authorization(case, authorization, operation=operation)
 
     return EffectRecord(
         case_id=case.case_id,
@@ -201,6 +211,30 @@ def plan_effect(
         subject_ref=case.subject_ref,
         reversibility=reversibility,
         authority_class=authorization.authority_class,
+    )
+
+
+def begin_execution(case: AdministrativeCase) -> AdministrativeCase:
+    if case.status != CaseStatus.AUTHORIZED:
+        raise TransitionError("execution may begin only from authorized state")
+    return case.model_copy(
+        update={
+            "status": CaseStatus.EXECUTING,
+            "version": case.version + 1,
+            "updated_at": utcnow(),
+        }
+    )
+
+
+def begin_verification(case: AdministrativeCase) -> AdministrativeCase:
+    if case.status != CaseStatus.EXECUTING:
+        raise TransitionError("verification may begin only from executing state")
+    return case.model_copy(
+        update={
+            "status": CaseStatus.VERIFYING,
+            "version": case.version + 1,
+            "updated_at": utcnow(),
+        }
     )
 
 
