@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+from .authority import ApprovalSatisfaction
 from .domain import (
     AdministrativeCase,
     AdministrativeRequest,
@@ -107,7 +108,7 @@ def apply_policy_evaluation(
     if evaluation.disposition == PolicyDisposition.HUMAN_DECISION_REQUIRED:
         return case.model_copy(update={**common, "status": CaseStatus.AWAITING_DECISION})
     if evaluation.disposition == PolicyDisposition.AUTO_CLOSABLE:
-        return case.model_copy(update={**common, "status": CaseStatus.AUTHORIZED})
+        return case.model_copy(update={**common, "status": CaseStatus.COMPLETED})
     if evaluation.disposition == PolicyDisposition.DENIED:
         return case.model_copy(update={**common, "status": CaseStatus.CANCELLED})
     if evaluation.disposition == PolicyDisposition.REOPEN_REQUIRED:
@@ -121,7 +122,12 @@ def apply_policy_evaluation(
     raise TransitionError(f"unsupported policy disposition {evaluation.disposition}")
 
 
-def record_decision(case: AdministrativeCase, decision: Decision) -> AdministrativeCase:
+def record_decision(
+    case: AdministrativeCase,
+    decision: Decision,
+    *,
+    approval_complete: bool = True,
+) -> AdministrativeCase:
     if case.status != CaseStatus.AWAITING_DECISION:
         raise TransitionError("decision requires awaiting_decision state")
     if decision.case_id != case.case_id:
@@ -134,7 +140,7 @@ def record_decision(case: AdministrativeCase, decision: Decision) -> Administrat
         raise TransitionError("decision is not bound to the current policy version")
 
     if decision.disposition == DecisionDisposition.APPROVE:
-        status = CaseStatus.AUTHORIZED
+        status = CaseStatus.AUTHORIZED if approval_complete else CaseStatus.AWAITING_DECISION
     elif decision.disposition == DecisionDisposition.REJECT:
         status = CaseStatus.CANCELLED
     elif decision.disposition == DecisionDisposition.REQUEST_CHANGES:
@@ -181,6 +187,42 @@ def mint_execution_authorization(
         case_version=case.version,
         authority_epoch=case.authority_epoch,
         decision_id=decision.decision_id,
+        issuer_principal_id=issuer_principal_id,
+        target_system=target_system,
+        subject_ref=case.subject_ref,
+        allowed_operations=allowed_operations,
+        authority_class=authority_class,
+        policy_ref=case.policy_ref,
+        expires_at=expires_at,
+    )
+
+
+def mint_execution_authorization_from_approval(
+    case: AdministrativeCase,
+    approval: ApprovalSatisfaction,
+    *,
+    issuer_principal_id: str,
+    target_system: str,
+    allowed_operations: tuple[str, ...],
+    authority_class: AuthorityClass,
+    expires_at: datetime | None = None,
+) -> ExecutionAuthorization:
+    if case.status != CaseStatus.AUTHORIZED:
+        raise TransitionError("execution authorization requires an authorized case")
+    if approval.case_id != case.case_id:
+        raise TransitionError("approval satisfaction belongs to a different case")
+    if approval.authority_epoch != case.authority_epoch:
+        raise TransitionError("approval satisfaction is stale for the current authority epoch")
+    if case.policy_ref is None or approval.policy_ref != case.policy_ref:
+        raise TransitionError("approval satisfaction policy is not current")
+    if not approval.decision_ids or not approval.satisfied_roles:
+        raise TransitionError("approval satisfaction has no supporting decisions")
+
+    return ExecutionAuthorization(
+        case_id=case.case_id,
+        case_version=case.version,
+        authority_epoch=case.authority_epoch,
+        approval_satisfaction_id=approval.satisfaction_id,
         issuer_principal_id=issuer_principal_id,
         target_system=target_system,
         subject_ref=case.subject_ref,

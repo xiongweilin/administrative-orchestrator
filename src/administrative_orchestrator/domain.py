@@ -211,6 +211,7 @@ class Decision(UtcModel):
     case_version: int
     authority_epoch: int
     principal_id: str
+    decision_role: str | None = None
     disposition: DecisionDisposition
     rationale: str
     policy_ref: PolicyRef
@@ -222,7 +223,8 @@ class ExecutionAuthorization(UtcModel):
     case_id: UUID
     case_version: int
     authority_epoch: int
-    decision_id: UUID
+    decision_id: UUID | None = None
+    approval_satisfaction_id: UUID | None = None
     issuer_principal_id: str
     target_system: str
     subject_ref: str
@@ -234,9 +236,16 @@ class ExecutionAuthorization(UtcModel):
     revoked_at: datetime | None = None
 
     @model_validator(mode="after")
-    def validate_operations(self) -> ExecutionAuthorization:
+    def validate_authority_basis_and_operations(self) -> ExecutionAuthorization:
         if not self.allowed_operations:
             raise ValueError("authorization must allow at least one operation")
+        basis_count = int(self.decision_id is not None) + int(
+            self.approval_satisfaction_id is not None
+        )
+        if basis_count != 1:
+            raise ValueError(
+                "authorization requires exactly one authority basis: decision or approval satisfaction"
+            )
         return self
 
     def is_current_at(self, at: datetime) -> bool:

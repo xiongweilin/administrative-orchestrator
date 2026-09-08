@@ -83,6 +83,7 @@ class DecisionRow(Base):
     case_version: Mapped[int] = mapped_column(Integer, nullable=False)
     authority_epoch: Mapped[int] = mapped_column(Integer, nullable=False)
     principal_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    decision_role: Mapped[str | None] = mapped_column(String(128), nullable=True)
     disposition: Mapped[str] = mapped_column(String(64), nullable=False)
     rationale: Mapped[str] = mapped_column(String(2000), nullable=False)
     policy_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
@@ -96,7 +97,10 @@ class AuthorizationRow(Base):
     case_id: Mapped[UUID] = mapped_column(ForeignKey("administrative_case.case_id"), nullable=False)
     case_version: Mapped[int] = mapped_column(Integer, nullable=False)
     authority_epoch: Mapped[int] = mapped_column(Integer, nullable=False)
-    decision_id: Mapped[UUID] = mapped_column(ForeignKey("administrative_decision.decision_id"))
+    decision_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("administrative_decision.decision_id"), nullable=True
+    )
+    approval_satisfaction_id: Mapped[UUID | None] = mapped_column(Uuid, nullable=True)
     issuer_principal_id: Mapped[str] = mapped_column(String(255), nullable=False)
     target_system: Mapped[str] = mapped_column(String(255), nullable=False)
     subject_ref: Mapped[str] = mapped_column(String(512), nullable=False)
@@ -314,6 +318,7 @@ class SqlStore:
                     case_version=decision.case_version,
                     authority_epoch=decision.authority_epoch,
                     principal_id=decision.principal_id,
+                    decision_role=decision.decision_role,
                     disposition=decision.disposition.value,
                     rationale=decision.rationale,
                     policy_json=decision.policy_ref.model_dump(mode="json"),
@@ -329,6 +334,7 @@ class SqlStore:
                     "case_version": decision.case_version,
                     "authority_epoch": decision.authority_epoch,
                     "principal_id": decision.principal_id,
+                    "decision_role": decision.decision_role,
                     "disposition": decision.disposition.value,
                     "policy_id": decision.policy_ref.policy_id,
                     "policy_version": decision.policy_ref.version,
@@ -347,6 +353,7 @@ class SqlStore:
                     "case_version": row.case_version,
                     "authority_epoch": row.authority_epoch,
                     "principal_id": row.principal_id,
+                    "decision_role": row.decision_role,
                     "disposition": row.disposition,
                     "rationale": row.rationale,
                     "policy_ref": row.policy_json,
@@ -363,6 +370,7 @@ class SqlStore:
                     case_version=authorization.case_version,
                     authority_epoch=authorization.authority_epoch,
                     decision_id=authorization.decision_id,
+                    approval_satisfaction_id=authorization.approval_satisfaction_id,
                     issuer_principal_id=authorization.issuer_principal_id,
                     target_system=authorization.target_system,
                     subject_ref=authorization.subject_ref,
@@ -380,7 +388,14 @@ class SqlStore:
                 "authorization.issued",
                 {
                     "authorization_id": str(authorization.authorization_id),
-                    "decision_id": str(authorization.decision_id),
+                    "decision_id": (
+                        str(authorization.decision_id) if authorization.decision_id else None
+                    ),
+                    "approval_satisfaction_id": (
+                        str(authorization.approval_satisfaction_id)
+                        if authorization.approval_satisfaction_id
+                        else None
+                    ),
                     "case_version": authorization.case_version,
                     "authority_epoch": authorization.authority_epoch,
                     "target_system": authorization.target_system,

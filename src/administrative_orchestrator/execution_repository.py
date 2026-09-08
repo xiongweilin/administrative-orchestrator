@@ -65,6 +65,7 @@ class ExecutionRepository:
                     case_version=authorization.case_version,
                     authority_epoch=authorization.authority_epoch,
                     decision_id=authorization.decision_id,
+                    approval_satisfaction_id=authorization.approval_satisfaction_id,
                     issuer_principal_id=authorization.issuer_principal_id,
                     target_system=authorization.target_system,
                     subject_ref=authorization.subject_ref,
@@ -82,7 +83,14 @@ class ExecutionRepository:
                 "authorization.issued",
                 {
                     "authorization_id": str(authorization.authorization_id),
-                    "decision_id": str(authorization.decision_id),
+                    "decision_id": (
+                        str(authorization.decision_id) if authorization.decision_id else None
+                    ),
+                    "approval_satisfaction_id": (
+                        str(authorization.approval_satisfaction_id)
+                        if authorization.approval_satisfaction_id
+                        else None
+                    ),
                     "authority_epoch": authorization.authority_epoch,
                     "target_system": authorization.target_system,
                     "allowed_operations": list(authorization.allowed_operations),
@@ -286,6 +294,7 @@ class ExecutionRepository:
                 "case_version": row.case_version,
                 "authority_epoch": row.authority_epoch,
                 "principal_id": row.principal_id,
+                "decision_role": row.decision_role,
                 "disposition": row.disposition,
                 "rationale": row.rationale,
                 "policy_ref": row.policy_json,
@@ -302,6 +311,7 @@ class ExecutionRepository:
                 "case_version": row.case_version,
                 "authority_epoch": row.authority_epoch,
                 "decision_id": row.decision_id,
+                "approval_satisfaction_id": row.approval_satisfaction_id,
                 "issuer_principal_id": row.issuer_principal_id,
                 "target_system": row.target_system,
                 "subject_ref": row.subject_ref,

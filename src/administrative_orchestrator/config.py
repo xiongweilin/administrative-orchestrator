@@ -22,6 +22,23 @@ class Settings(BaseSettings):
     external_effects_enabled: bool = False
     auto_create_schema: bool = True
 
+    # Authentication is intentionally fail-closed by default. The local Compose
+    # sandbox opts into development mode explicitly.
+    auth_mode: str = "jwt"
+    jwt_secret: str | None = None
+    jwt_issuer: str = "administrative-orchestrator"
+    jwt_audience: str = "administrative-orchestrator"
+
+    # When enabled, execution requires an approval-satisfaction record for the
+    # current authority epoch. Local unit-level semantics can keep this off;
+    # the full Compose reference deployment enables it.
+    authority_enforcement_enabled: bool = False
+
+    # One-shot bootstrap input used only by the foundation bootstrap command.
+    # JSON is used to keep deployment seeding explicit and outside runtime API
+    # authority surfaces.
+    bootstrap_authority_json: str = ""
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
