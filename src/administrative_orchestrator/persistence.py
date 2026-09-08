@@ -52,6 +52,7 @@ class CaseRow(Base):
     subject_ref: Mapped[str] = mapped_column(String(512), nullable=False)
     status: Mapped[str] = mapped_column(String(64), nullable=False)
     version: Mapped[int] = mapped_column(Integer, nullable=False)
+    authority_epoch: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     policy_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     evidence_json: Mapped[list[dict[str, Any]]] = mapped_column(JSON, nullable=False, default=list)
     reopen_reason: Mapped[str | None] = mapped_column(String(128), nullable=True)
@@ -65,9 +66,12 @@ class PolicyEvaluationRow(Base):
     sequence: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     case_id: Mapped[UUID] = mapped_column(ForeignKey("administrative_case.case_id"), nullable=False)
     case_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    authority_epoch: Mapped[int] = mapped_column(Integer, nullable=False)
     policy_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
     evaluation_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow
+    )
 
 
 class DecisionRow(Base):
@@ -76,6 +80,7 @@ class DecisionRow(Base):
     decision_id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
     case_id: Mapped[UUID] = mapped_column(ForeignKey("administrative_case.case_id"), nullable=False)
     case_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    authority_epoch: Mapped[int] = mapped_column(Integer, nullable=False)
     principal_id: Mapped[str] = mapped_column(String(255), nullable=False)
     disposition: Mapped[str] = mapped_column(String(64), nullable=False)
     rationale: Mapped[str] = mapped_column(String(2000), nullable=False)
@@ -89,6 +94,7 @@ class AuthorizationRow(Base):
     authorization_id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
     case_id: Mapped[UUID] = mapped_column(ForeignKey("administrative_case.case_id"), nullable=False)
     case_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    authority_epoch: Mapped[int] = mapped_column(Integer, nullable=False)
     decision_id: Mapped[UUID] = mapped_column(ForeignKey("administrative_decision.decision_id"))
     issuer_principal_id: Mapped[str] = mapped_column(String(255), nullable=False)
     target_system: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -107,6 +113,7 @@ class EffectRow(Base):
     effect_id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
     case_id: Mapped[UUID] = mapped_column(ForeignKey("administrative_case.case_id"), nullable=False)
     case_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    authority_epoch: Mapped[int] = mapped_column(Integer, nullable=False)
     authorization_id: Mapped[UUID] = mapped_column(
         ForeignKey("administrative_execution_authorization.authorization_id"), nullable=False
     )
@@ -137,6 +144,7 @@ class OutcomeRow(Base):
     outcome_id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
     case_id: Mapped[UUID] = mapped_column(ForeignKey("administrative_case.case_id"), nullable=False)
     case_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    authority_epoch: Mapped[int] = mapped_column(Integer, nullable=False)
     effect_id: Mapped[UUID] = mapped_column(ForeignKey("administrative_effect.effect_id"))
     realization_assessment_id: Mapped[UUID] = mapped_column(
         ForeignKey("administrative_effect_realization.assessment_id"), nullable=False
@@ -154,7 +162,9 @@ class AuditEventRow(Base):
     case_id: Mapped[UUID] = mapped_column(ForeignKey("administrative_case.case_id"), nullable=False)
     event_type: Mapped[str] = mapped_column(String(128), nullable=False)
     payload_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow
+    )
 
 
 class ConcurrencyConflict(RuntimeError):
@@ -207,6 +217,7 @@ class SqlStore:
                     "request_id": str(request.request_id),
                     "case_kind": case.case_kind,
                     "case_version": case.version,
+                    "authority_epoch": case.authority_epoch,
                 },
             )
 
@@ -239,6 +250,7 @@ class SqlStore:
                 event_type,
                 {
                     "case_version": case.version,
+                    "authority_epoch": case.authority_epoch,
                     "status": case.status.value,
                     **(payload or {}),
                 },
@@ -248,6 +260,7 @@ class SqlStore:
         self,
         case_id: UUID,
         case_version: int,
+        authority_epoch: int,
         evaluation: PolicyEvaluation,
     ) -> None:
         with self.sessions.begin() as db:
@@ -255,6 +268,7 @@ class SqlStore:
                 PolicyEvaluationRow(
                     case_id=case_id,
                     case_version=case_version,
+                    authority_epoch=authority_epoch,
                     policy_json=evaluation.policy_ref.model_dump(mode="json"),
                     evaluation_json=evaluation.model_dump(mode="json"),
                     created_at=utcnow(),
@@ -266,6 +280,7 @@ class SqlStore:
                 "policy.evaluated",
                 {
                     "case_version": case_version,
+                    "authority_epoch": authority_epoch,
                     "policy_id": evaluation.policy_ref.policy_id,
                     "policy_version": evaluation.policy_ref.version,
                     "disposition": evaluation.disposition.value,
@@ -293,6 +308,7 @@ class SqlStore:
                     decision_id=decision.decision_id,
                     case_id=decision.case_id,
                     case_version=decision.case_version,
+                    authority_epoch=decision.authority_epoch,
                     principal_id=decision.principal_id,
                     disposition=decision.disposition.value,
                     rationale=decision.rationale,
@@ -307,6 +323,7 @@ class SqlStore:
                 {
                     "decision_id": str(decision.decision_id),
                     "case_version": decision.case_version,
+                    "authority_epoch": decision.authority_epoch,
                     "principal_id": decision.principal_id,
                     "disposition": decision.disposition.value,
                     "policy_id": decision.policy_ref.policy_id,
@@ -324,6 +341,7 @@ class SqlStore:
                     "decision_id": row.decision_id,
                     "case_id": row.case_id,
                     "case_version": row.case_version,
+                    "authority_epoch": row.authority_epoch,
                     "principal_id": row.principal_id,
                     "disposition": row.disposition,
                     "rationale": row.rationale,
@@ -339,6 +357,7 @@ class SqlStore:
                     authorization_id=authorization.authorization_id,
                     case_id=authorization.case_id,
                     case_version=authorization.case_version,
+                    authority_epoch=authorization.authority_epoch,
                     decision_id=authorization.decision_id,
                     issuer_principal_id=authorization.issuer_principal_id,
                     target_system=authorization.target_system,
@@ -359,6 +378,7 @@ class SqlStore:
                     "authorization_id": str(authorization.authorization_id),
                     "decision_id": str(authorization.decision_id),
                     "case_version": authorization.case_version,
+                    "authority_epoch": authorization.authority_epoch,
                     "target_system": authorization.target_system,
                     "allowed_operations": list(authorization.allowed_operations),
                     "authority_class": authorization.authority_class.value,
@@ -372,6 +392,7 @@ class SqlStore:
                     effect_id=effect.effect_id,
                     case_id=effect.case_id,
                     case_version=effect.case_version,
+                    authority_epoch=effect.authority_epoch,
                     authorization_id=effect.authorization_id,
                     target_system=effect.target_system,
                     operation=effect.operation,
@@ -391,6 +412,8 @@ class SqlStore:
                 {
                     "effect_id": str(effect.effect_id),
                     "authorization_id": str(effect.authorization_id),
+                    "case_version": effect.case_version,
+                    "authority_epoch": effect.authority_epoch,
                     "target_system": effect.target_system,
                     "operation": effect.operation,
                     "reversibility": effect.reversibility.value,
@@ -427,6 +450,7 @@ class SqlStore:
                     outcome_id=outcome.outcome_id,
                     case_id=outcome.case_id,
                     case_version=outcome.case_version,
+                    authority_epoch=outcome.authority_epoch,
                     effect_id=outcome.effect_id,
                     realization_assessment_id=outcome.realization_assessment_id,
                     outcome_kind=outcome.outcome_kind,
@@ -443,6 +467,7 @@ class SqlStore:
                     "effect_id": str(outcome.effect_id),
                     "outcome_kind": outcome.outcome_kind,
                     "case_version": outcome.case_version,
+                    "authority_epoch": outcome.authority_epoch,
                 },
             )
 
@@ -478,6 +503,7 @@ class SqlStore:
             subject_ref=case.subject_ref,
             status=case.status.value,
             version=case.version,
+            authority_epoch=case.authority_epoch,
             policy_json=case.policy_ref.model_dump(mode="json") if case.policy_ref else None,
             evidence_json=[item.model_dump(mode="json") for item in case.evidence],
             reopen_reason=case.reopen_reason.value if case.reopen_reason else None,
@@ -492,6 +518,7 @@ class SqlStore:
         row.subject_ref = case.subject_ref
         row.status = case.status.value
         row.version = case.version
+        row.authority_epoch = case.authority_epoch
         row.policy_json = case.policy_ref.model_dump(mode="json") if case.policy_ref else None
         row.evidence_json = [item.model_dump(mode="json") for item in case.evidence]
         row.reopen_reason = case.reopen_reason.value if case.reopen_reason else None
@@ -507,6 +534,7 @@ class SqlStore:
                 "subject_ref": row.subject_ref,
                 "status": row.status,
                 "version": row.version,
+                "authority_epoch": row.authority_epoch,
                 "policy_ref": row.policy_json,
                 "evidence": row.evidence_json,
                 "reopen_reason": row.reopen_reason,
