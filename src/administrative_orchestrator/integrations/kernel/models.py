@@ -18,6 +18,12 @@ class KernelProjectionStatus(StrEnum):
     REJECTED = "rejected"
 
 
+class KernelWorkAdmissionStatus(StrEnum):
+    WORK_MATERIALIZED = "work-materialized"
+    PRIORITY_REJECTED = "priority-rejected"
+    PORTFOLIO_REJECTED = "portfolio-rejected"
+
+
 class AdministrativeExecutionGrant(UtcModel):
     """Business permission to discharge exactly one administrative obligation.
 
@@ -81,6 +87,13 @@ class KernelShadowProjection(UtcModel):
     kernel_admission_ref: str | None = None
     kernel_assessment_ref: str | None = None
     kernel_proposal_ref: str | None = None
+    kernel_work_admission_status: KernelWorkAdmissionStatus | None = None
+    kernel_admission_policy_ref: str | None = None
+    kernel_priority_judgment_ref: str | None = None
+    kernel_resource_pool_ref: str | None = None
+    kernel_portfolio_admission_ref: str | None = None
+    kernel_reservation_ref: str | None = None
+    kernel_commitment_ref: str | None = None
     kernel_work_ref: str | None = None
     kernel_run_ref: str | None = None
     created_at: datetime = Field(default_factory=utcnow)
@@ -91,6 +104,7 @@ class KernelShadowProjection(UtcModel):
         if self.status in {
             KernelProjectionStatus.SUBMITTED,
             KernelProjectionStatus.ADMITTED,
+            KernelProjectionStatus.REJECTED,
             KernelProjectionStatus.CUTOVER,
         }:
             required_prefix_refs = (
@@ -101,8 +115,51 @@ class KernelShadowProjection(UtcModel):
             )
             if any(not value for value in required_prefix_refs):
                 raise ValueError("submitted kernel projection requires full proposal-prefix refs")
-        if self.status is KernelProjectionStatus.CUTOVER and not self.kernel_work_ref:
-            raise ValueError("cutover kernel projection requires Work ref")
+
+        if self.status in {
+            KernelProjectionStatus.ADMITTED,
+            KernelProjectionStatus.REJECTED,
+            KernelProjectionStatus.CUTOVER,
+        }:
+            if self.kernel_work_admission_status is None:
+                raise ValueError("post-admission projection requires Work admission status")
+            if not self.kernel_admission_policy_ref or not self.kernel_priority_judgment_ref:
+                raise ValueError("post-admission projection requires policy and priority refs")
+
+        if self.status in {KernelProjectionStatus.ADMITTED, KernelProjectionStatus.CUTOVER}:
+            if self.kernel_work_admission_status is not KernelWorkAdmissionStatus.WORK_MATERIALIZED:
+                raise ValueError("admitted kernel projection requires materialized Work status")
+            required_work_refs = (
+                self.kernel_resource_pool_ref,
+                self.kernel_portfolio_admission_ref,
+                self.kernel_reservation_ref,
+                self.kernel_commitment_ref,
+                self.kernel_work_ref,
+            )
+            if any(not value for value in required_work_refs):
+                raise ValueError("admitted kernel projection requires complete Work admission refs")
+
+        if self.status is KernelProjectionStatus.REJECTED:
+            if self.kernel_work_admission_status is KernelWorkAdmissionStatus.WORK_MATERIALIZED:
+                raise ValueError("rejected kernel projection cannot reference materialized Work")
+            if self.kernel_work_ref or self.kernel_reservation_ref or self.kernel_commitment_ref:
+                raise ValueError("rejected kernel projection cannot carry reservation or Work refs")
+            if (
+                self.kernel_work_admission_status
+                is KernelWorkAdmissionStatus.PORTFOLIO_REJECTED
+                and (
+                    not self.kernel_resource_pool_ref
+                    or not self.kernel_portfolio_admission_ref
+                )
+            ):
+                raise ValueError("portfolio rejection requires pool and portfolio refs")
+            if (
+                self.kernel_work_admission_status
+                is KernelWorkAdmissionStatus.PRIORITY_REJECTED
+                and (self.kernel_resource_pool_ref or self.kernel_portfolio_admission_ref)
+            ):
+                raise ValueError("priority rejection must stop before resource admission refs")
+
         return self
 
 
@@ -111,4 +168,5 @@ __all__ = [
     "AdministrativeExecutionGrant",
     "KernelProjectionStatus",
     "KernelShadowProjection",
+    "KernelWorkAdmissionStatus",
 ]
