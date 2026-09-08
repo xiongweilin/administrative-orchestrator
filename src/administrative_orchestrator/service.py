@@ -107,7 +107,10 @@ def apply_policy_evaluation(
     if evaluation.disposition == PolicyDisposition.HUMAN_DECISION_REQUIRED:
         return case.model_copy(update={**common, "status": CaseStatus.AWAITING_DECISION})
     if evaluation.disposition == PolicyDisposition.AUTO_CLOSABLE:
-        return case.model_copy(update={**common, "status": CaseStatus.AUTHORIZED})
+        # AUTO_CLOSABLE is deliberately policy-only: PolicyEvaluation rejects
+        # external effects for this disposition, so no synthetic human Decision
+        # or execution authority is invented.
+        return case.model_copy(update={**common, "status": CaseStatus.COMPLETED})
     if evaluation.disposition == PolicyDisposition.DENIED:
         return case.model_copy(update={**common, "status": CaseStatus.CANCELLED})
     if evaluation.disposition == PolicyDisposition.REOPEN_REQUIRED:
@@ -121,7 +124,12 @@ def apply_policy_evaluation(
     raise TransitionError(f"unsupported policy disposition {evaluation.disposition}")
 
 
-def record_decision(case: AdministrativeCase, decision: Decision) -> AdministrativeCase:
+def record_decision(
+    case: AdministrativeCase,
+    decision: Decision,
+    *,
+    approval_complete: bool = True,
+) -> AdministrativeCase:
     if case.status != CaseStatus.AWAITING_DECISION:
         raise TransitionError("decision requires awaiting_decision state")
     if decision.case_id != case.case_id:
@@ -134,7 +142,7 @@ def record_decision(case: AdministrativeCase, decision: Decision) -> Administrat
         raise TransitionError("decision is not bound to the current policy version")
 
     if decision.disposition == DecisionDisposition.APPROVE:
-        status = CaseStatus.AUTHORIZED
+        status = CaseStatus.AUTHORIZED if approval_complete else CaseStatus.AWAITING_DECISION
     elif decision.disposition == DecisionDisposition.REJECT:
         status = CaseStatus.CANCELLED
     elif decision.disposition == DecisionDisposition.REQUEST_CHANGES:
