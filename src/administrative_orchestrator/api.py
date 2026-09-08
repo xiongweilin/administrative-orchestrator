@@ -25,12 +25,14 @@ from .service import (
     record_decision,
     start_policy_evaluation,
 )
+from .unit_of_work import AdministrativeUnitOfWork
 
 app = FastAPI(title="Administrative Orchestrator", version="0.1.0")
 
 _settings = get_settings()
 _store = SqlStore(_settings.database_url)
 _store.init_schema()
+_uow = AdministrativeUnitOfWork(_store)
 
 _ONBOARDING_POLICY_REF = PolicyRef(
     policy_id="employee-onboarding",
@@ -90,15 +92,14 @@ def create_onboarding(payload: CreateOnboardingCase) -> OnboardingCaseResponse:
         channel=payload.channel,
         intent=f"onboard {payload.employee_ref}",
     )
-    case = create_case(
+    original = create_case(
         request,
         case_kind="employee-onboarding",
         subject_ref=payload.employee_ref,
     )
-    _store.create_case(request, case)
-    stored_version = case.version
+    _store.create_case(request, original)
 
-    ready = start_policy_evaluation(case)
+    ready = start_policy_evaluation(original)
     evaluation = _ONBOARDING_POLICY.evaluate(
         OnboardingFacts(
             employee_ref=payload.employee_ref,
@@ -111,15 +112,9 @@ def create_onboarding(payload: CreateOnboardingCase) -> OnboardingCaseResponse:
         )
     )
     case = apply_policy_evaluation(ready, evaluation)
-    _store.append_policy_evaluation(case.case_id, case.version, evaluation)
     try:
-        _store.update_case(
-            case,
-            expected_previous_version=stored_version,
-            event_type="case.policy_applied",
-            payload={"policy_disposition": evaluation.disposition.value},
-        )
-    except ConcurrencyConflict as exc:
+        _uow.apply_policy_transition(original, case, evaluation)
+    except (ConcurrencyConflict, ValueError) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return OnboardingCaseResponse(case=case, policy_evaluation=evaluation)
 
@@ -165,14 +160,8 @@ def submit_decision(case_id: UUID, payload: RecordDecisionBody) -> DecisionRespo
     )
     try:
         updated = record_decision(case, decision)
-        _store.append_decision(decision)
-        _store.update_case(
-            updated,
-            expected_previous_version=case.version,
-            event_type="case.decision_applied",
-            payload={"decision_id": str(decision.decision_id)},
-        )
-    except (TransitionError, ConcurrencyConflict) as exc:
+        _uow.apply_decision_transition(case, updated, decision)
+    except (TransitionError, ConcurrencyConflict, ValueError) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     return DecisionResponse(decision=decision, case=updated)
