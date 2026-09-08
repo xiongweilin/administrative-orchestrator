@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from .domain import AdministrativeCase, Decision
+from .messaging import emit_outbox
 from .persistence import (
     CaseRow,
     ConcurrencyConflict,
@@ -15,9 +16,9 @@ from .policy import PolicyEvaluation
 class AdministrativeUnitOfWork:
     """Atomic persistence boundary for authority-relevant case transitions.
 
-    A policy/decision record and the case state it justifies must commit together.
-    Append-only historical records are valuable only when their relationship to
-    current state cannot be torn apart by a concurrent write or process failure.
+    A policy/decision record, the current Case state, and the durable workflow
+    wake-up event commit together. A crash after this transaction may delay
+    orchestration, but cannot silently lose the fact that orchestration is due.
     """
 
     def __init__(self, store: SqlStore) -> None:
@@ -73,6 +74,18 @@ class AdministrativeUnitOfWork:
                     "authority_epoch": after.authority_epoch,
                     "status": after.status.value,
                     "policy_disposition": evaluation.disposition.value,
+                },
+            )
+            emit_outbox(
+                db,
+                event_type="workflow.case_changed",
+                aggregate_id=str(after.case_id),
+                payload={
+                    "case_id": str(after.case_id),
+                    "case_version": after.version,
+                    "authority_epoch": after.authority_epoch,
+                    "status": after.status.value,
+                    "cause": "policy_evaluated",
                 },
             )
 
@@ -132,6 +145,19 @@ class AdministrativeUnitOfWork:
                     "case_version": after.version,
                     "authority_epoch": after.authority_epoch,
                     "status": after.status.value,
+                    "decision_id": str(decision.decision_id),
+                },
+            )
+            emit_outbox(
+                db,
+                event_type="workflow.case_changed",
+                aggregate_id=str(after.case_id),
+                payload={
+                    "case_id": str(after.case_id),
+                    "case_version": after.version,
+                    "authority_epoch": after.authority_epoch,
+                    "status": after.status.value,
+                    "cause": "decision_recorded",
                     "decision_id": str(decision.decision_id),
                 },
             )
