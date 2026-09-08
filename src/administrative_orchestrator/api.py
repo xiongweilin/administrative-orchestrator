@@ -155,6 +155,7 @@ def submit_decision(case_id: UUID, payload: RecordDecisionBody) -> DecisionRespo
     decision = Decision(
         case_id=case.case_id,
         case_version=case.version,
+        authority_epoch=case.authority_epoch,
         principal_id=payload.principal_id,
         disposition=payload.disposition,
         rationale=payload.rationale,
