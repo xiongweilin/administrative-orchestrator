@@ -2,8 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-import httpx
-
 
 EXPECTED_CATALOG_VERSION = "portable-runtime-contracts-v1"
 EXPECTED_OWNER = "portable-runtime/contracts"
@@ -69,6 +67,8 @@ class HttpKernelContractProbe:
         self.timeout_seconds = timeout_seconds
 
     def fetch_identity(self) -> KernelContractIdentity:
+        import httpx
+
         try:
             response = httpx.get(
                 f"{self.base_url}/v1/contracts",
