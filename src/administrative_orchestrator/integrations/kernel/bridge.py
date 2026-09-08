@@ -15,11 +15,10 @@ from .repository import KernelBridgeRepository
 class KernelExecutionBridge:
     """Hand governed administrative work into Agent Kernel responsibility semantics.
 
-    Shadow mode may persist and submit the canonical responsibility proposal
-    prefix. It still never creates Kernel Work, runtime authorization,
-    InvocationPermit, provider execution, or Outcome. The legacy administrative
-    provider path remains the only physical effect path until an explicit
-    cutover slice replaces it.
+    `shadow` records/submits only the canonical proposal prefix. `admission`
+    additionally asks Kernel to evaluate that proposal through its own priority,
+    portfolio, reservation, commitment, and Work chain. Neither mode creates
+    runtime authorization, InvocationPermit, provider execution, or Outcome.
     """
 
     def __init__(
@@ -44,6 +43,10 @@ class KernelExecutionBridge:
     def shadow_only(self) -> bool:
         return self.settings.kernel_bridge_mode == "shadow"
 
+    @property
+    def admission_shadow(self) -> bool:
+        return self.settings.kernel_bridge_mode == "admission"
+
     def compatibility(self) -> KernelContractIdentity:
         if not self.enabled:
             raise KernelCompatibilityError("kernel bridge is disabled")
@@ -51,7 +54,15 @@ class KernelExecutionBridge:
             self._compatibility = HttpKernelContractProbe(
                 self.settings.kernel_base_url,
                 timeout_seconds=self.settings.kernel_contract_timeout_seconds,
+                require_work_admission=self.admission_shadow,
             ).fetch_identity()
+        if (
+            self.admission_shadow
+            and self._compatibility.responsibility_work_admission_contract is None
+        ):
+            raise KernelCompatibilityError(
+                "kernel admission mode requires responsibility-work-admission-v1"
+            )
         return self._compatibility
 
     def client(self) -> KernelResponsibilityClient:
@@ -72,8 +83,8 @@ class KernelExecutionBridge:
             return None
         if self.settings.kernel_bridge_mode == "cutover":
             raise KernelCompatibilityError(
-                "kernel cutover is fail-closed until Work admission, runtime authorization, and "
-                "the unique Kernel RealityBoundary path are configured"
+                "kernel cutover is fail-closed until runtime authorization and the unique "
+                "Kernel RealityBoundary path are configured"
             )
 
         identity = self.compatibility()
@@ -83,15 +94,33 @@ class KernelExecutionBridge:
         intent = self.repository.put_intent(derive_effect_intent(case, grant))
         planned = project_to_kernel(grant, intent, identity)
         projection = self.repository.put_projection(planned)
-        if projection.status in {
-            KernelProjectionStatus.SUBMITTED,
-            KernelProjectionStatus.ADMITTED,
-            KernelProjectionStatus.CUTOVER,
-        }:
+
+        if projection.status is KernelProjectionStatus.SHADOW:
+            receipt = self.client().submit(projection)
+            projection = self.repository.mark_submitted(projection, receipt)
+
+        if self.shadow_only:
             return projection
 
-        receipt = self.client().submit(projection)
-        return self.repository.mark_submitted(projection, receipt)
+        if self.admission_shadow:
+            if projection.status in {
+                KernelProjectionStatus.ADMITTED,
+                KernelProjectionStatus.REJECTED,
+            }:
+                return projection
+            if projection.status is not KernelProjectionStatus.SUBMITTED:
+                raise KernelCompatibilityError(
+                    f"kernel Work admission cannot continue from {projection.status.value}"
+                )
+            receipt = self.client().admit(
+                projection,
+                expected_policy_ref=(
+                    self.settings.kernel_responsibility_admission_policy_ref
+                ),
+            )
+            return self.repository.mark_work_admission(projection, receipt)
+
+        return projection
 
 
 __all__ = ["KernelExecutionBridge"]
