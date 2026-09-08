@@ -6,6 +6,7 @@ from .fact_history import persist_fact_snapshot
 from .governance import GovernanceRepository
 from .ingress import persist_ingress_receipt
 from .messaging import emit_outbox
+from .obligations import ObligationRepository
 from .persistence import (
     CaseRow,
     ConcurrencyConflict,
@@ -31,6 +32,9 @@ class AdministrativeUnitOfWork:
         self.store = store
         self.authority = AuthorityRepository(store)
         self.governance = GovernanceRepository(store)
+        # Keep obligation row models registered wherever the UoW is imported,
+        # including direct Base.metadata.create_all integration-test paths.
+        self.obligations = ObligationRepository(store)
 
     def create_case(
         self,
