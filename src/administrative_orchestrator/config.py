@@ -26,13 +26,16 @@ class Settings(BaseSettings):
 
     runtime_profile: Literal["test", "development", "governed"] = "development"
 
-    # Agent Kernel convergence is opt-in.  Shadow mode may only project
-    # administrative grants/intents into public Kernel contracts.  Cutover is a
-    # separate fail-closed state and cannot silently fall back to the legacy
-    # provider path once enabled.
-    kernel_bridge_mode: Literal["disabled", "shadow", "cutover"] = "disabled"
+    # Agent Kernel convergence is opt-in and monotonic. `shadow` records only
+    # the proposal prefix; `admission` additionally asks Kernel to materialize
+    # Work under a server-owned policy. Neither mode authorizes provider effects.
+    # `cutover` remains fail-closed until the unique Kernel execution path exists.
+    kernel_bridge_mode: Literal["disabled", "shadow", "admission", "cutover"] = "disabled"
     kernel_base_url: str = "http://127.0.0.1:8020"
     kernel_contract_timeout_seconds: float = 3.0
+    kernel_responsibility_admission_policy_ref: str = (
+        "responsibility-admission:bounded-local@1"
+    )
 
     # Authentication is intentionally fail-closed by default. The local Compose
     # sandbox opts into development identity transport explicitly.
@@ -54,6 +57,13 @@ class Settings(BaseSettings):
             object.__setattr__(self, "authority_enforcement_enabled", True)
         if self.kernel_contract_timeout_seconds <= 0:
             raise ValueError("kernel_contract_timeout_seconds must be positive")
+        if (
+            self.kernel_bridge_mode == "admission"
+            and not self.kernel_responsibility_admission_policy_ref.strip()
+        ):
+            raise ValueError(
+                "kernel_responsibility_admission_policy_ref is required in admission mode"
+            )
         return self
 
 
