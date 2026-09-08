@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import httpx
-import pydantic
 
 
 EXPECTED_CATALOG_VERSION = "portable-runtime-contracts-v1"
@@ -14,7 +15,8 @@ class KernelCompatibilityError(RuntimeError):
     pass
 
 
-class KernelContractIdentity(pydantic.BaseModel):
+@dataclass(frozen=True, slots=True)
+class KernelContractIdentity:
     catalog_version: str
     owner: str
     runtime_protocol: str
