@@ -78,6 +78,8 @@ class KernelShadowProjection(UtcModel):
     work_proposal_payload: dict[str, Any]
     status: KernelProjectionStatus = KernelProjectionStatus.SHADOW
     kernel_responsibility_ref: str | None = None
+    kernel_admission_ref: str | None = None
+    kernel_assessment_ref: str | None = None
     kernel_proposal_ref: str | None = None
     kernel_work_ref: str | None = None
     kernel_run_ref: str | None = None
@@ -90,13 +92,15 @@ class KernelShadowProjection(UtcModel):
             KernelProjectionStatus.SUBMITTED,
             KernelProjectionStatus.ADMITTED,
             KernelProjectionStatus.CUTOVER,
-        } and not self.kernel_responsibility_ref:
-            raise ValueError("submitted kernel projection requires responsibility ref")
-        if (
-            self.status in {KernelProjectionStatus.ADMITTED, KernelProjectionStatus.CUTOVER}
-            and not self.kernel_proposal_ref
-        ):
-            raise ValueError("admitted kernel projection requires proposal ref")
+        }:
+            required_prefix_refs = (
+                self.kernel_responsibility_ref,
+                self.kernel_admission_ref,
+                self.kernel_assessment_ref,
+                self.kernel_proposal_ref,
+            )
+            if any(not value for value in required_prefix_refs):
+                raise ValueError("submitted kernel projection requires full proposal-prefix refs")
         if self.status is KernelProjectionStatus.CUTOVER and not self.kernel_work_ref:
             raise ValueError("cutover kernel projection requires Work ref")
         return self
