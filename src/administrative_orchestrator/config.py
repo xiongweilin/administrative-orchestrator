@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from functools import lru_cache
+from typing import Literal
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -22,22 +24,27 @@ class Settings(BaseSettings):
     external_effects_enabled: bool = False
     auto_create_schema: bool = True
 
+    runtime_profile: Literal["test", "development", "governed"] = "development"
+
     # Authentication is intentionally fail-closed by default. The local Compose
-    # sandbox opts into development mode explicitly.
+    # sandbox opts into development identity transport explicitly.
     auth_mode: str = "jwt"
     jwt_secret: str | None = None
     jwt_issuer: str = "administrative-orchestrator"
     jwt_audience: str = "administrative-orchestrator"
 
-    # When enabled, execution requires an approval-satisfaction record for the
-    # current authority epoch. Local unit-level semantics can keep this off;
-    # the full Compose reference deployment enables it.
+    # Compatibility switch for tests/development. A governed profile always
+    # forces this on; deployment configuration cannot disable that invariant.
     authority_enforcement_enabled: bool = False
 
     # One-shot bootstrap input used only by the foundation bootstrap command.
-    # JSON is used to keep deployment seeding explicit and outside runtime API
-    # authority surfaces.
     bootstrap_authority_json: str = ""
+
+    @model_validator(mode="after")
+    def governed_profile_fails_closed(self) -> Settings:
+        if self.runtime_profile == "governed":
+            object.__setattr__(self, "authority_enforcement_enabled", True)
+        return self
 
 
 @lru_cache(maxsize=1)

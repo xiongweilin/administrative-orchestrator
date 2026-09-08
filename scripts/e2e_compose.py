@@ -15,6 +15,9 @@ REQUESTER = "person:e2e-requester"
 HR_APPROVER = "person:e2e-hr-approver"
 MANAGER_APPROVER = "person:e2e-manager-approver"
 ACCESS_APPROVER = "person:e2e-access-approver"
+HR_OPERATOR = "person:e2e-hr-operator"
+AUDITOR = "person:e2e-auditor"
+PLATFORM_OPERATOR = "person:e2e-platform-operator"
 
 
 def _request(
@@ -102,6 +105,15 @@ def _assert_completed_case(case_id: str, authority_epoch: int, expected_effect_c
     assert len(effects) == expected_effect_count, effects
     assert {item["status"] for item in effects} == {"succeeded"}, effects
 
+    governance = _api("GET", f"/v1/cases/{case_id}/governance", principal=REQUESTER)
+    assert governance is not None, governance
+    assert governance["authority_epoch"] == authority_epoch, governance
+
+    obligations = _api("GET", f"/v1/cases/{case_id}/obligations", principal=REQUESTER)
+    assert obligations is not None, obligations
+    assert obligations["governance_basis_id"] == governance["basis_id"], obligations
+    assert len(obligations["obligations"]) == expected_effect_count, obligations
+
     for effect in effects:
         observation = _request(
             "GET",
@@ -123,8 +135,11 @@ def _assert_completed_case(case_id: str, authority_epoch: int, expected_effect_c
 
     completion = _api("GET", f"/v1/cases/{case_id}/completion", principal=REQUESTER)
     assert completion["satisfied"] is True, completion
+    assert completion["governance_basis_id"] == governance["basis_id"], completion
+    assert completion["uncovered_obligation_ids"] == [], completion
 
-    audit = _api("GET", f"/v1/cases/{case_id}/audit", principal=REQUESTER)
+    _expect_http_error(403, "GET", f"/v1/cases/{case_id}/audit", principal=REQUESTER)
+    audit = _api("GET", f"/v1/cases/{case_id}/audit", principal=AUDITOR)
     event_types = [item["event_type"] for item in audit]
     for required in (
         "case.created",
@@ -155,6 +170,7 @@ def _standard_onboarding() -> None:
     created = _api("POST", "/v1/onboarding", payload, principal=REQUESTER)
     case = created["case"]
     assert case["requester_principal_id"] == REQUESTER, case
+    assert case["fact_snapshot"]["authority"] == "claim", case
     assert case["status"] == "awaiting_decision", created
     case_id = case["case_id"]
     initial_epoch = case["authority_epoch"]
@@ -167,6 +183,18 @@ def _standard_onboarding() -> None:
         "POST",
         f"/v1/cases/{case_id}/decisions",
         {"disposition": "approve", "rationale": "forged"},
+        principal=REQUESTER,
+    )
+    _expect_http_error(
+        403,
+        "POST",
+        f"/v1/cases/{case_id}/facts",
+        {
+            "employee_ref": payload["employee_ref"],
+            "department_ref": payload["department_ref"],
+            "start_date": payload["start_date"],
+            "employment_type": payload["employment_type"],
+        },
         principal=REQUESTER,
     )
 
@@ -260,6 +288,7 @@ def main() -> None:
     )
     assert ready["auth_mode"] == "development", ready
     assert ready["authority_enforcement"] == "enabled", ready
+    assert ready["resource_authorization"] == "enabled", ready
     _wait_json(
         f"{SANDBOX_BASE}/healthz",
         lambda value: value.get("status") == "ok",
@@ -267,13 +296,22 @@ def main() -> None:
     )
 
     _expect_http_error(401, "GET", "/v1/outbox/dead-letter")
+    _expect_http_error(403, "GET", "/v1/outbox/dead-letter", principal=REQUESTER)
+    assert _api("GET", "/v1/outbox/dead-letter", principal=PLATFORM_OPERATOR) == []
+
     _standard_onboarding()
     _privileged_onboarding()
 
-    current_policy = _api(
+    _expect_http_error(
+        403,
         "GET",
         "/v1/policies/employee-onboarding/current",
         principal=REQUESTER,
+    )
+    current_policy = _api(
+        "GET",
+        "/v1/policies/employee-onboarding/current",
+        principal=AUDITOR,
     )
     assert current_policy["version"] == "v1", current_policy
 

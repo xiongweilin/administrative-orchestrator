@@ -3,8 +3,10 @@ from __future__ import annotations
 from .authority import ApprovalSatisfaction, AuthorityRepository
 from .domain import AdministrativeCase, AdministrativeRequest, Decision
 from .fact_history import persist_fact_snapshot
+from .governance import GovernanceRepository
 from .ingress import persist_ingress_receipt
 from .messaging import emit_outbox
+from .obligations import ObligationRepository
 from .persistence import (
     CaseRow,
     ConcurrencyConflict,
@@ -29,6 +31,10 @@ class AdministrativeUnitOfWork:
     def __init__(self, store: SqlStore) -> None:
         self.store = store
         self.authority = AuthorityRepository(store)
+        self.governance = GovernanceRepository(store)
+        # Keep obligation row models registered wherever the UoW is imported,
+        # including direct Base.metadata.create_all integration-test paths.
+        self.obligations = ObligationRepository(store)
 
     def create_case(
         self,
@@ -74,6 +80,9 @@ class AdministrativeUnitOfWork:
                     "authority_epoch": case.authority_epoch,
                     "fact_snapshot_id": (
                         str(case.fact_snapshot.snapshot_id) if case.fact_snapshot else None
+                    ),
+                    "fact_authority": (
+                        case.fact_snapshot.authority.value if case.fact_snapshot else None
                     ),
                 },
             )
@@ -161,6 +170,10 @@ class AdministrativeUnitOfWork:
                     "previous_fact_snapshot_id": (
                         str(before.fact_snapshot.snapshot_id) if before.fact_snapshot else None
                     ),
+                    "fact_authority": after.fact_snapshot.authority.value,
+                    "source": after.fact_snapshot.source,
+                    "source_ref": after.fact_snapshot.source_ref,
+                    "source_version": after.fact_snapshot.source_version,
                 },
             )
             self.store._append_audit(
@@ -243,8 +256,15 @@ class AdministrativeUnitOfWork:
                     organization_scope=organization_scope or "*",
                     db=db,
                 )
+            governance_basis = None
             if approval_satisfaction is not None:
                 self.authority.put_approval_satisfaction(approval_satisfaction, db=db)
+                governance_basis = self.governance.create_for_approval(
+                    after,
+                    approval_satisfaction,
+                    organization_scope=organization_scope or "*",
+                    db=db,
+                )
                 self.store._append_audit(
                     db,
                     after.case_id,
@@ -256,6 +276,8 @@ class AdministrativeUnitOfWork:
                         ],
                         "satisfied_roles": list(approval_satisfaction.satisfied_roles),
                         "authority_epoch": approval_satisfaction.authority_epoch,
+                        "governance_basis_id": str(governance_basis.basis_id),
+                        "governance_basis_digest": governance_basis.basis_digest,
                     },
                 )
             self.store._copy_case_into_row(row, after)
@@ -288,6 +310,9 @@ class AdministrativeUnitOfWork:
                         if approval_satisfaction is not None
                         else None
                     ),
+                    "governance_basis_id": (
+                        str(governance_basis.basis_id) if governance_basis is not None else None
+                    ),
                 },
             )
             emit_outbox(
@@ -305,6 +330,9 @@ class AdministrativeUnitOfWork:
                         str(approval_satisfaction.satisfaction_id)
                         if approval_satisfaction is not None
                         else None
+                    ),
+                    "governance_basis_id": (
+                        str(governance_basis.basis_id) if governance_basis is not None else None
                     ),
                 },
             )

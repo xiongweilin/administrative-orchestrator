@@ -55,6 +55,7 @@ class ReopenReason(StrEnum):
     POLICY_CONFLICT = "policy_conflict"
     MISSING_REQUIRED_FACT = "missing_required_fact"
     AUTHORITY_UNRESOLVED = "authority_unresolved"
+    GOVERNANCE_STALE = "governance_stale"
     SUBJECT_CHANGED = "subject_changed"
     OUTCOME_UNKNOWN = "outcome_unknown"
     REALITY_MISMATCH = "reality_mismatch"
@@ -100,6 +101,12 @@ class RealizationDisposition(StrEnum):
     NOT_VERIFIED = "not_verified"
     MISMATCH = "mismatch"
     UNKNOWN = "unknown"
+
+
+class FactAuthority(StrEnum):
+    CLAIM = "claim"
+    ATTESTED = "attested"
+    AUTHORITATIVE = "authoritative"
 
 
 class Principal(UtcModel):
@@ -165,6 +172,9 @@ class FactSnapshot(UtcModel):
     snapshot_id: UUID = Field(default_factory=uuid4)
     source: str
     owner: str
+    authority: FactAuthority = FactAuthority.CLAIM
+    source_ref: str | None = None
+    source_version: str | None = None
     observed_at: datetime = Field(default_factory=utcnow)
     facts: dict[str, Any] = Field(default_factory=dict)
     digest: str | None = None
@@ -261,6 +271,8 @@ class EffectRecord(UtcModel):
     case_version: int
     authority_epoch: int
     authorization_id: UUID
+    obligation_id: UUID | None = None
+    governance_basis_id: UUID | None = None
     target_system: str
     operation: str
     subject_ref: str
