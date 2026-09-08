@@ -8,12 +8,13 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from ...domain import AuthorityClass, PolicyRef, utcnow
 from ...persistence import Base, SqlStore
-from .client import KernelProposalReceipt
+from .client import KernelProposalReceipt, KernelWorkAdmissionReceipt
 from .models import (
     AdministrativeEffectIntent,
     AdministrativeExecutionGrant,
     KernelProjectionStatus,
     KernelShadowProjection,
+    KernelWorkAdmissionStatus,
 )
 
 
@@ -96,6 +97,13 @@ class KernelBridgeProjectionRow(Base):
     kernel_admission_ref: Mapped[str | None] = mapped_column(String(512))
     kernel_assessment_ref: Mapped[str | None] = mapped_column(String(512))
     kernel_proposal_ref: Mapped[str | None] = mapped_column(String(512))
+    kernel_work_admission_status: Mapped[str | None] = mapped_column(String(64))
+    kernel_admission_policy_ref: Mapped[str | None] = mapped_column(String(512))
+    kernel_priority_judgment_ref: Mapped[str | None] = mapped_column(String(512))
+    kernel_resource_pool_ref: Mapped[str | None] = mapped_column(String(512))
+    kernel_portfolio_admission_ref: Mapped[str | None] = mapped_column(String(512))
+    kernel_reservation_ref: Mapped[str | None] = mapped_column(String(512))
+    kernel_commitment_ref: Mapped[str | None] = mapped_column(String(512))
     kernel_work_ref: Mapped[str | None] = mapped_column(String(512))
     kernel_run_ref: Mapped[str | None] = mapped_column(String(512))
     created_at: Mapped[Any] = mapped_column(DateTime(timezone=True), nullable=False)
@@ -192,6 +200,17 @@ class KernelBridgeRepository:
                     kernel_admission_ref=projection.kernel_admission_ref,
                     kernel_assessment_ref=projection.kernel_assessment_ref,
                     kernel_proposal_ref=projection.kernel_proposal_ref,
+                    kernel_work_admission_status=(
+                        projection.kernel_work_admission_status.value
+                        if projection.kernel_work_admission_status is not None
+                        else None
+                    ),
+                    kernel_admission_policy_ref=projection.kernel_admission_policy_ref,
+                    kernel_priority_judgment_ref=projection.kernel_priority_judgment_ref,
+                    kernel_resource_pool_ref=projection.kernel_resource_pool_ref,
+                    kernel_portfolio_admission_ref=projection.kernel_portfolio_admission_ref,
+                    kernel_reservation_ref=projection.kernel_reservation_ref,
+                    kernel_commitment_ref=projection.kernel_commitment_ref,
                     kernel_work_ref=projection.kernel_work_ref,
                     kernel_run_ref=projection.kernel_run_ref,
                     created_at=projection.created_at,
@@ -242,6 +261,52 @@ class KernelBridgeRepository:
             db.flush()
             return self._projection_from_row(row)
 
+    def mark_work_admission(
+        self,
+        projection: KernelShadowProjection,
+        receipt: KernelWorkAdmissionReceipt,
+    ) -> KernelShadowProjection:
+        with self.store.sessions.begin() as db:
+            row = db.get(KernelBridgeProjectionRow, projection.projection_id)
+            if row is None:
+                raise KernelBridgePersistenceError("kernel projection is not persisted")
+            current = self._projection_from_row(row)
+            if not self._same_projection_semantics(current, projection):
+                raise KernelBridgePersistenceError(
+                    "kernel projection semantics changed before Work admission"
+                )
+            if current.kernel_proposal_ref != receipt.proposal_ref:
+                raise KernelBridgePersistenceError("Kernel Work admission proposal identity rebound")
+
+            target_status = (
+                KernelProjectionStatus.ADMITTED
+                if receipt.status == KernelWorkAdmissionStatus.WORK_MATERIALIZED.value
+                else KernelProjectionStatus.REJECTED
+            )
+            if current.status in {KernelProjectionStatus.ADMITTED, KernelProjectionStatus.REJECTED}:
+                expected = self._work_admission_refs(current)
+                actual = self._receipt_refs(receipt)
+                if current.status is not target_status or expected != actual:
+                    raise KernelBridgePersistenceError("Kernel Work admission receipt identity rebound")
+                return current
+            if current.status is not KernelProjectionStatus.SUBMITTED:
+                raise KernelBridgePersistenceError(
+                    f"kernel projection cannot admit Work from {current.status.value}"
+                )
+
+            row.status = target_status.value
+            row.kernel_work_admission_status = receipt.status
+            row.kernel_admission_policy_ref = receipt.policy_ref
+            row.kernel_priority_judgment_ref = receipt.priority_judgment_ref
+            row.kernel_resource_pool_ref = receipt.resource_pool_ref
+            row.kernel_portfolio_admission_ref = receipt.portfolio_admission_ref
+            row.kernel_reservation_ref = receipt.reservation_ref
+            row.kernel_commitment_ref = receipt.commitment_ref
+            row.kernel_work_ref = receipt.work_ref
+            row.updated_at = utcnow()
+            db.flush()
+            return self._projection_from_row(row)
+
     def get_projection_for_obligation(self, obligation_id: UUID) -> KernelShadowProjection | None:
         with self.store.sessions() as db:
             row = (
@@ -272,6 +337,34 @@ class KernelBridgeRepository:
             return [self._projection_from_row(row) for row in rows]
 
     @staticmethod
+    def _work_admission_refs(projection: KernelShadowProjection) -> tuple[object, ...]:
+        return (
+            projection.kernel_work_admission_status.value
+            if projection.kernel_work_admission_status is not None
+            else None,
+            projection.kernel_admission_policy_ref,
+            projection.kernel_priority_judgment_ref,
+            projection.kernel_resource_pool_ref,
+            projection.kernel_portfolio_admission_ref,
+            projection.kernel_reservation_ref,
+            projection.kernel_commitment_ref,
+            projection.kernel_work_ref,
+        )
+
+    @staticmethod
+    def _receipt_refs(receipt: KernelWorkAdmissionReceipt) -> tuple[object, ...]:
+        return (
+            receipt.status,
+            receipt.policy_ref,
+            receipt.priority_judgment_ref,
+            receipt.resource_pool_ref,
+            receipt.portfolio_admission_ref,
+            receipt.reservation_ref,
+            receipt.commitment_ref,
+            receipt.work_ref,
+        )
+
+    @staticmethod
     def _same_projection_semantics(
         left: KernelShadowProjection,
         right: KernelShadowProjection,
@@ -282,6 +375,13 @@ class KernelBridgeRepository:
             "kernel_admission_ref",
             "kernel_assessment_ref",
             "kernel_proposal_ref",
+            "kernel_work_admission_status",
+            "kernel_admission_policy_ref",
+            "kernel_priority_judgment_ref",
+            "kernel_resource_pool_ref",
+            "kernel_portfolio_admission_ref",
+            "kernel_reservation_ref",
+            "kernel_commitment_ref",
             "kernel_work_ref",
             "kernel_run_ref",
             "updated_at",
@@ -345,6 +445,17 @@ class KernelBridgeRepository:
             kernel_admission_ref=row.kernel_admission_ref,
             kernel_assessment_ref=row.kernel_assessment_ref,
             kernel_proposal_ref=row.kernel_proposal_ref,
+            kernel_work_admission_status=(
+                KernelWorkAdmissionStatus(row.kernel_work_admission_status)
+                if row.kernel_work_admission_status is not None
+                else None
+            ),
+            kernel_admission_policy_ref=row.kernel_admission_policy_ref,
+            kernel_priority_judgment_ref=row.kernel_priority_judgment_ref,
+            kernel_resource_pool_ref=row.kernel_resource_pool_ref,
+            kernel_portfolio_admission_ref=row.kernel_portfolio_admission_ref,
+            kernel_reservation_ref=row.kernel_reservation_ref,
+            kernel_commitment_ref=row.kernel_commitment_ref,
             kernel_work_ref=row.kernel_work_ref,
             kernel_run_ref=row.kernel_run_ref,
             created_at=row.created_at,
