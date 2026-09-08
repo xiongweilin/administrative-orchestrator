@@ -5,11 +5,32 @@ from enum import StrEnum
 from typing import Any
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 def utcnow() -> datetime:
     return datetime.now(UTC)
+
+
+def normalize_datetime(value: datetime) -> datetime:
+    """Canonicalize all domain datetimes to offset-aware UTC.
+
+    SQLite returns timezone-aware SQLAlchemy DateTime columns as naive values.
+    External JSON providers may also omit an offset. Domain records must not let
+    those transport/storage details change the meaning of a persisted instant.
+    """
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
+
+
+class UtcModel(BaseModel):
+    @field_validator("*", mode="after")
+    @classmethod
+    def normalize_datetime_fields(cls, value: Any) -> Any:
+        if isinstance(value, datetime):
+            return normalize_datetime(value)
+        return value
 
 
 class PrincipalKind(StrEnum):
@@ -86,13 +107,13 @@ class RealizationDisposition(StrEnum):
     UNKNOWN = "unknown"
 
 
-class Principal(BaseModel):
+class Principal(UtcModel):
     principal_id: str
     kind: PrincipalKind = PrincipalKind.PERSON
     display_name: str
 
 
-class RoleAssignment(BaseModel):
+class RoleAssignment(UtcModel):
     assignment_id: UUID = Field(default_factory=uuid4)
     principal_id: str
     role: str
@@ -101,10 +122,11 @@ class RoleAssignment(BaseModel):
     valid_until: datetime | None = None
 
     def is_current_at(self, at: datetime) -> bool:
+        at = normalize_datetime(at)
         return self.valid_from <= at and (self.valid_until is None or at < self.valid_until)
 
 
-class Delegation(BaseModel):
+class Delegation(UtcModel):
     delegation_id: UUID = Field(default_factory=uuid4)
     from_principal_id: str
     to_principal_id: str
@@ -120,7 +142,7 @@ class Delegation(BaseModel):
         return self
 
 
-class PolicyRef(BaseModel):
+class PolicyRef(UtcModel):
     policy_id: str
     version: str
     owner: str
@@ -128,12 +150,13 @@ class PolicyRef(BaseModel):
     effective_until: datetime | None = None
 
     def is_current_at(self, at: datetime) -> bool:
+        at = normalize_datetime(at)
         return self.effective_from <= at and (
             self.effective_until is None or at < self.effective_until
         )
 
 
-class EvidenceRef(BaseModel):
+class EvidenceRef(UtcModel):
     evidence_id: UUID = Field(default_factory=uuid4)
     source: str
     owner: str
@@ -143,7 +166,7 @@ class EvidenceRef(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
-class AdministrativeRequest(BaseModel):
+class AdministrativeRequest(UtcModel):
     request_id: UUID = Field(default_factory=uuid4)
     requester_principal_id: str
     channel: str
@@ -152,7 +175,7 @@ class AdministrativeRequest(BaseModel):
     source_ref: str | None = None
 
 
-class AdministrativeCase(BaseModel):
+class AdministrativeCase(UtcModel):
     case_id: UUID = Field(default_factory=uuid4)
     case_kind: str
     requester_principal_id: str
@@ -174,7 +197,7 @@ class AdministrativeCase(BaseModel):
         return self
 
 
-class Decision(BaseModel):
+class Decision(UtcModel):
     decision_id: UUID = Field(default_factory=uuid4)
     case_id: UUID
     case_version: int
@@ -185,7 +208,7 @@ class Decision(BaseModel):
     decided_at: datetime = Field(default_factory=utcnow)
 
 
-class ExecutionAuthorization(BaseModel):
+class ExecutionAuthorization(UtcModel):
     authorization_id: UUID = Field(default_factory=uuid4)
     case_id: UUID
     case_version: int
@@ -207,12 +230,13 @@ class ExecutionAuthorization(BaseModel):
         return self
 
     def is_current_at(self, at: datetime) -> bool:
+        at = normalize_datetime(at)
         if self.revoked_at is not None and self.revoked_at <= at:
             return False
         return self.expires_at is None or at < self.expires_at
 
 
-class EffectRecord(BaseModel):
+class EffectRecord(UtcModel):
     effect_id: UUID = Field(default_factory=uuid4)
     case_id: UUID
     case_version: int
@@ -228,7 +252,7 @@ class EffectRecord(BaseModel):
     updated_at: datetime = Field(default_factory=utcnow)
 
 
-class EffectRealizationAssessment(BaseModel):
+class EffectRealizationAssessment(UtcModel):
     assessment_id: UUID = Field(default_factory=uuid4)
     effect_id: UUID
     disposition: RealizationDisposition
@@ -242,7 +266,7 @@ class EffectRealizationAssessment(BaseModel):
         return self
 
 
-class ConfirmedOutcome(BaseModel):
+class ConfirmedOutcome(UtcModel):
     outcome_id: UUID = Field(default_factory=uuid4)
     case_id: UUID
     case_version: int
