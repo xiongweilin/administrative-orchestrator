@@ -5,19 +5,21 @@ from ...domain import AdministrativeCase
 from ...governance import GovernanceBasis
 from ...obligations import AdministrativeObligation
 from ...persistence import SqlStore
+from .client import HttpKernelResponsibilityClient, KernelResponsibilityClient
 from .compatibility import HttpKernelContractProbe, KernelCompatibilityError, KernelContractIdentity
 from .mapper import derive_effect_intent, derive_execution_grant, project_to_kernel
-from .models import KernelShadowProjection
+from .models import KernelProjectionStatus, KernelShadowProjection
 from .repository import KernelBridgeRepository
 
 
 class KernelExecutionBridge:
-    """Project governed administrative work into Agent Kernel contracts.
+    """Hand governed administrative work into Agent Kernel responsibility semantics.
 
-    Shadow mode is intentionally non-executing: it persists the exact business
-    grant/effect intent and the public persistent-responsibility payloads that a
-    later Kernel command surface will consume.  It never calls a provider and
-    never mints Work, runtime authorization, InvocationPermit, or Outcome.
+    Shadow mode may persist and submit the canonical responsibility proposal
+    prefix. It still never creates Kernel Work, runtime authorization,
+    InvocationPermit, provider execution, or Outcome. The legacy administrative
+    provider path remains the only physical effect path until an explicit
+    cutover slice replaces it.
     """
 
     def __init__(
@@ -26,11 +28,13 @@ class KernelExecutionBridge:
         *,
         settings: Settings | None = None,
         compatibility: KernelContractIdentity | None = None,
+        client: KernelResponsibilityClient | None = None,
     ) -> None:
         self.store = store
         self.settings = settings or get_settings()
         self.repository = KernelBridgeRepository(store)
         self._compatibility = compatibility
+        self._client = client
 
     @property
     def enabled(self) -> bool:
@@ -50,6 +54,14 @@ class KernelExecutionBridge:
             ).fetch_identity()
         return self._compatibility
 
+    def client(self) -> KernelResponsibilityClient:
+        if self._client is None:
+            self._client = HttpKernelResponsibilityClient(
+                self.settings.kernel_base_url,
+                timeout_seconds=self.settings.kernel_contract_timeout_seconds,
+            )
+        return self._client
+
     def prepare(
         self,
         case: AdministrativeCase,
@@ -60,8 +72,8 @@ class KernelExecutionBridge:
             return None
         if self.settings.kernel_bridge_mode == "cutover":
             raise KernelCompatibilityError(
-                "kernel cutover is fail-closed until the responsibility admission/Work command "
-                "surface is configured; shadow projection cannot become physical execution"
+                "kernel cutover is fail-closed until Work admission, runtime authorization, and "
+                "the unique Kernel RealityBoundary path are configured"
             )
 
         identity = self.compatibility()
@@ -69,8 +81,17 @@ class KernelExecutionBridge:
             derive_execution_grant(case, obligation, governance)
         )
         intent = self.repository.put_intent(derive_effect_intent(case, grant))
-        projection = project_to_kernel(grant, intent, identity)
-        return self.repository.put_projection(projection)
+        planned = project_to_kernel(grant, intent, identity)
+        projection = self.repository.put_projection(planned)
+        if projection.status in {
+            KernelProjectionStatus.SUBMITTED,
+            KernelProjectionStatus.ADMITTED,
+            KernelProjectionStatus.CUTOVER,
+        }:
+            return projection
+
+        receipt = self.client().submit(projection)
+        return self.repository.mark_submitted(projection, receipt)
 
 
 __all__ = ["KernelExecutionBridge"]
