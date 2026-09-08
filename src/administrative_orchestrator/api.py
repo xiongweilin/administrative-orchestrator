@@ -11,11 +11,14 @@ from .config import get_settings
 from .domain import (
     AdministrativeCase,
     AdministrativeRequest,
+    ConfirmedOutcome,
     Decision,
     DecisionDisposition,
+    EffectRecord,
     FactSnapshot,
     PolicyRef,
 )
+from .execution_repository import ExecutionRepository
 from .persistence import ConcurrencyConflict, SqlStore
 from .policy import OnboardingFacts, OnboardingPolicy, PolicyEvaluation
 from .service import (
@@ -35,6 +38,7 @@ _store = SqlStore(_settings.database_url)
 if _settings.auto_create_schema:
     _store.init_schema()
 _uow = AdministrativeUnitOfWork(_store)
+_execution = ExecutionRepository(_store)
 
 _ONBOARDING_POLICY_REF = PolicyRef(
     policy_id="employee-onboarding",
@@ -141,6 +145,21 @@ def get_policy_evaluation(case_id: UUID) -> PolicyEvaluation:
     if evaluation is None:
         raise HTTPException(status_code=404, detail="policy evaluation not found")
     return evaluation
+
+
+@app.get("/v1/cases/{case_id}/effects", response_model=list[EffectRecord])
+def get_case_effects(case_id: UUID) -> list[EffectRecord]:
+    case = _store.get_case(case_id)
+    if case is None:
+        raise HTTPException(status_code=404, detail="case not found")
+    return _execution.list_effects(case_id, case.authority_epoch)
+
+
+@app.get("/v1/cases/{case_id}/outcomes", response_model=list[ConfirmedOutcome])
+def get_case_outcomes(case_id: UUID) -> list[ConfirmedOutcome]:
+    if _store.get_case(case_id) is None:
+        raise HTTPException(status_code=404, detail="case not found")
+    return _execution.list_outcomes(case_id)
 
 
 @app.get("/v1/cases/{case_id}/audit")
