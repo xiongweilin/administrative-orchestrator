@@ -6,6 +6,10 @@ from typing import Literal
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+DEFAULT_KERNEL_RESPONSIBILITY_ADMISSION_POLICY_REF = (
+    "responsibility-admission:administrative-public@1"
+)
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="ADMIN_", extra="ignore")
@@ -33,8 +37,11 @@ class Settings(BaseSettings):
     kernel_bridge_mode: Literal["disabled", "shadow", "admission", "cutover"] = "disabled"
     kernel_base_url: str = "http://127.0.0.1:8020"
     kernel_contract_timeout_seconds: float = 3.0
+    # This value is only an optimistic compatibility guard sent to Kernel. It
+    # never selects policy or capacity remotely. Kernel must be configured
+    # server-side with the matching administrative-public profile.
     kernel_responsibility_admission_policy_ref: str = (
-        "responsibility-admission:bounded-local@1"
+        DEFAULT_KERNEL_RESPONSIBILITY_ADMISSION_POLICY_REF
     )
 
     # Authentication is intentionally fail-closed by default. The local Compose
