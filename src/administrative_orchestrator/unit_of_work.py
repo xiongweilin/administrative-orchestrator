@@ -33,6 +33,8 @@ class AdministrativeUnitOfWork:
             raise ValueError("policy transition cannot change case identity")
         if after.version <= before.version:
             raise ValueError("policy transition must advance case version")
+        if after.authority_epoch != before.authority_epoch + 1:
+            raise ValueError("policy transition must advance authority epoch exactly once")
         if after.policy_ref != evaluation.policy_ref:
             raise ValueError("case policy must match persisted policy evaluation")
 
@@ -43,6 +45,7 @@ class AdministrativeUnitOfWork:
                 PolicyEvaluationRow(
                     case_id=after.case_id,
                     case_version=after.version,
+                    authority_epoch=after.authority_epoch,
                     policy_json=evaluation.policy_ref.model_dump(mode="json"),
                     evaluation_json=evaluation.model_dump(mode="json"),
                     created_at=utcnow(),
@@ -55,6 +58,7 @@ class AdministrativeUnitOfWork:
                 "policy.evaluated",
                 {
                     "case_version": after.version,
+                    "authority_epoch": after.authority_epoch,
                     "policy_id": evaluation.policy_ref.policy_id,
                     "policy_version": evaluation.policy_ref.version,
                     "disposition": evaluation.disposition.value,
@@ -66,6 +70,7 @@ class AdministrativeUnitOfWork:
                 "case.policy_applied",
                 {
                     "case_version": after.version,
+                    "authority_epoch": after.authority_epoch,
                     "status": after.status.value,
                     "policy_disposition": evaluation.disposition.value,
                 },
@@ -81,6 +86,8 @@ class AdministrativeUnitOfWork:
             raise ValueError("decision transition cannot change case identity")
         if decision.case_version != before.version:
             raise ValueError("decision must be bound to the pre-transition case version")
+        if decision.authority_epoch != before.authority_epoch:
+            raise ValueError("decision must be bound to the pre-transition authority epoch")
         if after.version != before.version + 1:
             raise ValueError("decision transition must advance case version exactly once")
         if before.policy_ref is None or decision.policy_ref != before.policy_ref:
@@ -94,6 +101,7 @@ class AdministrativeUnitOfWork:
                     decision_id=decision.decision_id,
                     case_id=decision.case_id,
                     case_version=decision.case_version,
+                    authority_epoch=decision.authority_epoch,
                     principal_id=decision.principal_id,
                     disposition=decision.disposition.value,
                     rationale=decision.rationale,
@@ -109,6 +117,7 @@ class AdministrativeUnitOfWork:
                 {
                     "decision_id": str(decision.decision_id),
                     "case_version": decision.case_version,
+                    "authority_epoch": decision.authority_epoch,
                     "principal_id": decision.principal_id,
                     "disposition": decision.disposition.value,
                     "policy_id": decision.policy_ref.policy_id,
@@ -121,6 +130,7 @@ class AdministrativeUnitOfWork:
                 "case.decision_applied",
                 {
                     "case_version": after.version,
+                    "authority_epoch": after.authority_epoch,
                     "status": after.status.value,
                     "decision_id": str(decision.decision_id),
                 },
@@ -134,6 +144,11 @@ class AdministrativeUnitOfWork:
             raise ConcurrencyConflict(
                 f"case {expected.case_id} version changed: expected "
                 f"{expected.version}, found {row.version}"
+            )
+        if row.authority_epoch != expected.authority_epoch:
+            raise ConcurrencyConflict(
+                f"case {expected.case_id} authority epoch changed: expected "
+                f"{expected.authority_epoch}, found {row.authority_epoch}"
             )
 
 
