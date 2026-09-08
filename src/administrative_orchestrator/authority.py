@@ -5,7 +5,7 @@ from datetime import datetime
 from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
 from pydantic import BaseModel, Field
-from sqlalchemy import Boolean, DateTime, ForeignKey, JSON, String, Uuid, select
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, JSON, String, Uuid, select
 from sqlalchemy.orm import Mapped, Session, mapped_column
 
 from .domain import (
@@ -38,6 +38,14 @@ class IdentityBinding(UtcModel):
     def is_current_at(self, at: datetime) -> bool:
         at = normalize_datetime(at)
         return self.valid_from <= at and (self.valid_until is None or at < self.valid_until)
+
+
+class DecisionAuthorityBinding(UtcModel):
+    decision_id: UUID
+    decision_role: str
+    organization_scope: str
+    authenticated_principal_id: str
+    bound_at: datetime = Field(default_factory=utcnow)
 
 
 class ApprovalSatisfaction(UtcModel):
@@ -111,6 +119,20 @@ class DelegationRow(Base):
     valid_until: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class DecisionAuthorityBindingRow(Base):
+    __tablename__ = "administrative_decision_authority_binding"
+
+    decision_id: Mapped[UUID] = mapped_column(
+        ForeignKey("administrative_decision.decision_id"), primary_key=True
+    )
+    decision_role: Mapped[str] = mapped_column(String(128), nullable=False)
+    organization_scope: Mapped[str] = mapped_column(String(512), nullable=False)
+    authenticated_principal_id: Mapped[str] = mapped_column(
+        ForeignKey("administrative_principal.principal_id"), nullable=False
+    )
+    bound_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class ApprovalSatisfactionRow(Base):
     __tablename__ = "administrative_approval_satisfaction"
 
@@ -118,7 +140,7 @@ class ApprovalSatisfactionRow(Base):
     case_id: Mapped[UUID] = mapped_column(
         ForeignKey("administrative_case.case_id"), nullable=False
     )
-    authority_epoch: Mapped[int] = mapped_column(nullable=False)
+    authority_epoch: Mapped[int] = mapped_column(Integer, nullable=False)
     policy_json: Mapped[dict] = mapped_column(JSON, nullable=False)
     decision_ids_json: Mapped[list[str]] = mapped_column(JSON, nullable=False)
     satisfied_roles_json: Mapped[list[str]] = mapped_column(JSON, nullable=False)
@@ -172,7 +194,11 @@ class AuthorityRepository:
             )
             for row in duplicates:
                 restored = self._binding_from_row(row)
-                if restored != binding:
+                if (
+                    restored.principal_id != binding.principal_id
+                    or restored.valid_from != binding.valid_from
+                    or restored.valid_until != binding.valid_until
+                ):
                     raise AuthorityError(
                         "external identity is already bound with different semantics"
                     )
@@ -319,6 +345,32 @@ class AuthorityRepository:
                     roles.add(delegation.role)
             return roles
 
+    def put_decision_binding(
+        self,
+        decision: Decision,
+        *,
+        organization_scope: str,
+        db: Session | None = None,
+    ) -> DecisionAuthorityBinding:
+        if decision.decision_role is None:
+            raise AuthorityError("accepted governed decision must record decision_role")
+        binding = DecisionAuthorityBinding(
+            decision_id=decision.decision_id,
+            decision_role=decision.decision_role,
+            organization_scope=organization_scope,
+            authenticated_principal_id=decision.principal_id,
+            bound_at=decision.decided_at,
+        )
+        if db is not None:
+            return self._put_decision_binding_in_session(db, binding)
+        with self.store.sessions.begin() as session:
+            return self._put_decision_binding_in_session(session, binding)
+
+    def get_decision_binding(self, decision_id: UUID) -> DecisionAuthorityBinding | None:
+        with self.store.sessions() as db:
+            row = db.get(DecisionAuthorityBindingRow, decision_id)
+            return None if row is None else self._decision_binding_from_row(row)
+
     def put_approval_satisfaction(
         self,
         satisfaction: ApprovalSatisfaction,
@@ -350,6 +402,30 @@ class AuthorityRepository:
                 .first()
             )
             return None if row is None else self._satisfaction_from_row(row)
+
+    def _put_decision_binding_in_session(
+        self,
+        db: Session,
+        binding: DecisionAuthorityBinding,
+    ) -> DecisionAuthorityBinding:
+        row = db.get(DecisionAuthorityBindingRow, binding.decision_id)
+        if row is not None:
+            restored = self._decision_binding_from_row(row)
+            if restored != binding:
+                raise AuthorityError(
+                    "decision authority binding already exists with different semantics"
+                )
+            return restored
+        db.add(
+            DecisionAuthorityBindingRow(
+                decision_id=binding.decision_id,
+                decision_role=binding.decision_role,
+                organization_scope=binding.organization_scope,
+                authenticated_principal_id=binding.authenticated_principal_id,
+                bound_at=binding.bound_at,
+            )
+        )
+        return binding
 
     def _put_satisfaction_in_session(
         self,
@@ -409,6 +485,16 @@ class AuthorityRepository:
             organization_scope=row.organization_scope,
             valid_from=row.valid_from,
             valid_until=row.valid_until,
+        )
+
+    @staticmethod
+    def _decision_binding_from_row(row: DecisionAuthorityBindingRow) -> DecisionAuthorityBinding:
+        return DecisionAuthorityBinding(
+            decision_id=row.decision_id,
+            decision_role=row.decision_role,
+            organization_scope=row.organization_scope,
+            authenticated_principal_id=row.authenticated_principal_id,
+            bound_at=row.bound_at,
         )
 
     @staticmethod
@@ -565,6 +651,8 @@ __all__ = [
     "ApprovalSatisfactionRow",
     "AuthorityError",
     "AuthorityRepository",
+    "DecisionAuthorityBinding",
+    "DecisionAuthorityBindingRow",
     "DelegationRow",
     "IdentityBinding",
     "IdentityBindingRow",
