@@ -6,13 +6,22 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from .domain import EffectRecord
-from .effect_provider import RealityObservation
+from .effect_provider import (
+    ObservationAvailability,
+    ObservationFreshness,
+    ObservationPresence,
+    RealityObservation,
+)
 
 
 class VerificationDisposition(StrEnum):
     VERIFIED = "verified"
-    NOT_FOUND = "not_found"
+    ABSENT = "absent"
+    NOT_FOUND = "absent"  # compatibility alias
     MISMATCH = "mismatch"
+    UNAVAILABLE = "unavailable"
+    UNKNOWN = "unknown"
+    STALE = "stale"
 
 
 class SemanticVerificationResult(BaseModel):
@@ -24,77 +33,120 @@ class SemanticVerificationResult(BaseModel):
 def verify_onboarding_observation(
     effect: EffectRecord,
     observation: RealityObservation,
-    facts: dict[str, Any],
+    facts: dict[str, Any] | None = None,
+    *,
+    expected_postcondition: dict[str, Any] | None = None,
 ) -> SemanticVerificationResult:
-    """Verify that observed reality satisfies the onboarding effect postcondition.
-
-    Provider lookup identity is necessary but not sufficient.  The verifier also
-    checks the business state that this onboarding slice promises to create.
-    Real connectors may specialize this contract, but they must preserve the
-    distinction between provider success and verified business state.
-    """
-    if not observation.found:
+    """Verify fresh authoritative reality against a frozen business postcondition."""
+    if observation.availability == ObservationAvailability.UNAVAILABLE:
         return SemanticVerificationResult(
-            disposition=VerificationDisposition.NOT_FOUND,
-            reason="effect realization was not found in authoritative reality",
+            disposition=VerificationDisposition.UNAVAILABLE,
+            reason="authoritative reality source is currently unavailable",
+        )
+    if observation.availability == ObservationAvailability.UNKNOWN:
+        return SemanticVerificationResult(
+            disposition=VerificationDisposition.UNKNOWN,
+            reason="observation did not establish whether authoritative reality was available",
+        )
+    if observation.freshness == ObservationFreshness.STALE:
+        return SemanticVerificationResult(
+            disposition=VerificationDisposition.STALE,
+            reason="authoritative observation is stale",
+        )
+    if observation.freshness == ObservationFreshness.UNKNOWN:
+        return SemanticVerificationResult(
+            disposition=VerificationDisposition.UNKNOWN,
+            reason="authoritative observation freshness is unknown",
+        )
+    if observation.presence == ObservationPresence.ABSENT:
+        return SemanticVerificationResult(
+            disposition=VerificationDisposition.ABSENT,
+            reason="authoritative source explicitly reports that the realization is absent",
+        )
+    if observation.presence != ObservationPresence.PRESENT:
+        return SemanticVerificationResult(
+            disposition=VerificationDisposition.UNKNOWN,
+            reason="observation does not establish realization presence",
         )
 
+    expected = expected_postcondition or _legacy_expected_postcondition(effect, facts or {})
     differences: dict[str, Any] = {}
     for field in ("target_system", "operation", "subject_ref"):
-        expected = getattr(effect, field)
+        expected_value = expected.get(field, getattr(effect, field))
         actual = getattr(observation, field)
-        if actual != expected:
-            differences[field] = {"expected": expected, "actual": actual}
+        if actual != expected_value:
+            differences[field] = {"expected": expected_value, "actual": actual}
 
     state = observation.state
-    if state.get("active") is not True:
-        differences["active"] = {"expected": True, "actual": state.get("active")}
+    if "active" in expected and state.get("active") != expected["active"]:
+        differences["active"] = {"expected": expected["active"], "actual": state.get("active")}
 
+    expected_payload = expected.get("payload", {})
     payload = state.get("payload")
-    if not isinstance(payload, dict):
-        differences["payload"] = {"expected": "mapping", "actual": type(payload).__name__}
-    else:
-        # These facts define the minimum realized employee identity for the
-        # current onboarding slice.  Optional fields are checked only when the
-        # current authoritative snapshot contains them.
+    if expected_payload:
+        if not isinstance(payload, dict):
+            differences["payload"] = {
+                "expected": "mapping",
+                "actual": type(payload).__name__,
+            }
+        else:
+            for field, expected_value in expected_payload.items():
+                if payload.get(field) != expected_value:
+                    differences[f"payload.{field}"] = {
+                        "expected": expected_value,
+                        "actual": payload.get(field),
+                    }
+
+    if isinstance(payload, dict) and payload.get("employee_ref") != effect.subject_ref:
+        differences["payload.employee_ref"] = {
+            "expected": effect.subject_ref,
+            "actual": payload.get("employee_ref"),
+        }
+
+    if expected.get("requested_system") is not None:
+        requested = tuple((facts or {}).get("requested_systems") or ())
+        expected_system = expected["requested_system"]
+        if requested and expected_system not in requested:
+            differences["requested_systems"] = {
+                "expected_contains": expected_system,
+                "actual": list(requested),
+            }
+
+    if differences:
+        return SemanticVerificationResult(
+            disposition=VerificationDisposition.MISMATCH,
+            reason="authoritative reality does not satisfy the frozen onboarding postcondition",
+            differences=differences,
+        )
+
+    return SemanticVerificationResult(
+        disposition=VerificationDisposition.VERIFIED,
+        reason="fresh authoritative reality satisfies the frozen onboarding postcondition",
+    )
+
+
+def _legacy_expected_postcondition(effect: EffectRecord, facts: dict[str, Any]) -> dict[str, Any]:
+    expected_payload = {
+        field: facts.get(field)
         for field in (
             "employee_ref",
             "department_ref",
             "manager_principal_id",
             "start_date",
             "employment_type",
-        ):
-            if field in facts and facts[field] is not None and payload.get(field) != facts[field]:
-                differences[f"payload.{field}"] = {
-                    "expected": facts[field],
-                    "actual": payload.get(field),
-                }
-
-        if payload.get("employee_ref") != effect.subject_ref:
-            differences["payload.employee_ref"] = {
-                "expected": effect.subject_ref,
-                "actual": payload.get("employee_ref"),
-            }
-
-        if effect.operation == "account.provision":
-            requested = tuple(facts.get("requested_systems") or ())
-            if effect.target_system not in requested:
-                differences["requested_systems"] = {
-                    "expected_contains": effect.target_system,
-                    "actual": list(requested),
-                }
-
-    if differences:
-        return SemanticVerificationResult(
-            disposition=VerificationDisposition.MISMATCH,
-            reason="authoritative reality does not satisfy the expected onboarding postcondition",
-            differences=differences,
         )
-
-    return SemanticVerificationResult(
-        disposition=VerificationDisposition.VERIFIED,
-        reason="authoritative reality satisfies the expected onboarding postcondition",
-    )
+        if facts.get(field) is not None
+    }
+    expected: dict[str, Any] = {
+        "target_system": effect.target_system,
+        "operation": effect.operation,
+        "subject_ref": effect.subject_ref,
+        "active": True,
+        "payload": expected_payload,
+    }
+    if effect.operation == "account.provision":
+        expected["requested_system"] = effect.target_system
+    return expected
 
 
 __all__ = [
