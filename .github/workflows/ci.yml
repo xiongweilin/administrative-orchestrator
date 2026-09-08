@@ -5,11 +5,16 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: astral-sh/setup-uv@v6
         with:
           python-version: "3.12"
@@ -18,7 +23,7 @@ jobs:
       - name: Ruff
         run: uv run ruff check .
       - name: Pytest
-        run: uv run pytest -q
+        run: uv run pytest -q --cov=src/administrative_orchestrator --cov-report=xml:coverage.xml
       - name: Alembic migration smoke
         env:
           ADMIN_DATABASE_URL: sqlite+pysqlite:///./migration-test.db
@@ -28,6 +33,16 @@ jobs:
           uv run alembic upgrade head
       - name: Compose config
         run: docker compose config --quiet
+      - name: SonarQube Cloud Scan
+        uses: SonarSource/sonarqube-scan-action@v8.2.1
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: https://sonarcloud.io
+      - name: SonarQube Cloud Quality Gate
+        uses: SonarSource/sonarqube-quality-gate-action@v1.2.1
+        timeout-minutes: 10
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
 
   dbos-integration:
     runs-on: ubuntu-latest
