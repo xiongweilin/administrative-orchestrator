@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     dbos_system_database_url: str | None = None
     log_level: str = "INFO"
     external_effects_enabled: bool = False
+    auto_create_schema: bool = True
 
 
 @lru_cache(maxsize=1)
