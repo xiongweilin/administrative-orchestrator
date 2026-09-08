@@ -47,6 +47,7 @@ def add_evidence(case: AdministrativeCase, evidence: EvidenceRef) -> Administrat
         update={
             "evidence": [*case.evidence, evidence],
             "version": case.version + 1,
+            "authority_epoch": case.authority_epoch + 1,
             "updated_at": utcnow(),
         }
     )
@@ -78,6 +79,7 @@ def apply_policy_evaluation(
     common = {
         "policy_ref": evaluation.policy_ref,
         "version": case.version + 1,
+        "authority_epoch": case.authority_epoch + 1,
         "updated_at": utcnow(),
     }
 
@@ -105,6 +107,8 @@ def record_decision(case: AdministrativeCase, decision: Decision) -> Administrat
         raise TransitionError("decision requires awaiting_decision state")
     if decision.case_id != case.case_id or decision.case_version != case.version:
         raise TransitionError("decision is not bound to the current case version")
+    if decision.authority_epoch != case.authority_epoch:
+        raise TransitionError("decision is not bound to the current authority epoch")
     if case.policy_ref is None or decision.policy_ref != case.policy_ref:
         raise TransitionError("decision is not bound to the current policy version")
 
@@ -124,6 +128,7 @@ def record_decision(case: AdministrativeCase, decision: Decision) -> Administrat
     }
     if status == CaseStatus.REOPEN_REQUIRED:
         updates["reopen_reason"] = ReopenReason.AUTHORITY_UNRESOLVED
+        updates["authority_epoch"] = case.authority_epoch + 1
     return case.model_copy(update=updates)
 
 
@@ -143,14 +148,17 @@ def mint_execution_authorization(
         raise TransitionError("only an approving decision may support execution authorization")
     if decision.case_id != case.case_id:
         raise TransitionError("decision belongs to a different case")
-    if decision.case_version != case.version - 1:
-        raise TransitionError("decision is stale for the current case version")
+    if decision.case_version >= case.version:
+        raise TransitionError("decision must precede the current case state")
+    if decision.authority_epoch != case.authority_epoch:
+        raise TransitionError("decision is stale for the current authority epoch")
     if case.policy_ref is None or decision.policy_ref != case.policy_ref:
         raise TransitionError("decision policy is not current")
 
     return ExecutionAuthorization(
         case_id=case.case_id,
         case_version=case.version,
+        authority_epoch=case.authority_epoch,
         decision_id=decision.decision_id,
         issuer_principal_id=issuer_principal_id,
         target_system=target_system,
@@ -172,8 +180,10 @@ def plan_effect(
     now = utcnow()
     if case.status != CaseStatus.AUTHORIZED:
         raise TransitionError("effect planning requires an authorized case")
-    if authorization.case_id != case.case_id or authorization.case_version != case.version:
-        raise TransitionError("authorization is not bound to the current case version")
+    if authorization.case_id != case.case_id:
+        raise TransitionError("authorization belongs to a different case")
+    if authorization.authority_epoch != case.authority_epoch:
+        raise TransitionError("authorization is stale for the current authority epoch")
     if authorization.subject_ref != case.subject_ref:
         raise TransitionError("authorization subject does not match current case subject")
     if not authorization.is_current_at(now):
@@ -184,6 +194,7 @@ def plan_effect(
     return EffectRecord(
         case_id=case.case_id,
         case_version=case.version,
+        authority_epoch=case.authority_epoch,
         authorization_id=authorization.authorization_id,
         target_system=authorization.target_system,
         operation=operation,
@@ -201,6 +212,7 @@ def require_reopen(case: AdministrativeCase, reason: ReopenReason) -> Administra
             "status": CaseStatus.REOPEN_REQUIRED,
             "reopen_reason": reason,
             "version": case.version + 1,
+            "authority_epoch": case.authority_epoch + 1,
             "updated_at": utcnow(),
         }
     )
