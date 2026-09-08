@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from .domain import AdministrativeCase, Decision
+from .domain import AdministrativeCase, AdministrativeRequest, Decision
 from .messaging import emit_outbox
 from .persistence import (
     CaseRow,
     ConcurrencyConflict,
     DecisionRow,
     PolicyEvaluationRow,
+    RequestRow,
     SqlStore,
     utcnow,
 )
@@ -14,7 +15,7 @@ from .policy import PolicyEvaluation
 
 
 class AdministrativeUnitOfWork:
-    """Atomic persistence boundary for authority-relevant case transitions.
+    """Atomic persistence boundary for case creation and authority transitions.
 
     A policy/decision record, the current Case state, and the durable workflow
     wake-up event commit together. A crash after this transaction may delay
@@ -23,6 +24,47 @@ class AdministrativeUnitOfWork:
 
     def __init__(self, store: SqlStore) -> None:
         self.store = store
+
+    def create_case(
+        self,
+        request: AdministrativeRequest,
+        case: AdministrativeCase,
+    ) -> None:
+        """Create the request/case aggregate before appending its audit record.
+
+        The explicit flush is a portability boundary: PostgreSQL enforces the
+        audit -> case foreign key immediately, while SQLite may otherwise hide
+        an ORM flush-order bug when unrelated mapped objects are new together.
+        """
+        if request.requester_principal_id != case.requester_principal_id:
+            raise ValueError("request and case requester must match")
+        with self.store.sessions.begin() as db:
+            db.add(
+                RequestRow(
+                    request_id=request.request_id,
+                    requester_principal_id=request.requester_principal_id,
+                    channel=request.channel,
+                    intent=request.intent,
+                    received_at=request.received_at,
+                    source_ref=request.source_ref,
+                )
+            )
+            db.add(self.store._case_row(case, request.request_id))
+            db.flush()
+            self.store._append_audit(
+                db,
+                case.case_id,
+                "case.created",
+                {
+                    "request_id": str(request.request_id),
+                    "case_kind": case.case_kind,
+                    "case_version": case.version,
+                    "authority_epoch": case.authority_epoch,
+                    "fact_snapshot_id": (
+                        str(case.fact_snapshot.snapshot_id) if case.fact_snapshot else None
+                    ),
+                },
+            )
 
     def apply_policy_transition(
         self,
