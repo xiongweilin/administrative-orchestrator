@@ -4,7 +4,7 @@ from typing import Any
 from uuid import UUID
 
 from sqlalchemy import JSON, DateTime, ForeignKey, Integer, String, Uuid, select
-from sqlalchemy.orm import Mapped, Session, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column
 
 from ...domain import AuthorityClass, PolicyRef
 from ...persistence import Base, SqlStore
