@@ -31,7 +31,8 @@ app = FastAPI(title="Administrative Orchestrator", version="0.1.0")
 
 _settings = get_settings()
 _store = SqlStore(_settings.database_url)
-_store.init_schema()
+if _settings.auto_create_schema:
+    _store.init_schema()
 _uow = AdministrativeUnitOfWork(_store)
 
 _ONBOARDING_POLICY_REF = PolicyRef(
@@ -81,6 +82,7 @@ def readyz() -> dict[str, str]:
     return {
         "status": "ready",
         "storage": "sql-m1",
+        "schema": "auto-create" if _settings.auto_create_schema else "managed-migration",
         "external_effects": "enabled" if _settings.external_effects_enabled else "disabled",
     }
 
