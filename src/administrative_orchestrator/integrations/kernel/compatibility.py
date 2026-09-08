@@ -4,6 +4,7 @@ EXPECTED_CATALOG_VERSION = "portable-runtime-contracts-v1"
 EXPECTED_OWNER = "portable-runtime/contracts"
 EXPECTED_RUNTIME_PROTOCOL = "2.0"
 EXPECTED_PERSISTENT_RESPONSIBILITY = "persistent-responsibility-v1"
+EXPECTED_DOMAIN_RESPONSIBILITY_PROPOSAL = "domain-responsibility-proposal-v1"
 
 
 class KernelCompatibilityError(RuntimeError):
@@ -16,6 +17,7 @@ class KernelContractIdentity:
     owner: str
     runtime_protocol: str
     persistent_responsibility_contract: str
+    domain_responsibility_proposal_contract: str
 
 
 def validate_kernel_catalog(raw: dict[str, object]) -> KernelContractIdentity:
@@ -26,12 +28,17 @@ def validate_kernel_catalog(raw: dict[str, object]) -> KernelContractIdentity:
         persistent_responsibility = contracts["persistent_responsibility"]
         if not isinstance(persistent_responsibility, dict):
             raise TypeError("persistent_responsibility must be an object")
+        domain_responsibility_proposal = contracts["domain_responsibility_proposal"]
+        if not isinstance(domain_responsibility_proposal, dict):
+            raise TypeError("domain_responsibility_proposal must be an object")
         persistent = persistent_responsibility["current"]
+        domain_proposal = domain_responsibility_proposal["current"]
         identity = KernelContractIdentity(
             catalog_version=str(raw["catalog_version"]),
             owner=str(raw["owner"]),
             runtime_protocol=str(raw["runtime_protocol"]),
             persistent_responsibility_contract=str(persistent),
+            domain_responsibility_proposal_contract=str(domain_proposal),
         )
     except (KeyError, TypeError, ValueError) as exc:
         raise KernelCompatibilityError("kernel contract catalog is structurally incomplete") from exc
@@ -52,6 +59,15 @@ def validate_kernel_catalog(raw: dict[str, object]) -> KernelContractIdentity:
             "persistent_responsibility="
             f"{identity.persistent_responsibility_contract!r}, "
             f"expected {EXPECTED_PERSISTENT_RESPONSIBILITY!r}"
+        )
+    if (
+        identity.domain_responsibility_proposal_contract
+        != EXPECTED_DOMAIN_RESPONSIBILITY_PROPOSAL
+    ):
+        mismatches.append(
+            "domain_responsibility_proposal="
+            f"{identity.domain_responsibility_proposal_contract!r}, "
+            f"expected {EXPECTED_DOMAIN_RESPONSIBILITY_PROPOSAL!r}"
         )
     if mismatches:
         raise KernelCompatibilityError("incompatible agent-kernel contracts: " + "; ".join(mismatches))
@@ -82,6 +98,7 @@ class HttpKernelContractProbe:
 
 __all__ = [
     "EXPECTED_CATALOG_VERSION",
+    "EXPECTED_DOMAIN_RESPONSIBILITY_PROPOSAL",
     "EXPECTED_OWNER",
     "EXPECTED_PERSISTENT_RESPONSIBILITY",
     "EXPECTED_RUNTIME_PROTOCOL",

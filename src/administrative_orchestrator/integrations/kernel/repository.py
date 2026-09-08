@@ -6,8 +6,9 @@ from uuid import UUID
 from sqlalchemy import JSON, DateTime, ForeignKey, Integer, String, Uuid, select
 from sqlalchemy.orm import Mapped, mapped_column
 
-from ...domain import AuthorityClass, PolicyRef
+from ...domain import AuthorityClass, PolicyRef, utcnow
 from ...persistence import Base, SqlStore
+from .client import KernelProposalReceipt
 from .models import (
     AdministrativeEffectIntent,
     AdministrativeExecutionGrant,
@@ -92,6 +93,8 @@ class KernelBridgeProjectionRow(Base):
     work_proposal_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
     status: Mapped[str] = mapped_column(String(64), nullable=False)
     kernel_responsibility_ref: Mapped[str | None] = mapped_column(String(512))
+    kernel_admission_ref: Mapped[str | None] = mapped_column(String(512))
+    kernel_assessment_ref: Mapped[str | None] = mapped_column(String(512))
     kernel_proposal_ref: Mapped[str | None] = mapped_column(String(512))
     kernel_work_ref: Mapped[str | None] = mapped_column(String(512))
     kernel_run_ref: Mapped[str | None] = mapped_column(String(512))
@@ -164,7 +167,7 @@ class KernelBridgeRepository:
             row = db.get(KernelBridgeProjectionRow, projection.projection_id)
             if row is not None:
                 restored = self._projection_from_row(row)
-                if restored != projection:
+                if not self._same_projection_semantics(restored, projection):
                     raise KernelBridgePersistenceError("kernel projection identity rebound")
                 return restored
             db.add(
@@ -186,6 +189,8 @@ class KernelBridgeRepository:
                     work_proposal_json=dict(projection.work_proposal_payload),
                     status=projection.status.value,
                     kernel_responsibility_ref=projection.kernel_responsibility_ref,
+                    kernel_admission_ref=projection.kernel_admission_ref,
+                    kernel_assessment_ref=projection.kernel_assessment_ref,
                     kernel_proposal_ref=projection.kernel_proposal_ref,
                     kernel_work_ref=projection.kernel_work_ref,
                     kernel_run_ref=projection.kernel_run_ref,
@@ -194,6 +199,48 @@ class KernelBridgeRepository:
                 )
             )
         return projection
+
+    def mark_submitted(
+        self,
+        projection: KernelShadowProjection,
+        receipt: KernelProposalReceipt,
+    ) -> KernelShadowProjection:
+        with self.store.sessions.begin() as db:
+            row = db.get(KernelBridgeProjectionRow, projection.projection_id)
+            if row is None:
+                raise KernelBridgePersistenceError("kernel projection is not persisted")
+            current = self._projection_from_row(row)
+            if not self._same_projection_semantics(current, projection):
+                raise KernelBridgePersistenceError("kernel projection semantics changed before submit")
+            if current.status is KernelProjectionStatus.SUBMITTED:
+                expected_refs = (
+                    receipt.responsibility_ref,
+                    receipt.admission_ref,
+                    receipt.assessment_ref,
+                    receipt.proposal_ref,
+                )
+                current_refs = (
+                    current.kernel_responsibility_ref,
+                    current.kernel_admission_ref,
+                    current.kernel_assessment_ref,
+                    current.kernel_proposal_ref,
+                )
+                if current_refs != expected_refs:
+                    raise KernelBridgePersistenceError("submitted kernel receipt identity rebound")
+                return current
+            if current.status is not KernelProjectionStatus.SHADOW:
+                raise KernelBridgePersistenceError(
+                    f"kernel projection cannot submit from {current.status.value}"
+                )
+            now = utcnow()
+            row.status = KernelProjectionStatus.SUBMITTED.value
+            row.kernel_responsibility_ref = receipt.responsibility_ref
+            row.kernel_admission_ref = receipt.admission_ref
+            row.kernel_assessment_ref = receipt.assessment_ref
+            row.kernel_proposal_ref = receipt.proposal_ref
+            row.updated_at = now
+            db.flush()
+            return self._projection_from_row(row)
 
     def get_projection_for_obligation(self, obligation_id: UUID) -> KernelShadowProjection | None:
         with self.store.sessions() as db:
@@ -223,6 +270,25 @@ class KernelBridgeRepository:
                 .all()
             )
             return [self._projection_from_row(row) for row in rows]
+
+    @staticmethod
+    def _same_projection_semantics(
+        left: KernelShadowProjection,
+        right: KernelShadowProjection,
+    ) -> bool:
+        excluded = {
+            "status",
+            "kernel_responsibility_ref",
+            "kernel_admission_ref",
+            "kernel_assessment_ref",
+            "kernel_proposal_ref",
+            "kernel_work_ref",
+            "kernel_run_ref",
+            "updated_at",
+        }
+        return left.model_dump(mode="json", exclude=excluded) == right.model_dump(
+            mode="json", exclude=excluded
+        )
 
     @staticmethod
     def _grant_from_row(row: AdministrativeExecutionGrantRow) -> AdministrativeExecutionGrant:
@@ -276,6 +342,8 @@ class KernelBridgeRepository:
             work_proposal_payload=dict(row.work_proposal_json),
             status=KernelProjectionStatus(row.status),
             kernel_responsibility_ref=row.kernel_responsibility_ref,
+            kernel_admission_ref=row.kernel_admission_ref,
+            kernel_assessment_ref=row.kernel_assessment_ref,
             kernel_proposal_ref=row.kernel_proposal_ref,
             kernel_work_ref=row.kernel_work_ref,
             kernel_run_ref=row.kernel_run_ref,
