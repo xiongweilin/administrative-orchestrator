@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Protocol
 
 import httpx
 
@@ -20,6 +21,10 @@ class KernelProposalReceipt:
     admission_ref: str
     assessment_ref: str
     proposal_ref: str
+
+
+class KernelResponsibilityClient(Protocol):
+    def submit(self, projection: KernelShadowProjection) -> KernelProposalReceipt: ...
 
 
 class HttpKernelResponsibilityClient:
@@ -78,5 +83,6 @@ class HttpKernelResponsibilityClient:
 __all__ = [
     "HttpKernelResponsibilityClient",
     "KernelProposalReceipt",
+    "KernelResponsibilityClient",
     "KernelSubmissionError",
 ]
