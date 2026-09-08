@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from enum import StrEnum
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, model_validator
 
 from .domain import AuthorityClass, PolicyRef, ReopenReason
 
