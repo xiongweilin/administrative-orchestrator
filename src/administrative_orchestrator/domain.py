@@ -161,6 +161,15 @@ class EvidenceRef(UtcModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class FactSnapshot(UtcModel):
+    snapshot_id: UUID = Field(default_factory=uuid4)
+    source: str
+    owner: str
+    observed_at: datetime = Field(default_factory=utcnow)
+    facts: dict[str, Any] = Field(default_factory=dict)
+    digest: str | None = None
+
+
 class AdministrativeRequest(UtcModel):
     request_id: UUID = Field(default_factory=uuid4)
     requester_principal_id: str
@@ -178,6 +187,7 @@ class AdministrativeCase(UtcModel):
     status: CaseStatus = CaseStatus.RECEIVED
     version: int = 1
     authority_epoch: int = 1
+    fact_snapshot: FactSnapshot | None = None
     policy_ref: PolicyRef | None = None
     evidence: list[EvidenceRef] = Field(default_factory=list)
     reopen_reason: ReopenReason | None = None
