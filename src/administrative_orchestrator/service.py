@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import replace
 from datetime import UTC, datetime
-from uuid import UUID
 
 from .domain import (
     AdministrativeCase,
@@ -15,7 +13,6 @@ from .domain import (
     EffectReversibility,
     EvidenceRef,
     ExecutionAuthorization,
-    PolicyRef,
     ReopenReason,
 )
 from .policy import PolicyDisposition, PolicyEvaluation
@@ -146,8 +143,8 @@ def mint_execution_authorization(
         raise TransitionError("only an approving decision may support execution authorization")
     if decision.case_id != case.case_id:
         raise TransitionError("decision belongs to a different case")
-    if decision.case_version >= case.version:
-        raise TransitionError("authorization must follow the decision transition")
+    if decision.case_version != case.version - 1:
+        raise TransitionError("decision is stale for the current case version")
     if case.policy_ref is None or decision.policy_ref != case.policy_ref:
         raise TransitionError("decision policy is not current")
 
