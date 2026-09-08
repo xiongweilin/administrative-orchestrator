@@ -175,7 +175,7 @@ def test_worker_restart_recovers_waiting_onboarding_and_effects_are_once(monkeyp
                 facts=facts.model_dump(mode="json"),
             ),
         )
-        store.create_case(request, original)
+        uow.create_case(request, original)
         ready = start_policy_evaluation(original)
         policy_ref = PolicyRef(
             policy_id="employee-onboarding",
