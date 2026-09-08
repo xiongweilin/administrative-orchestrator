@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ..messaging import OutboxEvent
-from .definitions import CASE_CHANGED_TOPIC
+from .protocol import CASE_CHANGED_TOPIC
 
 
 @dataclass(frozen=True)
