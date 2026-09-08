@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+from .authority import ApprovalSatisfaction
 from .domain import (
     AdministrativeCase,
     AdministrativeRequest,
@@ -107,9 +108,6 @@ def apply_policy_evaluation(
     if evaluation.disposition == PolicyDisposition.HUMAN_DECISION_REQUIRED:
         return case.model_copy(update={**common, "status": CaseStatus.AWAITING_DECISION})
     if evaluation.disposition == PolicyDisposition.AUTO_CLOSABLE:
-        # AUTO_CLOSABLE is deliberately policy-only: PolicyEvaluation rejects
-        # external effects for this disposition, so no synthetic human Decision
-        # or execution authority is invented.
         return case.model_copy(update={**common, "status": CaseStatus.COMPLETED})
     if evaluation.disposition == PolicyDisposition.DENIED:
         return case.model_copy(update={**common, "status": CaseStatus.CANCELLED})
@@ -189,6 +187,42 @@ def mint_execution_authorization(
         case_version=case.version,
         authority_epoch=case.authority_epoch,
         decision_id=decision.decision_id,
+        issuer_principal_id=issuer_principal_id,
+        target_system=target_system,
+        subject_ref=case.subject_ref,
+        allowed_operations=allowed_operations,
+        authority_class=authority_class,
+        policy_ref=case.policy_ref,
+        expires_at=expires_at,
+    )
+
+
+def mint_execution_authorization_from_approval(
+    case: AdministrativeCase,
+    approval: ApprovalSatisfaction,
+    *,
+    issuer_principal_id: str,
+    target_system: str,
+    allowed_operations: tuple[str, ...],
+    authority_class: AuthorityClass,
+    expires_at: datetime | None = None,
+) -> ExecutionAuthorization:
+    if case.status != CaseStatus.AUTHORIZED:
+        raise TransitionError("execution authorization requires an authorized case")
+    if approval.case_id != case.case_id:
+        raise TransitionError("approval satisfaction belongs to a different case")
+    if approval.authority_epoch != case.authority_epoch:
+        raise TransitionError("approval satisfaction is stale for the current authority epoch")
+    if case.policy_ref is None or approval.policy_ref != case.policy_ref:
+        raise TransitionError("approval satisfaction policy is not current")
+    if not approval.decision_ids or not approval.satisfied_roles:
+        raise TransitionError("approval satisfaction has no supporting decisions")
+
+    return ExecutionAuthorization(
+        case_id=case.case_id,
+        case_version=case.version,
+        authority_epoch=case.authority_epoch,
+        approval_satisfaction_id=approval.satisfaction_id,
         issuer_principal_id=issuer_principal_id,
         target_system=target_system,
         subject_ref=case.subject_ref,
