@@ -211,6 +211,7 @@ class Decision(UtcModel):
     case_version: int
     authority_epoch: int
     principal_id: str
+    decision_role: str | None = None
     disposition: DecisionDisposition
     rationale: str
     policy_ref: PolicyRef
