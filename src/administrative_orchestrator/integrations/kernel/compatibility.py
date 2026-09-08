@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import httpx
-from pydantic import BaseModel
+import pydantic
 
 
 EXPECTED_CATALOG_VERSION = "portable-runtime-contracts-v1"
@@ -14,7 +14,7 @@ class KernelCompatibilityError(RuntimeError):
     pass
 
 
-class KernelContractIdentity(BaseModel):
+class KernelContractIdentity(pydantic.BaseModel):
     catalog_version: str
     owner: str
     runtime_protocol: str
