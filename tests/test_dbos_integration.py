@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import secrets
 import time
+from contextlib import suppress
 from datetime import UTC, datetime
 from uuid import UUID
 
@@ -136,7 +137,7 @@ def test_worker_restart_recovers_waiting_onboarding_and_effects_are_once(monkeyp
     get_settings.cache_clear()
 
     config = DBOSConfig(
-        name="administrative-orchestrator-test",
+        name="admin-orchestrator-test",
         system_database_url=sys_url,
         application_database_url=app_url,
         log_level="WARNING",
@@ -233,10 +234,8 @@ def test_worker_restart_recovers_waiting_onboarding_and_effects_are_once(monkeyp
             ).scalar_one()
         assert outcome_count == 2
     finally:
-        try:
+        with suppress(Exception):
             DBOS.destroy()
-        except Exception:
-            pass
         get_settings.cache_clear()
         app_engine.dispose()
         _drop_database(app_db)
