@@ -18,6 +18,8 @@ from administrative_orchestrator.integrations.kernel.bridge import KernelExecuti
 from administrative_orchestrator.integrations.kernel.client import (
     KernelProposalReceipt,
     KernelSubmissionError,
+    KernelWorkAdmissionError,
+    KernelWorkAdmissionReceipt,
 )
 from administrative_orchestrator.integrations.kernel.compatibility import (
     KernelCompatibilityError,
@@ -29,7 +31,10 @@ from administrative_orchestrator.integrations.kernel.mapper import (
     derive_execution_grant,
     project_to_kernel,
 )
-from administrative_orchestrator.integrations.kernel.models import KernelProjectionStatus
+from administrative_orchestrator.integrations.kernel.models import (
+    KernelProjectionStatus,
+    KernelWorkAdmissionStatus,
+)
 from administrative_orchestrator.integrations.kernel.repository import KernelBridgeRepository
 from administrative_orchestrator.obligations import AdministrativeObligation
 from administrative_orchestrator.persistence import SqlStore
@@ -38,13 +43,22 @@ NOW = datetime(2026, 9, 8, 10, 0, tzinfo=UTC)
 
 
 class FakeKernelClient:
-    def __init__(self, *, fail: bool = False) -> None:
-        self.fail = fail
-        self.calls = 0
+    def __init__(
+        self,
+        *,
+        fail_submit: bool = False,
+        fail_admit: bool = False,
+        admission_status: str = "work-materialized",
+    ) -> None:
+        self.fail_submit = fail_submit
+        self.fail_admit = fail_admit
+        self.admission_status = admission_status
+        self.submit_calls = 0
+        self.admit_calls = 0
 
     def submit(self, projection):
-        self.calls += 1
-        if self.fail:
+        self.submit_calls += 1
+        if self.fail_submit:
             raise KernelSubmissionError("simulated lost acknowledgement")
         return KernelProposalReceipt(
             responsibility_ref=projection.responsibility_payload["id"],
@@ -53,14 +67,54 @@ class FakeKernelClient:
             proposal_ref=projection.work_proposal_payload["id"],
         )
 
+    def admit(self, projection, *, expected_policy_ref: str):
+        self.admit_calls += 1
+        if self.fail_admit:
+            raise KernelWorkAdmissionError("simulated lost Work admission acknowledgement")
+        proposal_ref = projection.kernel_proposal_ref
+        assert proposal_ref is not None
+        priority_ref = f"priority:{proposal_ref}"
+        if self.admission_status == "priority-rejected":
+            return KernelWorkAdmissionReceipt(
+                status="priority-rejected",
+                proposal_ref=proposal_ref,
+                policy_ref=expected_policy_ref,
+                priority_judgment_ref=priority_ref,
+            )
+        pool_ref = f"pool:{proposal_ref}"
+        portfolio_ref = f"portfolio:{proposal_ref}"
+        if self.admission_status == "portfolio-rejected":
+            return KernelWorkAdmissionReceipt(
+                status="portfolio-rejected",
+                proposal_ref=proposal_ref,
+                policy_ref=expected_policy_ref,
+                priority_judgment_ref=priority_ref,
+                resource_pool_ref=pool_ref,
+                portfolio_admission_ref=portfolio_ref,
+            )
+        return KernelWorkAdmissionReceipt(
+            status="work-materialized",
+            proposal_ref=proposal_ref,
+            policy_ref=expected_policy_ref,
+            priority_judgment_ref=priority_ref,
+            resource_pool_ref=pool_ref,
+            portfolio_admission_ref=portfolio_ref,
+            reservation_ref=f"reservation:{proposal_ref}",
+            commitment_ref=f"commitment:{proposal_ref}",
+            work_ref=f"work:{proposal_ref}",
+        )
 
-def _compatibility() -> KernelContractIdentity:
+
+def _compatibility(*, work_admission: bool = False) -> KernelContractIdentity:
     return KernelContractIdentity(
         catalog_version="portable-runtime-contracts-v1",
         owner="portable-runtime/contracts",
         runtime_protocol="2.0",
         persistent_responsibility_contract="persistent-responsibility-v1",
         domain_responsibility_proposal_contract="domain-responsibility-proposal-v1",
+        responsibility_work_admission_contract=(
+            "responsibility-work-admission-v1" if work_admission else None
+        ),
     )
 
 
@@ -138,50 +192,49 @@ def _projection_inputs():
     return case, governance, obligation
 
 
-def test_kernel_contract_gate_requires_domain_proposal_command() -> None:
-    raw = {
+def _catalog(*, include_work_admission: bool = False) -> dict[str, object]:
+    contracts: dict[str, object] = {
+        "persistent_responsibility": {"current": "persistent-responsibility-v1"},
+        "domain_responsibility_proposal": {
+            "current": "domain-responsibility-proposal-v1"
+        },
+    }
+    if include_work_admission:
+        contracts["responsibility_work_admission"] = {
+            "current": "responsibility-work-admission-v1"
+        }
+    return {
         "catalog_version": "portable-runtime-contracts-v1",
         "owner": "portable-runtime/contracts",
         "runtime_protocol": "2.0",
-        "contracts": {
-            "persistent_responsibility": {"current": "persistent-responsibility-v1"},
-            "domain_responsibility_proposal": {
-                "current": "domain-responsibility-proposal-v1"
-            },
-        },
+        "contracts": contracts,
     }
+
+
+def test_kernel_contract_gate_preserves_shadow_compatibility_and_gates_admission() -> None:
+    raw = _catalog()
     assert validate_kernel_catalog(raw) == _compatibility()
 
-    for key, incompatible in (
-        ("catalog_version", "portable-runtime-contracts-v2"),
-        ("owner", "administrative-orchestrator"),
-        ("runtime_protocol", "3.0"),
-    ):
-        changed = {**raw, key: incompatible}
-        with pytest.raises(KernelCompatibilityError, match="incompatible"):
-            validate_kernel_catalog(changed)
+    with pytest.raises(KernelCompatibilityError, match="required for admission mode"):
+        validate_kernel_catalog(raw, require_work_admission=True)
+
+    admission_raw = _catalog(include_work_admission=True)
+    assert validate_kernel_catalog(
+        admission_raw,
+        require_work_admission=True,
+    ) == _compatibility(work_admission=True)
 
     changed = {
-        **raw,
+        **admission_raw,
         "contracts": {
-            **raw["contracts"],
-            "persistent_responsibility": {"current": "persistent-responsibility-v2"},
-        },
-    }
-    with pytest.raises(KernelCompatibilityError, match="persistent_responsibility"):
-        validate_kernel_catalog(changed)
-
-    changed = {
-        **raw,
-        "contracts": {
-            **raw["contracts"],
-            "domain_responsibility_proposal": {
-                "current": "domain-responsibility-proposal-v2"
+            **admission_raw["contracts"],
+            "responsibility_work_admission": {
+                "current": "responsibility-work-admission-v2"
             },
         },
     }
-    with pytest.raises(KernelCompatibilityError, match="domain_responsibility_proposal"):
-        validate_kernel_catalog(changed)
+    with pytest.raises(KernelCompatibilityError, match="responsibility_work_admission"):
+        validate_kernel_catalog(changed, require_work_admission=True)
 
 
 def test_kernel_projection_is_deterministic_and_carries_no_runtime_authority() -> None:
@@ -213,7 +266,7 @@ def test_kernel_projection_is_deterministic_and_carries_no_runtime_authority() -
         assert forbidden not in serialized
 
 
-def test_shadow_bridge_submits_once_and_persists_full_prefix_refs() -> None:
+def test_shadow_bridge_submits_once_and_stops_before_work_admission() -> None:
     store = SqlStore("sqlite+pysqlite:///:memory:")
     store.init_schema()
     case, governance, obligation = _projection_inputs()
@@ -237,16 +290,78 @@ def test_shadow_bridge_submits_once_and_persists_full_prefix_refs() -> None:
     assert first.kernel_proposal_ref == first.work_proposal_payload["id"]
     assert first.kernel_work_ref is None
     assert first.kernel_run_ref is None
-    assert client.calls == 1
-    rows = KernelBridgeRepository(store).list_projections(case.case_id, case.authority_epoch)
-    assert rows == [first]
+    assert client.submit_calls == 1
+    assert client.admit_calls == 0
 
 
-def test_lost_kernel_ack_leaves_shadow_for_idempotent_replay() -> None:
+def test_admission_shadow_materializes_kernel_work_once_without_run_or_authority() -> None:
     store = SqlStore("sqlite+pysqlite:///:memory:")
     store.init_schema()
     case, governance, obligation = _projection_inputs()
-    failed_client = FakeKernelClient(fail=True)
+    client = FakeKernelClient()
+    settings = Settings(
+        kernel_bridge_mode="admission",
+        kernel_responsibility_admission_policy_ref="responsibility-admission:admin@1",
+    )
+    bridge = KernelExecutionBridge(
+        store,
+        settings=settings,
+        compatibility=_compatibility(work_admission=True),
+        client=client,
+    )
+
+    first = bridge.prepare(case, obligation, governance)
+    second = bridge.prepare(case, obligation, governance)
+
+    assert first is not None
+    assert first == second
+    assert first.status is KernelProjectionStatus.ADMITTED
+    assert first.kernel_work_admission_status is KernelWorkAdmissionStatus.WORK_MATERIALIZED
+    assert first.kernel_admission_policy_ref == settings.kernel_responsibility_admission_policy_ref
+    assert first.kernel_priority_judgment_ref
+    assert first.kernel_resource_pool_ref
+    assert first.kernel_portfolio_admission_ref
+    assert first.kernel_reservation_ref
+    assert first.kernel_commitment_ref
+    assert first.kernel_work_ref
+    assert first.kernel_run_ref is None
+    assert client.submit_calls == 1
+    assert client.admit_calls == 1
+
+
+def test_admission_rejection_is_terminal_shadow_state_without_work() -> None:
+    store = SqlStore("sqlite+pysqlite:///:memory:")
+    store.init_schema()
+    case, governance, obligation = _projection_inputs()
+    client = FakeKernelClient(admission_status="priority-rejected")
+    bridge = KernelExecutionBridge(
+        store,
+        settings=Settings(kernel_bridge_mode="admission"),
+        compatibility=_compatibility(work_admission=True),
+        client=client,
+    )
+
+    first = bridge.prepare(case, obligation, governance)
+    second = bridge.prepare(case, obligation, governance)
+
+    assert first is not None
+    assert first == second
+    assert first.status is KernelProjectionStatus.REJECTED
+    assert first.kernel_work_admission_status is KernelWorkAdmissionStatus.PRIORITY_REJECTED
+    assert first.kernel_priority_judgment_ref
+    assert first.kernel_resource_pool_ref is None
+    assert first.kernel_portfolio_admission_ref is None
+    assert first.kernel_work_ref is None
+    assert first.kernel_run_ref is None
+    assert client.submit_calls == 1
+    assert client.admit_calls == 1
+
+
+def test_lost_proposal_ack_leaves_shadow_for_idempotent_replay() -> None:
+    store = SqlStore("sqlite+pysqlite:///:memory:")
+    store.init_schema()
+    case, governance, obligation = _projection_inputs()
+    failed_client = FakeKernelClient(fail_submit=True)
     bridge = KernelExecutionBridge(
         store,
         settings=Settings(kernel_bridge_mode="shadow"),
@@ -273,17 +388,55 @@ def test_lost_kernel_ack_leaves_shadow_for_idempotent_replay() -> None:
     ).prepare(case, obligation, governance)
     assert replay is not None
     assert replay.status is KernelProjectionStatus.SUBMITTED
-    assert replay_client.calls == 1
+    assert replay_client.submit_calls == 1
 
 
-def test_cutover_without_work_and_authority_surfaces_fails_closed_before_persistence() -> None:
+def test_lost_work_admission_ack_leaves_submitted_for_idempotent_replay() -> None:
+    store = SqlStore("sqlite+pysqlite:///:memory:")
+    store.init_schema()
+    case, governance, obligation = _projection_inputs()
+    failed_client = FakeKernelClient(fail_admit=True)
+    settings = Settings(kernel_bridge_mode="admission")
+    bridge = KernelExecutionBridge(
+        store,
+        settings=settings,
+        compatibility=_compatibility(work_admission=True),
+        client=failed_client,
+    )
+
+    with pytest.raises(KernelWorkAdmissionError, match="lost Work admission"):
+        bridge.prepare(case, obligation, governance)
+
+    persisted = KernelBridgeRepository(store).get_projection_for_obligation(
+        obligation.obligation_id
+    )
+    assert persisted is not None
+    assert persisted.status is KernelProjectionStatus.SUBMITTED
+    assert persisted.kernel_work_ref is None
+    assert failed_client.submit_calls == 1
+    assert failed_client.admit_calls == 1
+
+    replay_client = FakeKernelClient()
+    replay = KernelExecutionBridge(
+        store,
+        settings=settings,
+        compatibility=_compatibility(work_admission=True),
+        client=replay_client,
+    ).prepare(case, obligation, governance)
+    assert replay is not None
+    assert replay.status is KernelProjectionStatus.ADMITTED
+    assert replay_client.submit_calls == 0
+    assert replay_client.admit_calls == 1
+
+
+def test_cutover_without_authority_and_reality_boundary_fails_closed_before_persistence() -> None:
     store = SqlStore("sqlite+pysqlite:///:memory:")
     store.init_schema()
     case, governance, obligation = _projection_inputs()
     bridge = KernelExecutionBridge(
         store,
         settings=Settings(kernel_bridge_mode="cutover"),
-        compatibility=_compatibility(),
+        compatibility=_compatibility(work_admission=True),
         client=FakeKernelClient(),
     )
 
