@@ -13,6 +13,7 @@ from .domain import (
     EffectReversibility,
     EvidenceRef,
     ExecutionAuthorization,
+    FactSnapshot,
     ReopenReason,
 )
 from .policy import PolicyDisposition, PolicyEvaluation
@@ -31,12 +32,30 @@ def create_case(
     *,
     case_kind: str,
     subject_ref: str,
+    fact_snapshot: FactSnapshot | None = None,
 ) -> AdministrativeCase:
     return AdministrativeCase(
         case_kind=case_kind,
         requester_principal_id=request.requester_principal_id,
         subject_ref=subject_ref,
+        fact_snapshot=fact_snapshot,
         status=CaseStatus.RECEIVED,
+    )
+
+
+def replace_fact_snapshot(
+    case: AdministrativeCase,
+    fact_snapshot: FactSnapshot,
+) -> AdministrativeCase:
+    if case.status in {CaseStatus.COMPLETED, CaseStatus.CANCELLED}:
+        raise TransitionError("terminal case cannot replace current facts")
+    return case.model_copy(
+        update={
+            "fact_snapshot": fact_snapshot,
+            "version": case.version + 1,
+            "authority_epoch": case.authority_epoch + 1,
+            "updated_at": utcnow(),
+        }
     )
 
 
