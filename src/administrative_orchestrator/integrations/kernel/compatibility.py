@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from typing import Any
-
 import httpx
 from pydantic import BaseModel
 
@@ -23,9 +21,15 @@ class KernelContractIdentity(BaseModel):
     persistent_responsibility_contract: str
 
 
-def validate_kernel_catalog(raw: dict[str, Any]) -> KernelContractIdentity:
+def validate_kernel_catalog(raw: dict[str, object]) -> KernelContractIdentity:
     try:
-        persistent = raw["contracts"]["persistent_responsibility"]["current"]
+        contracts = raw["contracts"]
+        if not isinstance(contracts, dict):
+            raise TypeError("contracts must be an object")
+        persistent_responsibility = contracts["persistent_responsibility"]
+        if not isinstance(persistent_responsibility, dict):
+            raise TypeError("persistent_responsibility must be an object")
+        persistent = persistent_responsibility["current"]
         identity = KernelContractIdentity(
             catalog_version=str(raw["catalog_version"]),
             owner=str(raw["owner"]),
