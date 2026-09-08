@@ -53,6 +53,7 @@ class CaseRow(Base):
     status: Mapped[str] = mapped_column(String(64), nullable=False)
     version: Mapped[int] = mapped_column(Integer, nullable=False)
     authority_epoch: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    fact_snapshot_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     policy_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     evidence_json: Mapped[list[dict[str, Any]]] = mapped_column(JSON, nullable=False, default=list)
     reopen_reason: Mapped[str | None] = mapped_column(String(128), nullable=True)
@@ -218,6 +219,9 @@ class SqlStore:
                     "case_kind": case.case_kind,
                     "case_version": case.version,
                     "authority_epoch": case.authority_epoch,
+                    "fact_snapshot_id": (
+                        str(case.fact_snapshot.snapshot_id) if case.fact_snapshot else None
+                    ),
                 },
             )
 
@@ -504,6 +508,9 @@ class SqlStore:
             status=case.status.value,
             version=case.version,
             authority_epoch=case.authority_epoch,
+            fact_snapshot_json=(
+                case.fact_snapshot.model_dump(mode="json") if case.fact_snapshot else None
+            ),
             policy_json=case.policy_ref.model_dump(mode="json") if case.policy_ref else None,
             evidence_json=[item.model_dump(mode="json") for item in case.evidence],
             reopen_reason=case.reopen_reason.value if case.reopen_reason else None,
@@ -519,6 +526,9 @@ class SqlStore:
         row.status = case.status.value
         row.version = case.version
         row.authority_epoch = case.authority_epoch
+        row.fact_snapshot_json = (
+            case.fact_snapshot.model_dump(mode="json") if case.fact_snapshot else None
+        )
         row.policy_json = case.policy_ref.model_dump(mode="json") if case.policy_ref else None
         row.evidence_json = [item.model_dump(mode="json") for item in case.evidence]
         row.reopen_reason = case.reopen_reason.value if case.reopen_reason else None
@@ -535,6 +545,7 @@ class SqlStore:
                 "status": row.status,
                 "version": row.version,
                 "authority_epoch": row.authority_epoch,
+                "fact_snapshot": row.fact_snapshot_json,
                 "policy_ref": row.policy_json,
                 "evidence": row.evidence_json,
                 "reopen_reason": row.reopen_reason,
