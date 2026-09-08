@@ -9,7 +9,16 @@ from sqlalchemy import JSON, DateTime, ForeignKey, Integer, String, Uuid, create
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from .domain import AdministrativeCase, AdministrativeRequest, Decision
+from .domain import (
+    AdministrativeCase,
+    AdministrativeRequest,
+    ConfirmedOutcome,
+    Decision,
+    EffectRealizationAssessment,
+    EffectRecord,
+    ExecutionAuthorization,
+)
+from .policy import PolicyEvaluation
 
 
 def utcnow() -> datetime:
@@ -50,6 +59,17 @@ class CaseRow(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class PolicyEvaluationRow(Base):
+    __tablename__ = "administrative_policy_evaluation"
+
+    sequence: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    case_id: Mapped[UUID] = mapped_column(ForeignKey("administrative_case.case_id"), nullable=False)
+    case_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    policy_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    evaluation_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+
 class DecisionRow(Base):
     __tablename__ = "administrative_decision"
 
@@ -61,6 +81,69 @@ class DecisionRow(Base):
     rationale: Mapped[str] = mapped_column(String(2000), nullable=False)
     policy_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
     decided_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class AuthorizationRow(Base):
+    __tablename__ = "administrative_execution_authorization"
+
+    authorization_id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
+    case_id: Mapped[UUID] = mapped_column(ForeignKey("administrative_case.case_id"), nullable=False)
+    case_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    decision_id: Mapped[UUID] = mapped_column(ForeignKey("administrative_decision.decision_id"))
+    issuer_principal_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    target_system: Mapped[str] = mapped_column(String(255), nullable=False)
+    subject_ref: Mapped[str] = mapped_column(String(512), nullable=False)
+    allowed_operations: Mapped[list[str]] = mapped_column(JSON, nullable=False)
+    authority_class: Mapped[str] = mapped_column(String(64), nullable=False)
+    policy_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    issued_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class EffectRow(Base):
+    __tablename__ = "administrative_effect"
+
+    effect_id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
+    case_id: Mapped[UUID] = mapped_column(ForeignKey("administrative_case.case_id"), nullable=False)
+    case_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    authorization_id: Mapped[UUID] = mapped_column(
+        ForeignKey("administrative_execution_authorization.authorization_id"), nullable=False
+    )
+    target_system: Mapped[str] = mapped_column(String(255), nullable=False)
+    operation: Mapped[str] = mapped_column(String(255), nullable=False)
+    subject_ref: Mapped[str] = mapped_column(String(512), nullable=False)
+    reversibility: Mapped[str] = mapped_column(String(64), nullable=False)
+    authority_class: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(64), nullable=False)
+    provider_ref: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class RealizationRow(Base):
+    __tablename__ = "administrative_effect_realization"
+
+    assessment_id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
+    effect_id: Mapped[UUID] = mapped_column(ForeignKey("administrative_effect.effect_id"))
+    disposition: Mapped[str] = mapped_column(String(64), nullable=False)
+    evidence_json: Mapped[list[dict[str, Any]]] = mapped_column(JSON, nullable=False)
+    assessed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class OutcomeRow(Base):
+    __tablename__ = "administrative_confirmed_outcome"
+
+    outcome_id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
+    case_id: Mapped[UUID] = mapped_column(ForeignKey("administrative_case.case_id"), nullable=False)
+    case_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    effect_id: Mapped[UUID] = mapped_column(ForeignKey("administrative_effect.effect_id"))
+    realization_assessment_id: Mapped[UUID] = mapped_column(
+        ForeignKey("administrative_effect_realization.assessment_id"), nullable=False
+    )
+    outcome_kind: Mapped[str] = mapped_column(String(255), nullable=False)
+    evidence_json: Mapped[list[dict[str, Any]]] = mapped_column(JSON, nullable=False)
+    confirmed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
 class AuditEventRow(Base):
@@ -161,6 +244,48 @@ class SqlStore:
                 },
             )
 
+    def append_policy_evaluation(
+        self,
+        case_id: UUID,
+        case_version: int,
+        evaluation: PolicyEvaluation,
+    ) -> None:
+        with self.sessions.begin() as db:
+            db.add(
+                PolicyEvaluationRow(
+                    case_id=case_id,
+                    case_version=case_version,
+                    policy_json=evaluation.policy_ref.model_dump(mode="json"),
+                    evaluation_json=evaluation.model_dump(mode="json"),
+                    created_at=utcnow(),
+                )
+            )
+            self._append_audit(
+                db,
+                case_id,
+                "policy.evaluated",
+                {
+                    "case_version": case_version,
+                    "policy_id": evaluation.policy_ref.policy_id,
+                    "policy_version": evaluation.policy_ref.version,
+                    "disposition": evaluation.disposition.value,
+                },
+            )
+
+    def get_latest_policy_evaluation(self, case_id: UUID) -> PolicyEvaluation | None:
+        with self.sessions() as db:
+            row = (
+                db.execute(
+                    select(PolicyEvaluationRow)
+                    .where(PolicyEvaluationRow.case_id == case_id)
+                    .order_by(PolicyEvaluationRow.sequence.desc())
+                    .limit(1)
+                )
+                .scalars()
+                .first()
+            )
+            return None if row is None else PolicyEvaluation.model_validate(row.evaluation_json)
+
     def append_decision(self, decision: Decision) -> None:
         with self.sessions.begin() as db:
             db.add(
@@ -186,6 +311,138 @@ class SqlStore:
                     "disposition": decision.disposition.value,
                     "policy_id": decision.policy_ref.policy_id,
                     "policy_version": decision.policy_ref.version,
+                },
+            )
+
+    def get_decision(self, decision_id: UUID) -> Decision | None:
+        with self.sessions() as db:
+            row = db.get(DecisionRow, decision_id)
+            if row is None:
+                return None
+            return Decision.model_validate(
+                {
+                    "decision_id": row.decision_id,
+                    "case_id": row.case_id,
+                    "case_version": row.case_version,
+                    "principal_id": row.principal_id,
+                    "disposition": row.disposition,
+                    "rationale": row.rationale,
+                    "policy_ref": row.policy_json,
+                    "decided_at": row.decided_at,
+                }
+            )
+
+    def append_authorization(self, authorization: ExecutionAuthorization) -> None:
+        with self.sessions.begin() as db:
+            db.add(
+                AuthorizationRow(
+                    authorization_id=authorization.authorization_id,
+                    case_id=authorization.case_id,
+                    case_version=authorization.case_version,
+                    decision_id=authorization.decision_id,
+                    issuer_principal_id=authorization.issuer_principal_id,
+                    target_system=authorization.target_system,
+                    subject_ref=authorization.subject_ref,
+                    allowed_operations=list(authorization.allowed_operations),
+                    authority_class=authorization.authority_class.value,
+                    policy_json=authorization.policy_ref.model_dump(mode="json"),
+                    issued_at=authorization.issued_at,
+                    expires_at=authorization.expires_at,
+                    revoked_at=authorization.revoked_at,
+                )
+            )
+            self._append_audit(
+                db,
+                authorization.case_id,
+                "authorization.issued",
+                {
+                    "authorization_id": str(authorization.authorization_id),
+                    "decision_id": str(authorization.decision_id),
+                    "case_version": authorization.case_version,
+                    "target_system": authorization.target_system,
+                    "allowed_operations": list(authorization.allowed_operations),
+                    "authority_class": authorization.authority_class.value,
+                },
+            )
+
+    def append_effect(self, effect: EffectRecord) -> None:
+        with self.sessions.begin() as db:
+            db.add(
+                EffectRow(
+                    effect_id=effect.effect_id,
+                    case_id=effect.case_id,
+                    case_version=effect.case_version,
+                    authorization_id=effect.authorization_id,
+                    target_system=effect.target_system,
+                    operation=effect.operation,
+                    subject_ref=effect.subject_ref,
+                    reversibility=effect.reversibility.value,
+                    authority_class=effect.authority_class.value,
+                    status=effect.status.value,
+                    provider_ref=effect.provider_ref,
+                    created_at=effect.created_at,
+                    updated_at=effect.updated_at,
+                )
+            )
+            self._append_audit(
+                db,
+                effect.case_id,
+                "effect.planned",
+                {
+                    "effect_id": str(effect.effect_id),
+                    "authorization_id": str(effect.authorization_id),
+                    "target_system": effect.target_system,
+                    "operation": effect.operation,
+                    "reversibility": effect.reversibility.value,
+                    "authority_class": effect.authority_class.value,
+                },
+            )
+
+    def append_realization(self, assessment: EffectRealizationAssessment, case_id: UUID) -> None:
+        with self.sessions.begin() as db:
+            db.add(
+                RealizationRow(
+                    assessment_id=assessment.assessment_id,
+                    effect_id=assessment.effect_id,
+                    disposition=assessment.disposition.value,
+                    evidence_json=[item.model_dump(mode="json") for item in assessment.evidence],
+                    assessed_at=assessment.assessed_at,
+                )
+            )
+            self._append_audit(
+                db,
+                case_id,
+                "effect.realization_assessed",
+                {
+                    "assessment_id": str(assessment.assessment_id),
+                    "effect_id": str(assessment.effect_id),
+                    "disposition": assessment.disposition.value,
+                },
+            )
+
+    def append_outcome(self, outcome: ConfirmedOutcome) -> None:
+        with self.sessions.begin() as db:
+            db.add(
+                OutcomeRow(
+                    outcome_id=outcome.outcome_id,
+                    case_id=outcome.case_id,
+                    case_version=outcome.case_version,
+                    effect_id=outcome.effect_id,
+                    realization_assessment_id=outcome.realization_assessment_id,
+                    outcome_kind=outcome.outcome_kind,
+                    evidence_json=[item.model_dump(mode="json") for item in outcome.evidence],
+                    confirmed_at=outcome.confirmed_at,
+                )
+            )
+            self._append_audit(
+                db,
+                outcome.case_id,
+                "outcome.confirmed",
+                {
+                    "outcome_id": str(outcome.outcome_id),
+                    "effect_id": str(outcome.effect_id),
+                    "outcome_kind": outcome.outcome_kind,
+                    "case_version": outcome.case_version,
                 },
             )
 
@@ -221,7 +478,7 @@ class SqlStore:
             subject_ref=case.subject_ref,
             status=case.status.value,
             version=case.version,
-            policy_json=(case.policy_ref.model_dump(mode="json") if case.policy_ref else None),
+            policy_json=case.policy_ref.model_dump(mode="json") if case.policy_ref else None,
             evidence_json=[item.model_dump(mode="json") for item in case.evidence],
             reopen_reason=case.reopen_reason.value if case.reopen_reason else None,
             created_at=case.created_at,
