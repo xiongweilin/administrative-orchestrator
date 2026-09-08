@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from typing import Any
-
 from .domain import AdministrativeCase, Decision
 from .persistence import (
     CaseRow,
