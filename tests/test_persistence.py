@@ -6,6 +6,7 @@ from administrative_orchestrator.domain import (
     AdministrativeRequest,
     Decision,
     DecisionDisposition,
+    FactSnapshot,
     PolicyRef,
 )
 from administrative_orchestrator.persistence import ConcurrencyConflict, SqlStore
@@ -38,6 +39,15 @@ def _facts() -> OnboardingFacts:
     )
 
 
+def _snapshot() -> FactSnapshot:
+    facts = _facts()
+    return FactSnapshot(
+        source="ingress:test",
+        owner="administrative-orchestrator",
+        facts=facts.model_dump(mode="json"),
+    )
+
+
 def test_case_policy_decision_and_audit_survive_store_roundtrip() -> None:
     store = SqlStore("sqlite+pysqlite:///:memory:")
     store.init_schema()
@@ -48,7 +58,12 @@ def test_case_policy_decision_and_audit_survive_store_roundtrip() -> None:
         channel="test",
         intent="onboard employee:new",
     )
-    case = create_case(request, case_kind="employee-onboarding", subject_ref="employee:new")
+    case = create_case(
+        request,
+        case_kind="employee-onboarding",
+        subject_ref="employee:new",
+        fact_snapshot=_snapshot(),
+    )
     store.create_case(request, case)
 
     ready = start_policy_evaluation(case)
@@ -58,6 +73,9 @@ def test_case_policy_decision_and_audit_survive_store_roundtrip() -> None:
 
     restored = store.get_case(awaiting.case_id)
     assert restored == awaiting
+    assert restored.fact_snapshot == awaiting.fact_snapshot
+    assert restored.fact_snapshot is not None
+    assert restored.fact_snapshot.facts["department_ref"] == "department:engineering"
     assert restored.authority_epoch == 2
     assert store.get_latest_policy_evaluation(awaiting.case_id) == evaluation
 
