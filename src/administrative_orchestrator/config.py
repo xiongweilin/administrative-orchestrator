@@ -26,6 +26,14 @@ class Settings(BaseSettings):
 
     runtime_profile: Literal["test", "development", "governed"] = "development"
 
+    # Agent Kernel convergence is opt-in.  Shadow mode may only project
+    # administrative grants/intents into public Kernel contracts.  Cutover is a
+    # separate fail-closed state and cannot silently fall back to the legacy
+    # provider path once enabled.
+    kernel_bridge_mode: Literal["disabled", "shadow", "cutover"] = "disabled"
+    kernel_base_url: str = "http://127.0.0.1:8020"
+    kernel_contract_timeout_seconds: float = 3.0
+
     # Authentication is intentionally fail-closed by default. The local Compose
     # sandbox opts into development identity transport explicitly.
     auth_mode: str = "jwt"
@@ -44,6 +52,8 @@ class Settings(BaseSettings):
     def governed_profile_fails_closed(self) -> Settings:
         if self.runtime_profile == "governed":
             object.__setattr__(self, "authority_enforcement_enabled", True)
+        if self.kernel_contract_timeout_seconds <= 0:
+            raise ValueError("kernel_contract_timeout_seconds must be positive")
         return self
 
 

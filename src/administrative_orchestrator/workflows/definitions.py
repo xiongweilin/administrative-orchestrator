@@ -8,6 +8,7 @@ from dbos import DBOS
 from ..config import get_settings
 from ..domain import CaseStatus
 from ..effect_provider import HttpEffectProvider
+from ..integrations.kernel.onboarding import prepare_onboarding_kernel_shadow
 from ..onboarding_execution import OnboardingExecutionEngine
 from ..persistence import SqlStore
 from .protocol import (
@@ -29,9 +30,11 @@ TERMINAL_STATUSES = frozenset(
 def drive_onboarding_case_step(case_id: str) -> dict[str, Any]:
     """Drive the existing business state machine once.
 
-    This step deliberately uses the normal SqlStore/ExecutionRepository path.
-    If DBOS re-executes after a crash, deterministic authorization/effect IDs
-    and authoritative-provider idempotency make the step replay-safe.
+    Stage 2 may first project current governed obligations into Agent Kernel
+    public responsibility contracts. Shadow projection is non-executing. The
+    legacy provider remains the sole physical path until an explicit Kernel
+    cutover is implemented; cutover mode itself fails closed rather than
+    silently falling back here.
     """
     settings = get_settings()
     store = SqlStore(settings.worker_database_url or settings.database_url)
@@ -45,6 +48,9 @@ def drive_onboarding_case_step(case_id: str) -> dict[str, Any]:
         CaseStatus.VERIFYING,
         CaseStatus.RECONCILING,
     }:
+        if settings.kernel_bridge_mode != "disabled":
+            prepare_onboarding_kernel_shadow(store, UUID(case_id))
+
         if not settings.external_effects_enabled:
             return {
                 "case_id": case_id,
