@@ -10,6 +10,7 @@ from administrative_orchestrator.domain import (
     DecisionDisposition,
     EffectReversibility,
     EvidenceRef,
+    FactSnapshot,
     PolicyRef,
     ReopenReason,
 )
@@ -25,6 +26,7 @@ from administrative_orchestrator.service import (
     mint_execution_authorization,
     plan_effect,
     record_decision,
+    replace_fact_snapshot,
     require_reopen,
     start_policy_evaluation,
     validate_execution_authorization,
@@ -61,9 +63,19 @@ def _complete_facts() -> OnboardingFacts:
 
 
 def _awaiting_decision_case(policy_ref: PolicyRef):
-    case = create_case(_request(), case_kind="employee-onboarding", subject_ref="employee:new")
+    facts = _complete_facts()
+    case = create_case(
+        _request(),
+        case_kind="employee-onboarding",
+        subject_ref="employee:new",
+        fact_snapshot=FactSnapshot(
+            source="ingress:test",
+            owner="administrative-orchestrator",
+            facts=facts.model_dump(mode="json"),
+        ),
+    )
     case = start_policy_evaluation(case)
-    evaluation = OnboardingPolicy(policy_ref).evaluate(_complete_facts())
+    evaluation = OnboardingPolicy(policy_ref).evaluate(facts)
     return apply_policy_evaluation(case, evaluation)
 
 
@@ -205,6 +217,24 @@ def test_authority_relevant_change_invalidates_old_decision_and_authorization(
         )
     with pytest.raises(TransitionError, match="stale"):
         validate_execution_authorization(changed, authorization, operation="employee.create")
+
+
+def test_replacing_current_facts_invalidates_prior_decision(policy_ref: PolicyRef) -> None:
+    case = _awaiting_decision_case(policy_ref)
+    decision = _approve(case, policy_ref)
+    changed = replace_fact_snapshot(
+        case,
+        FactSnapshot(
+            source="hris",
+            owner="hris",
+            facts={**_complete_facts().model_dump(mode="json"), "department_ref": "department:finance"},
+        ),
+    )
+
+    assert changed.version == case.version + 1
+    assert changed.authority_epoch == case.authority_epoch + 1
+    with pytest.raises(TransitionError, match="current authority epoch"):
+        record_decision(changed, decision)
 
 
 def test_reopen_is_explicit(policy_ref: PolicyRef) -> None:
