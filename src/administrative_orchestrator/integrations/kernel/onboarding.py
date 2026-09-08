@@ -2,15 +2,17 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from ...authority import AuthorityRepository
-from ...domain import CaseStatus
-from ...governance import GovernanceRepository
-from ...obligations import ObligationRepository, derive_onboarding_obligations
-from ...persistence import SqlStore
-from ...service import TransitionError
-from .bridge import KernelExecutionBridge
-from .models import KernelShadowProjection
-
+from administrative_orchestrator.authority import AuthorityRepository
+from administrative_orchestrator.domain import CaseStatus
+from administrative_orchestrator.governance import GovernanceRepository
+from administrative_orchestrator.integrations.kernel.bridge import KernelExecutionBridge
+from administrative_orchestrator.integrations.kernel.models import KernelShadowProjection
+from administrative_orchestrator.obligations import (
+    ObligationRepository,
+    derive_onboarding_obligations,
+)
+from administrative_orchestrator.persistence import SqlStore
+from administrative_orchestrator.service import TransitionError
 
 _KERNEL_PROJECTABLE_STATUSES = frozenset(
     {
@@ -30,7 +32,7 @@ def prepare_onboarding_kernel_shadow(
 ) -> list[KernelShadowProjection]:
     """Create replay-stable Kernel shadow objects for one governed case.
 
-    This function performs no physical effect.  It is safe to call before the
+    This function performs no physical effect. It is safe to call before the
     legacy execution engine because obligation derivation and bridge identities
     are deterministic and append-only.
     """
