@@ -259,6 +259,24 @@ class ExecutionRepository:
             row = db.get(OutcomeRow, outcome_id)
             return None if row is None else self._outcome_from_row(row)
 
+    def list_outcomes(
+        self,
+        case_id: UUID,
+        authority_epoch: int | None = None,
+    ) -> list[ConfirmedOutcome]:
+        with self.store.sessions() as db:
+            statement = select(OutcomeRow).where(OutcomeRow.case_id == case_id)
+            if authority_epoch is not None:
+                statement = statement.where(OutcomeRow.authority_epoch == authority_epoch)
+            rows = (
+                db.execute(
+                    statement.order_by(OutcomeRow.confirmed_at, OutcomeRow.outcome_id)
+                )
+                .scalars()
+                .all()
+            )
+            return [self._outcome_from_row(row) for row in rows]
+
     @staticmethod
     def _decision_from_row(row: DecisionRow) -> Decision:
         return Decision.model_validate(
