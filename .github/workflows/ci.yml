@@ -64,3 +64,23 @@ jobs:
           ADMIN_RUN_DBOS_INTEGRATION: "1"
           ADMIN_TEST_PG_ADMIN_URL: postgresql://postgres:postgres@127.0.0.1:5432/postgres
         run: uv run pytest -q tests/test_dbos_integration.py
+
+  compose-e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Start full stack
+        run: docker compose up -d --build
+      - name: Onboarding HTTP E2E
+        env:
+          ADMIN_E2E_TIMEOUT_SECONDS: "120"
+        run: python scripts/e2e_compose.py
+      - name: Service status
+        if: always()
+        run: docker compose ps -a
+      - name: Service logs
+        if: failure()
+        run: docker compose logs --no-color
+      - name: Stop full stack
+        if: always()
+        run: docker compose down -v --remove-orphans
