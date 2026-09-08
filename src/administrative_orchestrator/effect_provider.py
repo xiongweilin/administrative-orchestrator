@@ -5,7 +5,7 @@ from enum import StrEnum
 from typing import Any, Protocol
 
 import httpx
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from .domain import EffectRecord, UtcModel, utcnow
 
@@ -23,8 +23,28 @@ class ProviderExecutionResult(UtcModel):
     retryable: bool = False
 
 
+class ObservationAvailability(StrEnum):
+    AVAILABLE = "available"
+    UNAVAILABLE = "unavailable"
+    UNKNOWN = "unknown"
+
+
+class ObservationPresence(StrEnum):
+    PRESENT = "present"
+    ABSENT = "absent"
+    UNKNOWN = "unknown"
+
+
+class ObservationFreshness(StrEnum):
+    CURRENT = "current"
+    STALE = "stale"
+    UNKNOWN = "unknown"
+
+
 class RealityObservation(UtcModel):
-    found: bool
+    availability: ObservationAvailability = ObservationAvailability.AVAILABLE
+    presence: ObservationPresence = ObservationPresence.UNKNOWN
+    freshness: ObservationFreshness = ObservationFreshness.CURRENT
     target_system: str
     operation: str
     subject_ref: str
@@ -32,6 +52,34 @@ class RealityObservation(UtcModel):
     state: dict[str, Any] = Field(default_factory=dict)
     digest: str | None = None
     observed_at: datetime = Field(default_factory=utcnow)
+    error_class: str | None = None
+    # Compatibility input/output for existing sandbox fixtures. Runtime
+    # semantics must use availability/presence/freshness instead.
+    found: bool | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def map_legacy_found(cls, value: Any) -> Any:
+        if isinstance(value, dict) and "presence" not in value and "found" in value:
+            copied = dict(value)
+            copied["presence"] = (
+                ObservationPresence.PRESENT.value
+                if copied.get("found") is True
+                else ObservationPresence.ABSENT.value
+            )
+            copied.setdefault("availability", ObservationAvailability.AVAILABLE.value)
+            copied.setdefault("freshness", ObservationFreshness.CURRENT.value)
+            return copied
+        return value
+
+    @model_validator(mode="after")
+    def fill_legacy_found(self) -> RealityObservation:
+        if self.found is None:
+            if self.presence == ObservationPresence.PRESENT:
+                self.found = True
+            elif self.presence == ObservationPresence.ABSENT:
+                self.found = False
+        return self
 
 
 class EffectProvider(Protocol):
@@ -87,19 +135,60 @@ class HttpEffectProvider:
                 f"{self.base_url}/v1/effects/{effect.effect_id}",
                 timeout=self.timeout_seconds,
             )
-            if response.status_code == 404:
-                return RealityObservation(
-                    found=False,
-                    target_system=effect.target_system,
-                    operation=effect.operation,
-                    subject_ref=effect.subject_ref,
-                )
-            response.raise_for_status()
-        except (httpx.TimeoutException, httpx.NetworkError, httpx.HTTPStatusError):
+        except (httpx.TimeoutException, httpx.NetworkError) as exc:
             return RealityObservation(
-                found=False,
+                availability=ObservationAvailability.UNAVAILABLE,
+                presence=ObservationPresence.UNKNOWN,
+                freshness=ObservationFreshness.UNKNOWN,
+                target_system=effect.target_system,
+                operation=effect.operation,
+                subject_ref=effect.subject_ref,
+                error_class=type(exc).__name__,
+            )
+
+        if response.status_code == 404:
+            return RealityObservation(
+                availability=ObservationAvailability.AVAILABLE,
+                presence=ObservationPresence.ABSENT,
+                freshness=ObservationFreshness.CURRENT,
                 target_system=effect.target_system,
                 operation=effect.operation,
                 subject_ref=effect.subject_ref,
             )
-        return RealityObservation.model_validate(response.json())
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            return RealityObservation(
+                availability=ObservationAvailability.UNAVAILABLE,
+                presence=ObservationPresence.UNKNOWN,
+                freshness=ObservationFreshness.UNKNOWN,
+                target_system=effect.target_system,
+                operation=effect.operation,
+                subject_ref=effect.subject_ref,
+                error_class=f"http_{exc.response.status_code}",
+            )
+
+        try:
+            return RealityObservation.model_validate(response.json())
+        except (ValueError, TypeError) as exc:
+            return RealityObservation(
+                availability=ObservationAvailability.UNKNOWN,
+                presence=ObservationPresence.UNKNOWN,
+                freshness=ObservationFreshness.UNKNOWN,
+                target_system=effect.target_system,
+                operation=effect.operation,
+                subject_ref=effect.subject_ref,
+                error_class=type(exc).__name__,
+            )
+
+
+__all__ = [
+    "EffectProvider",
+    "HttpEffectProvider",
+    "ObservationAvailability",
+    "ObservationFreshness",
+    "ObservationPresence",
+    "ProviderExecutionResult",
+    "ProviderExecutionStatus",
+    "RealityObservation",
+]
