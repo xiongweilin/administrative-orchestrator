@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any
 
@@ -152,13 +152,15 @@ class PolicyRepository:
 
 
 def default_onboarding_policy_version() -> PolicyVersionRecord:
+    baseline = datetime(2026, 1, 1, tzinfo=UTC)
     return PolicyVersionRecord(
         policy_id="employee-onboarding",
         version="v1",
         owner="administrative-orchestrator",
         status=PolicyVersionStatus.ACTIVE,
-        effective_from=datetime(2026, 1, 1, tzinfo=utcnow().tzinfo),
+        effective_from=baseline,
         definition=OnboardingPolicy.default_definition(),
+        created_at=baseline,
     )
 
 
