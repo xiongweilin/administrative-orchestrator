@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from .authority import ApprovalSatisfaction, AuthorityRepository
 from .domain import AdministrativeCase, AdministrativeRequest, Decision
 from .fact_history import persist_fact_snapshot
 from .ingress import persist_ingress_receipt
@@ -27,6 +28,7 @@ class AdministrativeUnitOfWork:
 
     def __init__(self, store: SqlStore) -> None:
         self.store = store
+        self.authority = AuthorityRepository(store)
 
     def create_case(
         self,
@@ -191,6 +193,9 @@ class AdministrativeUnitOfWork:
         before: AdministrativeCase,
         after: AdministrativeCase,
         decision: Decision,
+        *,
+        organization_scope: str | None = None,
+        approval_satisfaction: ApprovalSatisfaction | None = None,
     ) -> None:
         if before.case_id != after.case_id or decision.case_id != before.case_id:
             raise ValueError("decision transition cannot change case identity")
@@ -202,6 +207,17 @@ class AdministrativeUnitOfWork:
             raise ValueError("decision transition must advance case version exactly once")
         if before.policy_ref is None or decision.policy_ref != before.policy_ref:
             raise ValueError("decision must be bound to the current policy")
+        if decision.decision_role is not None and organization_scope is None:
+            raise ValueError("governed decision role requires an organization scope")
+        if approval_satisfaction is not None:
+            if approval_satisfaction.case_id != after.case_id:
+                raise ValueError("approval satisfaction belongs to a different case")
+            if approval_satisfaction.authority_epoch != after.authority_epoch:
+                raise ValueError("approval satisfaction is stale for the case authority epoch")
+            if approval_satisfaction.policy_ref != after.policy_ref:
+                raise ValueError("approval satisfaction policy is not current")
+            if decision.decision_id not in approval_satisfaction.decision_ids:
+                raise ValueError("final decision must be part of approval satisfaction")
 
         with self.store.sessions.begin() as db:
             row = db.get(CaseRow, before.case_id)
@@ -219,6 +235,28 @@ class AdministrativeUnitOfWork:
                     decided_at=decision.decided_at,
                 )
             )
+            db.flush()
+            if decision.decision_role is not None:
+                self.authority.put_decision_binding(
+                    decision,
+                    organization_scope=organization_scope or "*",
+                    db=db,
+                )
+            if approval_satisfaction is not None:
+                self.authority.put_approval_satisfaction(approval_satisfaction, db=db)
+                self.store._append_audit(
+                    db,
+                    after.case_id,
+                    "approval.satisfied",
+                    {
+                        "satisfaction_id": str(approval_satisfaction.satisfaction_id),
+                        "decision_ids": [
+                            str(item) for item in approval_satisfaction.decision_ids
+                        ],
+                        "satisfied_roles": list(approval_satisfaction.satisfied_roles),
+                        "authority_epoch": approval_satisfaction.authority_epoch,
+                    },
+                )
             self.store._copy_case_into_row(row, after)
             self.store._append_audit(
                 db,
@@ -229,6 +267,7 @@ class AdministrativeUnitOfWork:
                     "case_version": decision.case_version,
                     "authority_epoch": decision.authority_epoch,
                     "principal_id": decision.principal_id,
+                    "decision_role": decision.decision_role,
                     "disposition": decision.disposition.value,
                     "policy_id": decision.policy_ref.policy_id,
                     "policy_version": decision.policy_ref.version,
@@ -243,6 +282,11 @@ class AdministrativeUnitOfWork:
                     "authority_epoch": after.authority_epoch,
                     "status": after.status.value,
                     "decision_id": str(decision.decision_id),
+                    "approval_satisfaction_id": (
+                        str(approval_satisfaction.satisfaction_id)
+                        if approval_satisfaction is not None
+                        else None
+                    ),
                 },
             )
             emit_outbox(
@@ -256,6 +300,11 @@ class AdministrativeUnitOfWork:
                     "status": after.status.value,
                     "cause": "decision_recorded",
                     "decision_id": str(decision.decision_id),
+                    "approval_satisfaction_id": (
+                        str(approval_satisfaction.satisfaction_id)
+                        if approval_satisfaction is not None
+                        else None
+                    ),
                 },
             )
 
