@@ -4,6 +4,7 @@ from uuid import UUID
 
 from sqlalchemy import select
 
+from .authority import DecisionAuthorityBindingRow
 from .domain import Decision, EffectRealizationAssessment, ExecutionAuthorization
 from .execution_repository import ExecutionRepository
 from .persistence import AuthorizationRow, DecisionRow, EffectRow, RealizationRow, SqlStore
@@ -20,7 +21,14 @@ def list_decisions(store: SqlStore, case_id: UUID) -> list[Decision]:
             .scalars()
             .all()
         )
-        return [ExecutionRepository._decision_from_row(row) for row in rows]
+        decisions: list[Decision] = []
+        for row in rows:
+            decision = ExecutionRepository._decision_from_row(row)
+            binding = db.get(DecisionAuthorityBindingRow, decision.decision_id)
+            if binding is not None:
+                decision = decision.model_copy(update={"decision_role": binding.decision_role})
+            decisions.append(decision)
+        return decisions
 
 
 def list_authorizations(store: SqlStore, case_id: UUID) -> list[ExecutionAuthorization]:
