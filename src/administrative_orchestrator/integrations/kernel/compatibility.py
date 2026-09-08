@@ -5,6 +5,7 @@ EXPECTED_OWNER = "portable-runtime/contracts"
 EXPECTED_RUNTIME_PROTOCOL = "2.0"
 EXPECTED_PERSISTENT_RESPONSIBILITY = "persistent-responsibility-v1"
 EXPECTED_DOMAIN_RESPONSIBILITY_PROPOSAL = "domain-responsibility-proposal-v1"
+EXPECTED_RESPONSIBILITY_WORK_ADMISSION = "responsibility-work-admission-v1"
 
 
 class KernelCompatibilityError(RuntimeError):
@@ -18,9 +19,14 @@ class KernelContractIdentity:
     runtime_protocol: str
     persistent_responsibility_contract: str
     domain_responsibility_proposal_contract: str
+    responsibility_work_admission_contract: str | None = None
 
 
-def validate_kernel_catalog(raw: dict[str, object]) -> KernelContractIdentity:
+def validate_kernel_catalog(
+    raw: dict[str, object],
+    *,
+    require_work_admission: bool = False,
+) -> KernelContractIdentity:
     try:
         contracts = raw["contracts"]
         if not isinstance(contracts, dict):
@@ -33,12 +39,19 @@ def validate_kernel_catalog(raw: dict[str, object]) -> KernelContractIdentity:
             raise TypeError("domain_responsibility_proposal must be an object")
         persistent = persistent_responsibility["current"]
         domain_proposal = domain_responsibility_proposal["current"]
+        work_admission_contract: str | None = None
+        work_admission = contracts.get("responsibility_work_admission")
+        if work_admission is not None:
+            if not isinstance(work_admission, dict):
+                raise TypeError("responsibility_work_admission must be an object")
+            work_admission_contract = str(work_admission["current"])
         identity = KernelContractIdentity(
             catalog_version=str(raw["catalog_version"]),
             owner=str(raw["owner"]),
             runtime_protocol=str(raw["runtime_protocol"]),
             persistent_responsibility_contract=str(persistent),
             domain_responsibility_proposal_contract=str(domain_proposal),
+            responsibility_work_admission_contract=work_admission_contract,
         )
     except (KeyError, TypeError, ValueError) as exc:
         raise KernelCompatibilityError("kernel contract catalog is structurally incomplete") from exc
@@ -69,15 +82,41 @@ def validate_kernel_catalog(raw: dict[str, object]) -> KernelContractIdentity:
             f"{identity.domain_responsibility_proposal_contract!r}, "
             f"expected {EXPECTED_DOMAIN_RESPONSIBILITY_PROPOSAL!r}"
         )
+    if (
+        identity.responsibility_work_admission_contract is not None
+        and identity.responsibility_work_admission_contract
+        != EXPECTED_RESPONSIBILITY_WORK_ADMISSION
+    ):
+        mismatches.append(
+            "responsibility_work_admission="
+            f"{identity.responsibility_work_admission_contract!r}, "
+            f"expected {EXPECTED_RESPONSIBILITY_WORK_ADMISSION!r}"
+        )
+    if (
+        require_work_admission
+        and identity.responsibility_work_admission_contract
+        != EXPECTED_RESPONSIBILITY_WORK_ADMISSION
+    ):
+        mismatches.append(
+            "responsibility_work_admission is required for admission mode: "
+            f"expected {EXPECTED_RESPONSIBILITY_WORK_ADMISSION!r}"
+        )
     if mismatches:
         raise KernelCompatibilityError("incompatible agent-kernel contracts: " + "; ".join(mismatches))
     return identity
 
 
 class HttpKernelContractProbe:
-    def __init__(self, base_url: str, *, timeout_seconds: float = 3.0) -> None:
+    def __init__(
+        self,
+        base_url: str,
+        *,
+        timeout_seconds: float = 3.0,
+        require_work_admission: bool = False,
+    ) -> None:
         self.base_url = base_url.rstrip("/")
         self.timeout_seconds = timeout_seconds
+        self.require_work_admission = require_work_admission
 
     def fetch_identity(self) -> KernelContractIdentity:
         import httpx
@@ -93,7 +132,10 @@ class HttpKernelContractProbe:
             raise KernelCompatibilityError(f"agent-kernel contract probe unavailable: {exc}") from exc
         if not isinstance(payload, dict):
             raise KernelCompatibilityError("agent-kernel contract catalog must be a JSON object")
-        return validate_kernel_catalog(payload)
+        return validate_kernel_catalog(
+            payload,
+            require_work_admission=self.require_work_admission,
+        )
 
 
 __all__ = [
@@ -101,6 +143,7 @@ __all__ = [
     "EXPECTED_DOMAIN_RESPONSIBILITY_PROPOSAL",
     "EXPECTED_OWNER",
     "EXPECTED_PERSISTENT_RESPONSIBILITY",
+    "EXPECTED_RESPONSIBILITY_WORK_ADMISSION",
     "EXPECTED_RUNTIME_PROTOCOL",
     "HttpKernelContractProbe",
     "KernelCompatibilityError",
