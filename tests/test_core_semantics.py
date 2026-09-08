@@ -18,6 +18,8 @@ from administrative_orchestrator.service import (
     TransitionError,
     add_evidence,
     apply_policy_evaluation,
+    begin_execution,
+    begin_verification,
     create_case,
     explicit_reopen,
     mint_execution_authorization,
@@ -25,6 +27,7 @@ from administrative_orchestrator.service import (
     record_decision,
     require_reopen,
     start_policy_evaluation,
+    validate_execution_authorization,
 )
 
 
@@ -64,6 +67,18 @@ def _awaiting_decision_case(policy_ref: PolicyRef):
     return apply_policy_evaluation(case, evaluation)
 
 
+def _approve(case, policy_ref: PolicyRef) -> Decision:
+    return Decision(
+        case_id=case.case_id,
+        case_version=case.version,
+        authority_epoch=case.authority_epoch,
+        principal_id="person:hr-approver",
+        disposition=DecisionDisposition.APPROVE,
+        rationale="current onboarding policy requirements satisfied",
+        policy_ref=policy_ref,
+    )
+
+
 def test_missing_facts_do_not_force_reopen(policy_ref: PolicyRef) -> None:
     case = create_case(_request(), case_kind="employee-onboarding", subject_ref="employee:new")
     case = start_policy_evaluation(case)
@@ -81,18 +96,12 @@ def test_complete_onboarding_requires_explicit_decision(policy_ref: PolicyRef) -
     case = _awaiting_decision_case(policy_ref)
     assert case.status == CaseStatus.AWAITING_DECISION
     assert case.policy_ref == policy_ref
+    assert case.authority_epoch == 2
 
 
 def test_approve_then_mint_exact_authorization(policy_ref: PolicyRef) -> None:
     case = _awaiting_decision_case(policy_ref)
-    decision = Decision(
-        case_id=case.case_id,
-        case_version=case.version,
-        principal_id="person:hr-approver",
-        disposition=DecisionDisposition.APPROVE,
-        rationale="current onboarding policy requirements satisfied",
-        policy_ref=policy_ref,
-    )
+    decision = _approve(case, policy_ref)
     case = record_decision(case, decision)
 
     authorization = mint_execution_authorization(
@@ -112,19 +121,13 @@ def test_approve_then_mint_exact_authorization(policy_ref: PolicyRef) -> None:
 
     assert case.status == CaseStatus.AUTHORIZED
     assert authorization.subject_ref == case.subject_ref
+    assert authorization.authority_epoch == case.authority_epoch
     assert effect.authorization_id == authorization.authorization_id
 
 
 def test_effect_cannot_exceed_authorization(policy_ref: PolicyRef) -> None:
     case = _awaiting_decision_case(policy_ref)
-    decision = Decision(
-        case_id=case.case_id,
-        case_version=case.version,
-        principal_id="person:hr-approver",
-        disposition=DecisionDisposition.APPROVE,
-        rationale="approved",
-        policy_ref=policy_ref,
-    )
+    decision = _approve(case, policy_ref)
     case = record_decision(case, decision)
     authorization = mint_execution_authorization(
         case,
@@ -144,21 +147,44 @@ def test_effect_cannot_exceed_authorization(policy_ref: PolicyRef) -> None:
         )
 
 
-def test_current_case_change_invalidates_old_decision_for_new_authority(
+def test_runtime_state_change_does_not_invalidate_authorization(policy_ref: PolicyRef) -> None:
+    case = _awaiting_decision_case(policy_ref)
+    decision = _approve(case, policy_ref)
+    authorized = record_decision(case, decision)
+    authorization = mint_execution_authorization(
+        authorized,
+        decision,
+        issuer_principal_id="service:admin-orchestrator",
+        target_system="hris",
+        allowed_operations=("employee.create",),
+        authority_class=AuthorityClass.EMPLOYMENT,
+    )
+
+    executing = begin_execution(authorized)
+    assert executing.version == authorized.version + 1
+    assert executing.authority_epoch == authorized.authority_epoch
+    validate_execution_authorization(executing, authorization, operation="employee.create")
+
+    verifying = begin_verification(executing)
+    assert verifying.authority_epoch == executing.authority_epoch
+
+
+def test_authority_relevant_change_invalidates_old_decision_and_authorization(
     policy_ref: PolicyRef,
 ) -> None:
     case = _awaiting_decision_case(policy_ref)
-    decision = Decision(
-        case_id=case.case_id,
-        case_version=case.version,
-        principal_id="person:hr-approver",
-        disposition=DecisionDisposition.APPROVE,
-        rationale="approved",
-        policy_ref=policy_ref,
+    decision = _approve(case, policy_ref)
+    authorized = record_decision(case, decision)
+    authorization = mint_execution_authorization(
+        authorized,
+        decision,
+        issuer_principal_id="service:admin-orchestrator",
+        target_system="hris",
+        allowed_operations=("employee.create",),
+        authority_class=AuthorityClass.EMPLOYMENT,
     )
-    case = record_decision(case, decision)
-    case = add_evidence(
-        case,
+    changed = add_evidence(
+        authorized,
         EvidenceRef(
             source="hris",
             owner="hris",
@@ -167,22 +193,28 @@ def test_current_case_change_invalidates_old_decision_for_new_authority(
         ),
     )
 
+    assert changed.authority_epoch == authorized.authority_epoch + 1
     with pytest.raises(TransitionError, match="stale"):
         mint_execution_authorization(
-            case,
+            changed,
             decision,
             issuer_principal_id="service:admin-orchestrator",
             target_system="hris",
             allowed_operations=("employee.create",),
             authority_class=AuthorityClass.EMPLOYMENT,
         )
+    with pytest.raises(TransitionError, match="stale"):
+        validate_execution_authorization(changed, authorization, operation="employee.create")
 
 
 def test_reopen_is_explicit(policy_ref: PolicyRef) -> None:
     case = _awaiting_decision_case(policy_ref)
+    previous_epoch = case.authority_epoch
     case = require_reopen(case, ReopenReason.UNKNOWN_RISK_DIMENSION)
     assert case.status == CaseStatus.REOPEN_REQUIRED
+    assert case.authority_epoch == previous_epoch + 1
 
     reopened = explicit_reopen(case)
     assert reopened.status == CaseStatus.GATHERING_FACTS
     assert reopened.reopen_reason is None
+    assert reopened.authority_epoch == case.authority_epoch
