@@ -13,12 +13,7 @@ def utcnow() -> datetime:
 
 
 def normalize_datetime(value: datetime) -> datetime:
-    """Canonicalize all domain datetimes to offset-aware UTC.
-
-    SQLite returns timezone-aware SQLAlchemy DateTime columns as naive values.
-    External JSON providers may also omit an offset. Domain records must not let
-    those transport/storage details change the meaning of a persisted instant.
-    """
+    """Canonicalize all domain datetimes to offset-aware UTC."""
     if value.tzinfo is None:
         return value.replace(tzinfo=UTC)
     return value.astimezone(UTC)
@@ -182,6 +177,7 @@ class AdministrativeCase(UtcModel):
     subject_ref: str
     status: CaseStatus = CaseStatus.RECEIVED
     version: int = 1
+    authority_epoch: int = 1
     policy_ref: PolicyRef | None = None
     evidence: list[EvidenceRef] = Field(default_factory=list)
     reopen_reason: ReopenReason | None = None
@@ -189,7 +185,9 @@ class AdministrativeCase(UtcModel):
     updated_at: datetime = Field(default_factory=utcnow)
 
     @model_validator(mode="after")
-    def reopen_reason_matches_status(self) -> AdministrativeCase:
+    def validate_case(self) -> AdministrativeCase:
+        if self.version < 1 or self.authority_epoch < 1:
+            raise ValueError("case version and authority_epoch must be positive")
         if self.status == CaseStatus.REOPEN_REQUIRED and self.reopen_reason is None:
             raise ValueError("reopen_required case must record a reopen_reason")
         if self.status != CaseStatus.REOPEN_REQUIRED and self.reopen_reason is not None:
@@ -201,6 +199,7 @@ class Decision(UtcModel):
     decision_id: UUID = Field(default_factory=uuid4)
     case_id: UUID
     case_version: int
+    authority_epoch: int
     principal_id: str
     disposition: DecisionDisposition
     rationale: str
@@ -212,6 +211,7 @@ class ExecutionAuthorization(UtcModel):
     authorization_id: UUID = Field(default_factory=uuid4)
     case_id: UUID
     case_version: int
+    authority_epoch: int
     decision_id: UUID
     issuer_principal_id: str
     target_system: str
@@ -240,6 +240,7 @@ class EffectRecord(UtcModel):
     effect_id: UUID = Field(default_factory=uuid4)
     case_id: UUID
     case_version: int
+    authority_epoch: int
     authorization_id: UUID
     target_system: str
     operation: str
@@ -270,6 +271,7 @@ class ConfirmedOutcome(UtcModel):
     outcome_id: UUID = Field(default_factory=uuid4)
     case_id: UUID
     case_version: int
+    authority_epoch: int
     effect_id: UUID
     realization_assessment_id: UUID
     outcome_kind: str
