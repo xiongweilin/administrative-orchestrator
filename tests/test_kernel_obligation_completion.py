@@ -22,6 +22,7 @@ from administrative_orchestrator.execution_repository import ExecutionRepository
 from administrative_orchestrator.integrations.kernel.effect_provider import (
     KernelCutoverEffectProvider,
 )
+from administrative_orchestrator.integrations.kernel.evidence import KernelEvidenceView
 from administrative_orchestrator.integrations.kernel.models import (
     KernelExecutionStatus,
     KernelProjectionStatus,
@@ -144,12 +145,16 @@ class MutableKernelRepository:
         self.case_id = case_id
         self.authority_epoch = authority_epoch
         self.completed_targets = {"hris"}
+        self.kernel_observed_overrides: dict[str, dict[str, object]] = {}
 
-    def _obligation(self, obligation_id: UUID):
-        obligation_set = ObligationRepository(self.store).get_current(
+    def _obligation_set(self):
+        return ObligationRepository(self.store).get_current(
             self.case_id,
             self.authority_epoch,
         )
+
+    def _obligation(self, obligation_id: UUID):
+        obligation_set = self._obligation_set()
         if obligation_set is None:
             return None
         return next(
@@ -161,6 +166,21 @@ class MutableKernelRepository:
     def _intent_id(obligation_id: UUID) -> UUID:
         return uuid5(NAMESPACE_URL, f"kernel-completion:intent:{obligation_id}")
 
+    def _observed(self, obligation) -> dict[str, object]:
+        override = self.kernel_observed_overrides.get(obligation.target_system)
+        if override is not None:
+            return dict(override)
+        return dict(obligation.expected_postcondition)
+
+    @staticmethod
+    def _refs(target: str) -> dict[str, str]:
+        return {
+            "work": f"work:{target}:completed",
+            "run": f"run:{target}:completed",
+            "action": f"action:{target}:completed",
+            "evidence": f"evidence:{target}:completed",
+        }
+
     def get_projection_for_obligation(self, obligation_id: UUID):
         obligation = self._obligation(obligation_id)
         if obligation is None or obligation.target_system not in {"hris", "iam"}:
@@ -168,6 +188,7 @@ class MutableKernelRepository:
         if obligation.target_system not in self.completed_targets:
             return None
         target = obligation.target_system
+        refs = self._refs(target)
         return SimpleNamespace(
             obligation_id=obligation_id,
             intent_id=self._intent_id(obligation_id),
@@ -176,14 +197,14 @@ class MutableKernelRepository:
             kernel_execution_ref=f"execution:{target}:completed",
             kernel_provider_id=f"provider:{target}:kernel",
             kernel_execution_processed_at=FIXED_TIME,
-            kernel_evidence_ref=f"evidence:{target}:completed",
+            kernel_work_ref=refs["work"],
+            kernel_run_ref=refs["run"],
+            kernel_action_ref=refs["action"],
+            kernel_evidence_ref=refs["evidence"],
         )
 
     def get_intent(self, intent_id: UUID):
-        obligation_set = ObligationRepository(self.store).get_current(
-            self.case_id,
-            self.authority_epoch,
-        )
+        obligation_set = self._obligation_set()
         if obligation_set is None:
             return None
         for obligation in obligation_set.obligations:
@@ -194,18 +215,56 @@ class MutableKernelRepository:
                 )
         return None
 
+    def evidence(self, evidence_ref: str) -> KernelEvidenceView | None:
+        obligation_set = self._obligation_set()
+        if obligation_set is None:
+            return None
+        for obligation in obligation_set.obligations:
+            target = obligation.target_system
+            if target not in self.completed_targets or target not in {"hris", "iam"}:
+                continue
+            refs = self._refs(target)
+            if refs["evidence"] != evidence_ref:
+                continue
+            expected = dict(obligation.expected_postcondition)
+            observed = self._observed(obligation)
+            return KernelEvidenceView(
+                evidence_ref=evidence_ref,
+                action_ref=refs["action"],
+                work_ref=refs["work"],
+                run_ref=refs["run"],
+                objective_result="pass",
+                observed_postcondition=observed,
+                expected_postcondition=expected,
+                verification_request_ref=f"verification-request:{target}:completed",
+                verification_attempt_ref=f"verification-attempt:{target}:completed",
+                verifier_provider_id=f"verifier:{target}:readback",
+                verifier_provider_execution_binding_ref=f"binding:{target}:readback",
+                captured_at=FIXED_TIME,
+            )
+        return None
+
+
+class MutableKernelEvidenceClient:
+    def __init__(self, repository: MutableKernelRepository) -> None:
+        self.repository = repository
+
+    def inspect(self, evidence_ref: str):
+        return self.repository.evidence(evidence_ref)
+
 
 class MutableKernelBridge:
     cutover = True
 
     def __init__(self, repository: MutableKernelRepository) -> None:
         self.repository = repository
+        self._evidence_client = MutableKernelEvidenceClient(repository)
+
+    def evidence_client(self):
+        return self._evidence_client
 
 
-def test_kernel_hris_completion_cannot_discharge_case_before_iam_is_confirmed() -> None:
-    store = SqlStore("sqlite+pysqlite:///:memory:")
-    store.init_schema()
-    authorized = _authorized_case(store)
+def _provider(store: SqlStore, authorized):
     kernel_repository = MutableKernelRepository(
         store,
         case_id=authorized.case_id,
@@ -216,6 +275,14 @@ def test_kernel_hris_completion_cannot_discharge_case_before_iam_is_confirmed() 
         legacy,
         MutableKernelBridge(kernel_repository),
     )
+    return kernel_repository, legacy, provider
+
+
+def test_kernel_hris_completion_cannot_discharge_case_before_iam_is_confirmed() -> None:
+    store = SqlStore("sqlite+pysqlite:///:memory:")
+    store.init_schema()
+    authorized = _authorized_case(store)
+    kernel_repository, legacy, provider = _provider(store, authorized)
     engine = OnboardingExecutionEngine(store, provider)
 
     partial = engine.run(authorized.case_id)
@@ -288,3 +355,47 @@ def test_kernel_hris_completion_cannot_discharge_case_before_iam_is_confirmed() 
     assert "hris" not in legacy.observe_targets
     assert "iam" not in legacy.observe_targets
     assert legacy.execute_targets == ["github"]
+
+
+def test_kernel_completed_with_different_reality_requires_reopen_without_discharge() -> None:
+    store = SqlStore("sqlite+pysqlite:///:memory:")
+    store.init_schema()
+    authorized = _authorized_case(store)
+    kernel_repository, legacy, provider = _provider(store, authorized)
+    engine = OnboardingExecutionEngine(store, provider)
+
+    # First drive materializes the governed obligation/effect set while Kernel
+    # reports no completed execution. This gives us the frozen Administrative
+    # postcondition before introducing a different independent reality readback.
+    kernel_repository.completed_targets.clear()
+    partial = engine.run(authorized.case_id)
+    assert partial.status is CaseStatus.RECONCILING
+
+    obligation_set = ObligationRepository(store).get_current(
+        partial.case_id,
+        partial.authority_epoch,
+    )
+    assert obligation_set is not None
+    hris_obligation = next(
+        item for item in obligation_set.obligations if item.target_system == "hris"
+    )
+    observed = dict(hris_obligation.expected_postcondition)
+    payload = dict(observed["payload"])
+    payload["department_ref"] = "department:finance"
+    observed["payload"] = payload
+    kernel_repository.kernel_observed_overrides["hris"] = observed
+    kernel_repository.completed_targets.update({"hris", "iam"})
+
+    result = engine.run(authorized.case_id)
+
+    assert result.status is CaseStatus.REOPEN_REQUIRED
+    outcomes = ExecutionRepository(store).list_outcomes(
+        result.case_id,
+        result.authority_epoch,
+    )
+    outcome_kinds = {item.outcome_kind for item in outcomes}
+    assert "hris.employee.create.verified" not in outcome_kinds
+    assert "hris" not in legacy.execute_targets
+    assert "iam" not in legacy.execute_targets
+    assert "hris" not in legacy.observe_targets
+    assert "iam" not in legacy.observe_targets
