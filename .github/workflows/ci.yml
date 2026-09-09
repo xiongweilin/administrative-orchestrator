@@ -148,6 +148,25 @@ jobs:
           ADMIN_KERNEL_BASE_URL: http://127.0.0.1:8020
           ADMIN_SANDBOX_BASE_URL: http://127.0.0.1:8010
         run: uv run python scripts/kernel_cutover_e2e.py
+      - name: Prove lost Kernel completion ACK cannot duplicate reality
+        env:
+          ADMIN_KERNEL_BASE_URL: http://127.0.0.1:8020
+          ADMIN_SANDBOX_BASE_URL: http://127.0.0.1:8010
+          ADMIN_LOST_ACK_DB_PATH: ./kernel-lost-ack-admin.db
+          ADMIN_LOST_ACK_RECEIPT_PATH: ./kernel-lost-ack-first-receipt.json
+        run: |
+          rm -f kernel-lost-ack-admin.db kernel-lost-ack-first-receipt.json lost-ack-phase1.log
+          set +e
+          uv run python scripts/kernel_lost_ack_e2e.py phase1 >lost-ack-phase1.log 2>&1
+          phase1_status=$?
+          set -e
+          if [ "$phase1_status" -ne 1 ]; then
+            cat lost-ack-phase1.log
+            echo "expected phase1 injected process failure, got exit $phase1_status"
+            exit 1
+          fi
+          uv run python scripts/kernel_lost_ack_e2e.py verify
+          uv run python scripts/kernel_lost_ack_e2e.py phase2
       - name: Cross-repo service logs
         if: failure()
         run: |
@@ -155,6 +174,8 @@ jobs:
           cat sandbox.log || true
           echo '--- kernel.log ---'
           cat kernel.log || true
+          echo '--- lost-ack-phase1.log ---'
+          cat lost-ack-phase1.log || true
       - name: Stop cross-repo services
         if: always()
         run: |
