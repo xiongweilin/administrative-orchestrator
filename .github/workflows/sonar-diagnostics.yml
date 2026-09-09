@@ -1,0 +1,84 @@
+name: Sonar Diagnostics
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  quality-gate-diagnostics:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: uv sync --extra dev
+      - name: Coverage
+        run: uv run pytest -q --cov=src/administrative_orchestrator --cov-report=xml:coverage.xml
+      - name: SonarQube Cloud Scan
+        uses: SonarSource/sonarqube-scan-action@v8.2.1
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: https://sonarcloud.io
+      - name: Print Quality Gate conditions
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        run: |
+          set -euo pipefail
+          ce_task_url="$(sed -n 's/^ceTaskUrl=//p' .scannerwork/report-task.txt)"
+          if [ -z "$ce_task_url" ]; then
+            echo "ceTaskUrl missing from report-task.txt"
+            exit 1
+          fi
+
+          for _ in {1..60}; do
+            curl --fail --silent --user "$SONAR_TOKEN:" "$ce_task_url" > sonar-ce-task.json
+            status="$(python - <<'PY'
+          import json
+          print(json.load(open('sonar-ce-task.json'))['task']['status'])
+          PY
+          )"
+            case "$status" in
+              SUCCESS) break ;;
+              FAILED|CANCELED)
+                cat sonar-ce-task.json
+                exit 1
+                ;;
+            esac
+            sleep 2
+          done
+
+          analysis_id="$(python - <<'PY'
+          import json
+          payload = json.load(open('sonar-ce-task.json'))
+          print(payload['task'].get('analysisId', ''))
+          PY
+          )"
+          if [ -z "$analysis_id" ]; then
+            cat sonar-ce-task.json
+            echo "analysisId missing after Sonar processing"
+            exit 1
+          fi
+
+          curl --fail --silent --user "$SONAR_TOKEN:" \
+            "https://sonarcloud.io/api/qualitygates/project_status?analysisId=$analysis_id" \
+            > sonar-quality-gate.json
+          python - <<'PY'
+          import json
+          payload = json.load(open('sonar-quality-gate.json'))['projectStatus']
+          print('qualityGateStatus=' + payload['status'])
+          for condition in payload.get('conditions', []):
+              print(
+                  'condition '
+                  f"metric={condition.get('metricKey')} "
+                  f"status={condition.get('status')} "
+                  f"actual={condition.get('actualValue')} "
+                  f"operator={condition.get('comparator')} "
+                  f"threshold={condition.get('errorThreshold')}"
+              )
+          PY
