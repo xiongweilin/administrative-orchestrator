@@ -11,6 +11,8 @@ from prometheus_client import Counter, Histogram, make_asgi_app
 
 _CORRELATION_ID = ContextVar("administrative_correlation_id", default="")
 _CORRELATION_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
+_IDENTITY_REVOKE_PATTERN = re.compile(r"^/v1/operations/identities/[^/]+/revoke$")
+_PRINCIPAL_DEACTIVATE_PATTERN = re.compile(r"^/v1/operations/principals/[^/]+/deactivate$")
 
 HTTP_REQUESTS = Counter(
     "administrative_http_requests_total",
@@ -90,18 +92,45 @@ def install_observability(app: FastAPI, *, service_name: str) -> None:
                 service=service_name,
                 correlation_id=correlation_id,
                 method=request.method,
+                path=request.url.path,
             )
             raise
         finally:
+            duration = time.perf_counter() - started
             HTTP_REQUESTS.labels(
                 service=service_name,
                 method=request.method,
                 status=str(status_code),
             ).inc()
-            HTTP_LATENCY.labels(service=service_name, method=request.method).observe(
-                time.perf_counter() - started
+            HTTP_LATENCY.labels(service=service_name, method=request.method).observe(duration)
+            _record_operations_semantics(request.method, request.url.path, status_code)
+            structlog.get_logger("administrative.http").info(
+                "request_completed",
+                service=service_name,
+                correlation_id=correlation_id,
+                method=request.method,
+                path=request.url.path,
+                status=status_code,
+                duration_seconds=duration,
             )
             _CORRELATION_ID.reset(token)
+
+
+def _record_operations_semantics(method: str, path: str, status_code: int) -> None:
+    if method != "POST":
+        return
+    success = status_code < 400
+    if path.endswith("/authoritative-facts/refresh"):
+        record_authoritative_refresh(success=success)
+        return
+    if not success:
+        return
+    if path == "/v1/operations/identities/bind":
+        record_identity_lifecycle("identity_binding.created")
+    elif _IDENTITY_REVOKE_PATTERN.fullmatch(path):
+        record_identity_lifecycle("identity_binding.revoked")
+    elif _PRINCIPAL_DEACTIVATE_PATTERN.fullmatch(path):
+        record_identity_lifecycle("principal.deactivated")
 
 
 __all__ = [
