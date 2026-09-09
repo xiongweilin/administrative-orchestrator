@@ -264,6 +264,25 @@ class SandboxAdministrativeReadbackVerifier:
         return None
 
 
+class PreReceiptCrashBoundedDomainEffectExecutionService(BoundedDomainEffectExecutionService):
+    """CI-only crash seam after durable effect success but before bounded receipt."""
+
+    async def _verify_and_complete(self, command, *args, **kwargs):
+        marker_path = os.getenv("PORTABLE_RUNTIME_ADMIN_E2E_PRE_RECEIPT_FAIL_ONCE_PATH")
+        target_subject = os.getenv("PORTABLE_RUNTIME_ADMIN_E2E_PRE_RECEIPT_FAIL_SUBJECT")
+        if marker_path and target_subject and command.subject_ref == target_subject:
+            marker = Path(marker_path)
+            if not marker.exists():
+                marker.write_text(
+                    "effect Attempt/Action durable; bounded execution receipt not recorded\n",
+                    encoding="utf-8",
+                )
+                raise RuntimeError(
+                    "fault injection: crash after physical effect success before bounded receipt"
+                )
+        return await super()._verify_and_complete(command, *args, **kwargs)
+
+
 def _iam_contract() -> CapabilityContract:
     return CapabilityContract(
         capability=IAM_CAPABILITY,
@@ -363,7 +382,7 @@ def build() -> tuple[Runtime, BoundedDomainEffectExecutionService]:
             lease_owner="kernel:administrative-cross-repo-e2e",
         ),
     )
-    return runtime, BoundedDomainEffectExecutionService(runtime, profiles)
+    return runtime, PreReceiptCrashBoundedDomainEffectExecutionService(runtime, list(profiles))
 
 
 __all__ = ["IAM_CAPABILITY", "build", "sandbox_effect_id"]
