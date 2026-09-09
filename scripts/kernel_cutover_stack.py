@@ -14,6 +14,7 @@ from portable_runtime.core.capabilities import (
     ProviderHealth,
 )
 from portable_runtime.core.capability_contract import CapabilityContract, CapabilityContractRegistry
+from portable_runtime.core.models import StepAttempt
 from portable_runtime.core.provider_semantics import ProviderSemanticContract
 from portable_runtime.core.reconciliation_repeatability import (
     ReconciliationRepeatabilityConfiguration,
@@ -32,13 +33,14 @@ from portable_runtime.responsibility.domain_effect_authorization import (
 from portable_runtime.responsibility.domain_effect_verified_outcome import (
     domain_effect_verification_capability,
 )
-from portable_runtime.stores.invocation_specification import (
-    InvocationSpecificationInMemoryStateStore,
-    InvocationSpecificationSQLiteStateStore,
+from portable_runtime.stores.bounded_domain_effect_recovery import (
+    BoundedDomainEffectRecoveryInMemoryStateStore,
+    BoundedDomainEffectRecoverySQLiteStateStore,
 )
 
 SANDBOX_BASE_URL = os.getenv("ADMIN_SANDBOX_BASE_URL", "http://127.0.0.1:8010").rstrip("/")
 IAM_CAPABILITY = "administrative.iam.identity.create.v1"
+RESULT_COMMIT_FAIL_ONCE_ENV = "PORTABLE_RUNTIME_ADMIN_E2E_RESULT_COMMIT_FAIL_ONCE_PATH"
 
 
 def sandbox_effect_id(capability: str, subject_ref: str) -> UUID:
@@ -267,8 +269,38 @@ class SandboxAdministrativeReadbackVerifier:
         return None
 
 
+class ResultCommitFailOnceInMemoryStateStore(BoundedDomainEffectRecoveryInMemoryStateStore):
+    """CI-only store seam for the post-provider / pre-result-commit ambiguity window."""
+
+    def save_attempt(self, value: StepAttempt) -> None:
+        _fail_result_commit_once(value)
+        super().save_attempt(value)
+
+
+class ResultCommitFailOnceSQLiteStateStore(BoundedDomainEffectRecoverySQLiteStateStore):
+    """Durable CI seam equivalent to ResultCommitFailOnceInMemoryStateStore."""
+
+    def save_attempt(self, value: StepAttempt) -> None:
+        _fail_result_commit_once(value)
+        super().save_attempt(value)
+
+
+def _fail_result_commit_once(value: StepAttempt) -> None:
+    marker_path = os.getenv(RESULT_COMMIT_FAIL_ONCE_ENV)
+    if not marker_path or value.status != "succeeded":
+        return
+    marker = Path(marker_path)
+    if marker.exists():
+        return
+    marker.write_text(
+        "provider returned succeeded; StepAttempt succeeded projection intentionally failed\n",
+        encoding="utf-8",
+    )
+    raise RuntimeError("fault injection: post-provider result projection commit failed")
+
+
 class PreReceiptCrashBoundedDomainEffectExecutionService(BoundedDomainEffectExecutionService):
-    """CI-only crash seam after durable effect success but before bounded receipt."""
+    """CI-only later crash seam after durable effect success but before bounded receipt."""
 
     async def _verify_and_complete(self, command, *args, **kwargs):
         marker_path = os.getenv("PORTABLE_RUNTIME_ADMIN_E2E_PRE_RECEIPT_FAIL_ONCE_PATH")
@@ -314,9 +346,9 @@ def _repeat_safe_reconciliation() -> ReconciliationRepeatabilityConfiguration:
 def build() -> tuple[Runtime, BoundedDomainEffectExecutionService]:
     state_path = os.getenv("PORTABLE_RUNTIME_ADMIN_E2E_STATE_PATH")
     store = (
-        InvocationSpecificationSQLiteStateStore(Path(state_path))
+        ResultCommitFailOnceSQLiteStateStore(Path(state_path))
         if state_path
-        else InvocationSpecificationInMemoryStateStore()
+        else ResultCommitFailOnceInMemoryStateStore()
     )
     registry = ProviderRegistry()
     # The generic Runtime default is a personal/local safety profile with a
@@ -400,6 +432,7 @@ def build() -> tuple[Runtime, BoundedDomainEffectExecutionService]:
 
 __all__ = [
     "IAM_CAPABILITY",
+    "RESULT_COMMIT_FAIL_ONCE_ENV",
     "SandboxAdministrativeProvider",
     "build",
     "sandbox_effect_id",

@@ -16,6 +16,7 @@ from ...effect_provider import (
 from .bridge import KERNEL_CUTOVER_CAPABILITIES, KernelExecutionBridge
 from .evidence import KernelEvidenceError
 from .models import KernelExecutionStatus, KernelProjectionStatus, KernelShadowProjection
+from .recovery import KernelExecutionResolution, KernelRecoveryError
 
 
 def _effect_capability(effect: EffectRecord) -> str:
@@ -29,9 +30,9 @@ class KernelCutoverEffectProvider:
 
     For a cut-over capability this adapter never calls the fallback provider,
     including reconciliation/read-back. It consumes durable Kernel execution
-    lineage and the canonical non-authoritative verification evidence view.
-    Missing, rebound, or unresolved Kernel evidence fails closed. Non-cut-over
-    capabilities remain byte-for-byte on the legacy provider path.
+    lineage, Kernel-owned recovery resolution and the canonical non-authoritative
+    verification evidence view. Missing, rebound, or unresolved Kernel state
+    fails closed. Non-cut-over capabilities remain on the legacy provider path.
     """
 
     def __init__(
@@ -54,10 +55,33 @@ class KernelCutoverEffectProvider:
                 provider_ref=provider_ref,
             )
         if status is KernelExecutionStatus.EXECUTION_UNKNOWN:
+            resolution = self._recover(projection)
+            if resolution is None:
+                return ProviderExecutionResult(
+                    status=ProviderExecutionStatus.OUTCOME_UNKNOWN,
+                    provider_ref=provider_ref,
+                    error="Kernel execution outcome is unknown and canonical recovery is unavailable",
+                    retryable=False,
+                )
+            if resolution.current_status == "recovered-completed":
+                return ProviderExecutionResult(
+                    status=ProviderExecutionStatus.SUCCEEDED,
+                    provider_ref=provider_ref,
+                )
+            if resolution.current_status == "recovered-failed":
+                return ProviderExecutionResult(
+                    status=ProviderExecutionStatus.FAILED,
+                    provider_ref=provider_ref,
+                    error="Kernel reconciliation confirmed execution failure",
+                    retryable=False,
+                )
             return ProviderExecutionResult(
                 status=ProviderExecutionStatus.OUTCOME_UNKNOWN,
                 provider_ref=provider_ref,
-                error="Kernel execution outcome is unknown; local fallback forbidden",
+                error=(
+                    "Kernel recovery did not establish successful execution: "
+                    f"{resolution.current_status}"
+                ),
                 retryable=False,
             )
         if status is KernelExecutionStatus.VERIFIED_FAIL:
@@ -96,17 +120,35 @@ class KernelCutoverEffectProvider:
             else effect.updated_at
         )
 
-        if status not in {
-            KernelExecutionStatus.COMPLETED,
-            KernelExecutionStatus.VERIFIED_FAIL,
-        }:
+        evidence_ref: str | None = None
+        expected_objective_result: str | None = None
+        if status is KernelExecutionStatus.COMPLETED:
+            if projection is not None:
+                evidence_ref = projection.kernel_evidence_ref
+            expected_objective_result = "pass"
+        elif status is KernelExecutionStatus.VERIFIED_FAIL:
+            if projection is not None:
+                evidence_ref = projection.kernel_evidence_ref
+            expected_objective_result = "fail"
+        elif status is KernelExecutionStatus.EXECUTION_UNKNOWN:
+            resolution = self._inspect_resolution(projection)
+            if resolution is not None:
+                observed_at = resolution.processed_at
+                if resolution.current_status == "recovered-completed":
+                    evidence_ref = resolution.evidence_ref
+                    expected_objective_result = "pass"
+                elif resolution.current_status == "recovered-verified-fail":
+                    evidence_ref = resolution.evidence_ref
+                    expected_objective_result = "fail"
+
+        if expected_objective_result is None:
             return self._unknown_observation(
                 effect,
                 provider_ref,
                 observed_at,
                 "kernel_execution_not_verified",
             )
-        if projection is None or not projection.kernel_evidence_ref:
+        if projection is None or not evidence_ref:
             return self._unknown_observation(
                 effect,
                 provider_ref,
@@ -115,7 +157,7 @@ class KernelCutoverEffectProvider:
             )
 
         try:
-            evidence = self.bridge.evidence_client().inspect(projection.kernel_evidence_ref)
+            evidence = self.bridge.evidence_client().inspect(evidence_ref)
         except KernelEvidenceError:
             return self._unknown_observation(
                 effect,
@@ -148,9 +190,9 @@ class KernelCutoverEffectProvider:
             )
 
         lineage = {
-            "work": (evidence.work_ref, getattr(projection, "kernel_work_ref", None)),
-            "run": (evidence.run_ref, getattr(projection, "kernel_run_ref", None)),
-            "action": (evidence.action_ref, getattr(projection, "kernel_action_ref", None)),
+            "work": (evidence.work_ref, projection.kernel_work_ref),
+            "run": (evidence.run_ref, projection.kernel_run_ref),
+            "action": (evidence.action_ref, projection.kernel_action_ref),
         }
         for name, (actual, expected) in lineage.items():
             if not expected or actual != expected:
@@ -161,9 +203,6 @@ class KernelCutoverEffectProvider:
                     f"kernel_evidence_{name}_identity_rebound",
                 )
 
-        expected_objective_result = (
-            "pass" if status is KernelExecutionStatus.COMPLETED else "fail"
-        )
         if evidence.objective_result != expected_objective_result:
             return self._unknown_observation(
                 effect,
@@ -189,6 +228,31 @@ class KernelCutoverEffectProvider:
             digest=evidence.evidence_ref,
             observed_at=evidence.captured_at,
         )
+
+    def _recover(self, projection: KernelShadowProjection | None) -> KernelExecutionResolution | None:
+        if projection is None or not projection.kernel_execution_ref:
+            return None
+        try:
+            return self.bridge.recovery_client().recover(
+                projection.kernel_execution_ref,
+                expected_work_ref=projection.kernel_work_ref,
+            )
+        except KernelRecoveryError:
+            return None
+
+    def _inspect_resolution(
+        self,
+        projection: KernelShadowProjection | None,
+    ) -> KernelExecutionResolution | None:
+        if projection is None or not projection.kernel_execution_ref:
+            return None
+        try:
+            return self.bridge.recovery_client().inspect(
+                projection.kernel_execution_ref,
+                expected_work_ref=projection.kernel_work_ref,
+            )
+        except KernelRecoveryError:
+            return None
 
     def _kernel_owned(self, effect: EffectRecord) -> bool:
         return (

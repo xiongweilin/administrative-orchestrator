@@ -10,6 +10,7 @@ from .compatibility import HttpKernelContractProbe, KernelCompatibilityError, Ke
 from .evidence import HttpKernelEvidenceClient, KernelEvidenceClient
 from .mapper import capability_for, derive_effect_intent, derive_execution_grant, project_to_kernel
 from .models import KernelProjectionStatus, KernelShadowProjection
+from .recovery import HttpKernelRecoveryClient, KernelRecoveryClient
 from .repository import KernelBridgeRepository
 
 # Physical execution ownership is capability-scoped. HRIS proved the first
@@ -41,6 +42,7 @@ class KernelExecutionBridge:
         compatibility: KernelContractIdentity | None = None,
         client: KernelResponsibilityClient | None = None,
         evidence_client: KernelEvidenceClient | None = None,
+        recovery_client: KernelRecoveryClient | None = None,
     ) -> None:
         self.store = store
         self.settings = settings or get_settings()
@@ -48,6 +50,7 @@ class KernelExecutionBridge:
         self._compatibility = compatibility
         self._client = client
         self._evidence_client = evidence_client
+        self._recovery_client = recovery_client
 
     @property
     def enabled(self) -> bool:
@@ -81,6 +84,7 @@ class KernelExecutionBridge:
                 timeout_seconds=self.settings.kernel_contract_timeout_seconds,
                 require_work_admission=self.requires_work_admission,
                 require_domain_effect_execution=self.cutover,
+                require_domain_effect_recovery=self.cutover,
                 require_domain_effect_evidence=self.cutover,
             ).fetch_identity()
         if (
@@ -93,6 +97,13 @@ class KernelExecutionBridge:
         if self.cutover and self._compatibility.bounded_domain_effect_execution_contract is None:
             raise KernelCompatibilityError(
                 "kernel cutover is fail-closed without bounded-domain-effect-execution-v1"
+            )
+        if self.cutover and (
+            self._compatibility.bounded_domain_effect_recovery_contract is None
+            or self._compatibility.bounded_domain_effect_resolution_view is None
+        ):
+            raise KernelCompatibilityError(
+                "kernel cutover is fail-closed without bounded-domain-effect recovery/resolution v1"
             )
         if self.cutover and self._compatibility.domain_effect_verification_evidence_view is None:
             raise KernelCompatibilityError(
@@ -115,6 +126,14 @@ class KernelExecutionBridge:
                 timeout_seconds=self.settings.kernel_contract_timeout_seconds,
             )
         return self._evidence_client
+
+    def recovery_client(self) -> KernelRecoveryClient:
+        if self._recovery_client is None:
+            self._recovery_client = HttpKernelRecoveryClient(
+                self.settings.kernel_base_url,
+                timeout_seconds=self.settings.kernel_contract_timeout_seconds,
+            )
+        return self._recovery_client
 
     def prepare(
         self,
@@ -162,7 +181,8 @@ class KernelExecutionBridge:
         if projection.kernel_execution_status is not None:
             # A non-completed receipt is still a durable execution fact. Never
             # redispatch through either Kernel or the legacy provider merely
-            # because the business obligation remains unresolved.
+            # because the business obligation remains unresolved. Recovery, if
+            # eligible, is a separate Kernel-owned authority path.
             return projection
         if not self.settings.external_effects_enabled:
             # Projection and Work admission may proceed while global physical
