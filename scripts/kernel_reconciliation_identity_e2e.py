@@ -14,6 +14,9 @@ from portable_runtime.governance.dispatch import DISPATCH_COMMIT_EVENT
 from portable_runtime.governance.provider_execution_binding import (
     provider_execution_binding_from_dispatch,
 )
+from portable_runtime.responsibility.domain_effect_authorization import (
+    ADMINISTRATIVE_HRIS_EMPLOYEE_CREATE,
+)
 from portable_runtime.stores.invocation_specification import (
     InvocationSpecificationSQLiteStateStore,
 )
@@ -22,9 +25,6 @@ from kernel_cutover_stack import (
     IAM_CAPABILITY,
     SandboxAdministrativeProvider,
     _repeat_safe_reconciliation,
-)
-from portable_runtime.responsibility.domain_effect_authorization import (
-    ADMINISTRATIVE_HRIS_EMPLOYEE_CREATE,
 )
 
 
