@@ -9,7 +9,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 DEFAULT_KERNEL_RESPONSIBILITY_ADMISSION_POLICY_REF = (
     "responsibility-admission:administrative-public@2"
 )
-SUPPORTED_KERNEL_REVISION = "0233ba4e576b60a0702637bd93c764df9b0848d5"
+SUPPORTED_KERNEL_REVISION = "fe4b3f4bf2e376bd7105caf7d15d77e2483c7197"
 
 
 class Settings(BaseSettings):
