@@ -12,6 +12,7 @@ from administrative_orchestrator.kernel_state_dr import (
 
 
 def backup(source: Path, destination: Path) -> None:
+    destination.parent.mkdir(parents=True, exist_ok=True)
     backup_kernel_state(source, destination)
 
 
@@ -20,6 +21,7 @@ def verify(path: Path) -> None:
 
 
 def restore(source_backup: Path, destination: Path) -> None:
+    destination.parent.mkdir(parents=True, exist_ok=True)
     restore_kernel_state(source_backup, destination)
 
 
@@ -47,12 +49,14 @@ def main() -> int:
     args = parser.parse_args()
     try:
         if args.command == "backup":
+            args.destination.parent.mkdir(parents=True, exist_ok=True)
             digest = backup_kernel_state(args.source, args.destination)
             print(f"kernel state backup ready sha256={digest}")
         elif args.command == "verify":
             digest = verify_kernel_state_backup(args.backup)
             print(f"kernel state backup verified sha256={digest}")
         else:
+            args.destination.parent.mkdir(parents=True, exist_ok=True)
             digest = restore_kernel_state(args.backup, args.destination, force=args.force)
             print(f"kernel state restored from verified backup sha256={digest}")
     except KernelStateRecoveryError as exc:
