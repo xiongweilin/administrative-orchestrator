@@ -2,21 +2,8 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Any
 
 import httpx
-from administrative_orchestrator.config import get_settings
-from administrative_orchestrator.integrations.credentials import CredentialRef
-from administrative_orchestrator.integrations.production_effects import (
-    ConnectorResult,
-    ConnectorStatus,
-    KeycloakEffectConnection,
-    KeycloakIdentityEffectConnector,
-    KeycloakIdentityVerifier,
-    OdooEffectConnection,
-    OdooEmployeeEffectConnector,
-    OdooEmployeeVerifier,
-)
 from portable_runtime.core.capabilities import (
     CapabilityRequest,
     CapabilityResult,
@@ -26,7 +13,9 @@ from portable_runtime.core.capabilities import (
 )
 from portable_runtime.core.capability_contract import CapabilityContract, CapabilityContractRegistry
 from portable_runtime.core.provider_semantics import ProviderSemanticContract
-from portable_runtime.core.reconciliation_repeatability import ReconciliationRepeatabilityConfiguration
+from portable_runtime.core.reconciliation_repeatability import (
+    ReconciliationRepeatabilityConfiguration,
+)
 from portable_runtime.core.registry import ProviderRegistry
 from portable_runtime.core.reliability import ReliabilityControls
 from portable_runtime.core.runtime import Runtime
@@ -43,6 +32,19 @@ from portable_runtime.responsibility.domain_effect_verified_outcome import (
 )
 from portable_runtime.stores.bounded_domain_effect_recovery import (
     BoundedDomainEffectRecoverySQLiteStateStore,
+)
+
+from administrative_orchestrator.config import get_settings
+from administrative_orchestrator.integrations.credentials import CredentialRef
+from administrative_orchestrator.integrations.production_effects import (
+    ConnectorResult,
+    ConnectorStatus,
+    KeycloakEffectConnection,
+    KeycloakIdentityEffectConnector,
+    KeycloakIdentityVerifier,
+    OdooEffectConnection,
+    OdooEmployeeEffectConnector,
+    OdooEmployeeVerifier,
 )
 
 IAM_CAPABILITY = "administrative.iam.identity.create.v1"
@@ -204,7 +206,11 @@ class ProductionReadbackVerifier:
         return None
 
 
-def _capability_result(request_id: str, provider_id: str, result: ConnectorResult) -> CapabilityResult:
+def _capability_result(
+    request_id: str,
+    provider_id: str,
+    result: ConnectorResult,
+) -> CapabilityResult:
     if result.status is ConnectorStatus.SUCCEEDED:
         return CapabilityResult(
             request_id=request_id,
@@ -363,8 +369,12 @@ def build() -> tuple[Runtime, BoundedDomainEffectExecutionService]:
     for provider, configured_name, repeatability in registrations:
         registry.register(
             provider,
-            configured_execution_identity=f"configured:administrative-production:{configured_name}",
-            authoritative_configuration_ref=f"config:administrative-production:{configured_name}:v1",
+            configured_execution_identity=(
+                f"configured:administrative-production:{configured_name}"
+            ),
+            authoritative_configuration_ref=(
+                f"config:administrative-production:{configured_name}:v1"
+            ),
             reconciliation_repeatability=repeatability,
         )
 
