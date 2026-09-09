@@ -6,6 +6,7 @@ EXPECTED_RUNTIME_PROTOCOL = "2.0"
 EXPECTED_PERSISTENT_RESPONSIBILITY = "persistent-responsibility-v1"
 EXPECTED_DOMAIN_RESPONSIBILITY_PROPOSAL = "domain-responsibility-proposal-v1"
 EXPECTED_RESPONSIBILITY_WORK_ADMISSION = "responsibility-work-admission-v1"
+EXPECTED_BOUNDED_DOMAIN_EFFECT_EXECUTION = "bounded-domain-effect-execution-v1"
 
 
 class KernelCompatibilityError(RuntimeError):
@@ -20,12 +21,14 @@ class KernelContractIdentity:
     persistent_responsibility_contract: str
     domain_responsibility_proposal_contract: str
     responsibility_work_admission_contract: str | None = None
+    bounded_domain_effect_execution_contract: str | None = None
 
 
 def validate_kernel_catalog(
     raw: dict[str, object],
     *,
     require_work_admission: bool = False,
+    require_domain_effect_execution: bool = False,
 ) -> KernelContractIdentity:
     try:
         contracts = raw["contracts"]
@@ -45,6 +48,12 @@ def validate_kernel_catalog(
             if not isinstance(work_admission, dict):
                 raise TypeError("responsibility_work_admission must be an object")
             work_admission_contract = str(work_admission["current"])
+        execution_contract: str | None = None
+        bounded_execution = contracts.get("bounded_domain_effect_execution")
+        if bounded_execution is not None:
+            if not isinstance(bounded_execution, dict):
+                raise TypeError("bounded_domain_effect_execution must be an object")
+            execution_contract = str(bounded_execution["current"])
         identity = KernelContractIdentity(
             catalog_version=str(raw["catalog_version"]),
             owner=str(raw["owner"]),
@@ -52,6 +61,7 @@ def validate_kernel_catalog(
             persistent_responsibility_contract=str(persistent),
             domain_responsibility_proposal_contract=str(domain_proposal),
             responsibility_work_admission_contract=work_admission_contract,
+            bounded_domain_effect_execution_contract=execution_contract,
         )
     except (KeyError, TypeError, ValueError) as exc:
         raise KernelCompatibilityError("kernel contract catalog is structurally incomplete") from exc
@@ -93,13 +103,32 @@ def validate_kernel_catalog(
             f"expected {EXPECTED_RESPONSIBILITY_WORK_ADMISSION!r}"
         )
     if (
+        identity.bounded_domain_effect_execution_contract is not None
+        and identity.bounded_domain_effect_execution_contract
+        != EXPECTED_BOUNDED_DOMAIN_EFFECT_EXECUTION
+    ):
+        mismatches.append(
+            "bounded_domain_effect_execution="
+            f"{identity.bounded_domain_effect_execution_contract!r}, "
+            f"expected {EXPECTED_BOUNDED_DOMAIN_EFFECT_EXECUTION!r}"
+        )
+    if (
         require_work_admission
         and identity.responsibility_work_admission_contract
         != EXPECTED_RESPONSIBILITY_WORK_ADMISSION
     ):
         mismatches.append(
-            "responsibility_work_admission is required for admission mode: "
+            "responsibility_work_admission is required for admission/cutover mode: "
             f"expected {EXPECTED_RESPONSIBILITY_WORK_ADMISSION!r}"
+        )
+    if (
+        require_domain_effect_execution
+        and identity.bounded_domain_effect_execution_contract
+        != EXPECTED_BOUNDED_DOMAIN_EFFECT_EXECUTION
+    ):
+        mismatches.append(
+            "bounded_domain_effect_execution is required for cutover mode: "
+            f"expected {EXPECTED_BOUNDED_DOMAIN_EFFECT_EXECUTION!r}"
         )
     if mismatches:
         raise KernelCompatibilityError("incompatible agent-kernel contracts: " + "; ".join(mismatches))
@@ -113,10 +142,12 @@ class HttpKernelContractProbe:
         *,
         timeout_seconds: float = 3.0,
         require_work_admission: bool = False,
+        require_domain_effect_execution: bool = False,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.timeout_seconds = timeout_seconds
         self.require_work_admission = require_work_admission
+        self.require_domain_effect_execution = require_domain_effect_execution
 
     def fetch_identity(self) -> KernelContractIdentity:
         import httpx
@@ -135,10 +166,12 @@ class HttpKernelContractProbe:
         return validate_kernel_catalog(
             payload,
             require_work_admission=self.require_work_admission,
+            require_domain_effect_execution=self.require_domain_effect_execution,
         )
 
 
 __all__ = [
+    "EXPECTED_BOUNDED_DOMAIN_EFFECT_EXECUTION",
     "EXPECTED_CATALOG_VERSION",
     "EXPECTED_DOMAIN_RESPONSIBILITY_PROPOSAL",
     "EXPECTED_OWNER",
