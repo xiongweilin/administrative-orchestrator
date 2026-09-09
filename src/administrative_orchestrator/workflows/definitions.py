@@ -7,7 +7,9 @@ from dbos import DBOS
 
 from ..config import get_settings
 from ..domain import CaseStatus
-from ..effect_provider import HttpEffectProvider
+from ..effect_provider import EffectProvider, HttpEffectProvider
+from ..integrations.kernel.bridge import KernelExecutionBridge
+from ..integrations.kernel.effect_provider import KernelCutoverEffectProvider
 from ..integrations.kernel.onboarding import prepare_onboarding_kernel_shadow
 from ..onboarding_execution import OnboardingExecutionEngine
 from ..persistence import SqlStore
@@ -28,13 +30,13 @@ TERMINAL_STATUSES = frozenset(
 
 @DBOS.step(name="administrative_drive_onboarding_case")
 def drive_onboarding_case_step(case_id: str) -> dict[str, Any]:
-    """Drive the existing business state machine once.
+    """Drive one durable business transition with capability-scoped reality ownership.
 
-    Stage 2 may first project current governed obligations into Agent Kernel
-    public responsibility contracts. Shadow projection is non-executing. The
-    legacy provider remains the sole physical path until an explicit Kernel
-    cutover is implemented; cutover mode itself fails closed rather than
-    silently falling back here.
+    Kernel shadow/admission remains non-physical. In cutover mode the bridge may
+    execute only explicitly owned capabilities, subject to the global physical
+    effects gate. The provider adapter then consumes those durable Kernel facts
+    and structurally forbids local execute/read-back fallback for the same
+    capability, while non-owned capabilities remain on the legacy provider.
     """
     settings = get_settings()
     store = SqlStore(settings.worker_database_url or settings.database_url)
@@ -48,8 +50,10 @@ def drive_onboarding_case_step(case_id: str) -> dict[str, Any]:
         CaseStatus.VERIFYING,
         CaseStatus.RECONCILING,
     }:
+        bridge: KernelExecutionBridge | None = None
         if settings.kernel_bridge_mode != "disabled":
-            prepare_onboarding_kernel_shadow(store, UUID(case_id))
+            bridge = KernelExecutionBridge(store, settings=settings)
+            prepare_onboarding_kernel_shadow(store, UUID(case_id), bridge=bridge)
 
         if not settings.external_effects_enabled:
             return {
@@ -59,10 +63,12 @@ def drive_onboarding_case_step(case_id: str) -> dict[str, Any]:
                 "authority_epoch": case.authority_epoch,
                 "reason": "external_effects_disabled",
             }
-        provider = HttpEffectProvider(
+        provider: EffectProvider = HttpEffectProvider(
             settings.sandbox_base_url,
             timeout_seconds=settings.provider_timeout_seconds,
         )
+        if bridge is not None and bridge.cutover:
+            provider = KernelCutoverEffectProvider(provider, bridge)
         case = OnboardingExecutionEngine(store, provider).run(UUID(case_id))
 
     return {
