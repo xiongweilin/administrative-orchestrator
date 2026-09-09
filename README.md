@@ -123,7 +123,7 @@ The M5 implementation now includes:
 The supported Agent Kernel revision is currently:
 
 ```text
-0233ba4e576b60a0702637bd93c764df9b0848d5
+fe4b3f4bf2e376bd7105caf7d15d77e2483c7197
 ```
 
 M5 has an explicit acceptance boundary: repository CI can prove code, migration, restart, cut-over, DR, ambiguity semantics, and static/security quality gates, but it cannot truthfully prove enterprise OIDC/Odoo/Keycloak credentials or network policy without real staging systems. The correct milestone status is therefore **repository implementation/CI complete; real-staging acceptance pending until the external checklist is executed**.
