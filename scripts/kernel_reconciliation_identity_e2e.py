@@ -5,13 +5,10 @@ import os
 from pathlib import Path
 
 import httpx
-from kernel_cutover_stack import (
-    IAM_CAPABILITY,
-    SandboxAdministrativeProvider,
-    _repeat_safe_reconciliation,
-)
+from kernel_cutover_stack import IAM_CAPABILITY, SandboxAdministrativeProvider
 from portable_runtime.core.models import Event
 from portable_runtime.core.reconciliation_repeatability import (
+    ReconciliationRepeatabilityConfiguration,
     reconciliation_repeatability_authority_from_dispatch,
 )
 from portable_runtime.core.registry import ProviderRegistry
@@ -64,6 +61,15 @@ def _effect_dispatches(store: InvocationSpecificationSQLiteStateStore) -> list[E
     if not events:
         raise AssertionError("Kernel state contains no Administrative effect dispatches")
     return events
+
+
+def _repeat_safe_reconciliation() -> ReconciliationRepeatabilityConfiguration:
+    return ReconciliationRepeatabilityConfiguration(
+        reconciliation_protocol_identity="administrative-sandbox-request-readback",
+        reconciliation_protocol_version="1",
+        repeatability_mode="repeat-safe",
+        contract_version="1",
+    )
 
 
 def _fresh_registry(provider_id: str) -> tuple[ProviderRegistry, SandboxAdministrativeProvider]:
