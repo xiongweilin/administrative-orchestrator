@@ -357,7 +357,7 @@ def test_kernel_hris_completion_cannot_discharge_case_before_iam_is_confirmed() 
     assert legacy.execute_targets == ["github"]
 
 
-def test_kernel_completed_with_different_reality_cannot_discharge_admin_obligation() -> None:
+def test_kernel_completed_with_different_reality_requires_reopen_without_discharge() -> None:
     store = SqlStore("sqlite+pysqlite:///:memory:")
     store.init_schema()
     authorized = _authorized_case(store)
@@ -388,7 +388,7 @@ def test_kernel_completed_with_different_reality_cannot_discharge_admin_obligati
 
     result = engine.run(authorized.case_id)
 
-    assert result.status is CaseStatus.RECONCILING
+    assert result.status is CaseStatus.REOPEN_REQUIRED
     outcomes = ExecutionRepository(store).list_outcomes(
         result.case_id,
         result.authority_epoch,
