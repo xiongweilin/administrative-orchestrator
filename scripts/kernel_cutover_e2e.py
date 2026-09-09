@@ -27,6 +27,7 @@ from administrative_orchestrator.integrations.kernel.bridge import KernelExecuti
 from administrative_orchestrator.integrations.kernel.effect_provider import (
     KernelCutoverEffectProvider,
 )
+from administrative_orchestrator.integrations.kernel.mapper import capability_for
 from administrative_orchestrator.integrations.kernel.models import KernelProjectionStatus
 from administrative_orchestrator.obligations import AdministrativeObligation
 from administrative_orchestrator.persistence import SqlStore
@@ -52,7 +53,27 @@ class ForbiddenFallbackProvider:
         raise AssertionError("legacy Administrative observe fallback was invoked")
 
 
-def _inputs(now: datetime) -> tuple[AdministrativeCase, GovernanceBasis, AdministrativeObligation]:
+def _install_kernel_http_error_diagnostics(kernel_base_url: str) -> None:
+    """Expose trusted local Kernel problem details when this CI harness fails."""
+
+    original_post = httpx.post
+
+    def diagnostic_post(url, *args, **kwargs):
+        response = original_post(url, *args, **kwargs)
+        if response.status_code >= 400 and str(url).startswith(kernel_base_url):
+            print(
+                "kernel_http_error "
+                f"status={response.status_code} url={url} body={response.text}",
+                flush=True,
+            )
+        return response
+
+    httpx.post = diagnostic_post
+
+
+def _inputs(
+    now: datetime,
+) -> tuple[AdministrativeCase, GovernanceBasis, tuple[AdministrativeObligation, ...]]:
     case_id = uuid4()
     governance_id = uuid4()
     approval_id = uuid4()
@@ -103,32 +124,73 @@ def _inputs(now: datetime) -> tuple[AdministrativeCase, GovernanceBasis, Adminis
         basis_digest="cross-repo-e2e-basis-digest",
         created_at=now,
     )
-    obligation = AdministrativeObligation(
-        obligation_id=uuid4(),
-        case_id=case_id,
-        authority_epoch=case.authority_epoch,
-        governance_basis_id=governance_id,
-        kind="hris.employee.create",
-        subject_ref=case.subject_ref,
-        target_system="hris",
-        required_operation="employee.create",
-        expected_postcondition={
-            "target_system": "hris",
-            "operation": "employee.create",
-            "subject_ref": case.subject_ref,
-            "active": True,
-            "payload": facts,
-        },
-        authority_class=AuthorityClass.EMPLOYMENT,
+
+    def obligation(
+        *,
+        target_system: str,
+        operation: str,
+        authority_class: AuthorityClass,
+    ) -> AdministrativeObligation:
+        return AdministrativeObligation(
+            obligation_id=uuid4(),
+            case_id=case_id,
+            authority_epoch=case.authority_epoch,
+            governance_basis_id=governance_id,
+            kind=f"{target_system}.{operation}",
+            subject_ref=case.subject_ref,
+            target_system=target_system,
+            required_operation=operation,
+            expected_postcondition={
+                "target_system": target_system,
+                "operation": operation,
+                "subject_ref": case.subject_ref,
+                "active": True,
+                "payload": facts,
+            },
+            authority_class=authority_class,
+        )
+
+    obligations = (
+        obligation(
+            target_system="hris",
+            operation="employee.create",
+            authority_class=AuthorityClass.EMPLOYMENT,
+        ),
+        obligation(
+            target_system="iam",
+            operation="identity.create",
+            authority_class=AuthorityClass.PRIVILEGED_ACCESS,
+        ),
     )
-    return case, governance, obligation
+    return case, governance, obligations
+
+
+def _assert_kernel_lineage(projection, *, capability: str) -> None:
+    if projection.status is not KernelProjectionStatus.CUTOVER:
+        raise AssertionError(f"{capability}: expected CUTOVER projection, got {projection.status.value}")
+    if projection.kernel_execution_status is None or projection.kernel_execution_status.value != "completed":
+        raise AssertionError(f"{capability}: Kernel cutover did not persist completed bounded execution")
+    required_refs = {
+        "run": projection.kernel_run_ref,
+        "request": projection.kernel_request_ref,
+        "authorization": projection.kernel_authorization_ref,
+        "provider": projection.kernel_provider_id,
+        "action": projection.kernel_action_ref,
+        "outcome": projection.kernel_outcome_ref,
+        "evidence": projection.kernel_evidence_ref,
+        "responsibility": projection.kernel_execution_responsibility_ref,
+    }
+    missing = [name for name, value in required_refs.items() if not value]
+    if missing:
+        raise AssertionError(f"{capability}: Kernel completed receipt lacks lineage: " + ", ".join(missing))
 
 
 def main() -> None:
     kernel_base_url = os.getenv("ADMIN_KERNEL_BASE_URL", "http://127.0.0.1:8020").rstrip("/")
     sandbox_base_url = os.getenv("ADMIN_SANDBOX_BASE_URL", "http://127.0.0.1:8010").rstrip("/")
+    _install_kernel_http_error_diagnostics(kernel_base_url)
     now = datetime.now(UTC)
-    case, governance, obligation = _inputs(now)
+    case, governance, obligations = _inputs(now)
 
     store = SqlStore("sqlite+pysqlite:///:memory:")
     store.init_schema()
@@ -139,80 +201,67 @@ def main() -> None:
         external_effects_enabled=True,
     )
     bridge = KernelExecutionBridge(store, settings=settings)
-
-    first = bridge.prepare(case, obligation, governance)
-    second = bridge.prepare(case, obligation, governance)
-    if first is None or second is None:
-        raise AssertionError("Kernel cutover did not create a durable Administrative projection")
-    if first.status is not KernelProjectionStatus.CUTOVER:
-        raise AssertionError(f"expected CUTOVER projection, got {first.status.value}")
-    if second != first:
-        raise AssertionError("Kernel cutover replay changed the durable execution projection")
-    if first.kernel_execution_status is None or first.kernel_execution_status.value != "completed":
-        raise AssertionError("Kernel cutover did not persist completed bounded execution")
-    required_refs = {
-        "run": first.kernel_run_ref,
-        "request": first.kernel_request_ref,
-        "authorization": first.kernel_authorization_ref,
-        "provider": first.kernel_provider_id,
-        "action": first.kernel_action_ref,
-        "outcome": first.kernel_outcome_ref,
-        "evidence": first.kernel_evidence_ref,
-        "responsibility": first.kernel_execution_responsibility_ref,
-    }
-    missing = [name for name, value in required_refs.items() if not value]
-    if missing:
-        raise AssertionError("Kernel completed receipt lacks lineage: " + ", ".join(missing))
-
-    effect_id = sandbox_effect_id(
-        "administrative.hris.employee.create.v1",
-        obligation.subject_ref,
-    )
-    response = httpx.get(f"{sandbox_base_url}/v1/effects/{effect_id}", timeout=5.0)
-    response.raise_for_status()
-    observed = response.json()
-    if observed.get("state") != obligation.expected_postcondition:
-        raise AssertionError("authoritative sandbox reality does not match the frozen postcondition")
-
     trap = ForbiddenFallbackProvider()
     provider = KernelCutoverEffectProvider(trap, bridge)
-    effect = EffectRecord(
-        case_id=case.case_id,
-        case_version=case.version,
-        authority_epoch=case.authority_epoch,
-        authorization_id=uuid4(),
-        obligation_id=obligation.obligation_id,
-        governance_basis_id=governance.basis_id,
-        target_system=obligation.target_system,
-        operation=obligation.required_operation,
-        subject_ref=obligation.subject_ref,
-        reversibility=EffectReversibility.CORRECTABLE,
-        authority_class=obligation.authority_class,
-        created_at=now,
-        updated_at=now,
-    )
-    execution = provider.execute(effect, dict(case.fact_snapshot.facts))
-    if execution.status is not ProviderExecutionStatus.SUCCEEDED:
-        raise AssertionError(f"Admin Kernel projection did not surface success: {execution.status}")
-    observation = provider.observe(effect)
-    verification = verify_onboarding_observation(
-        effect,
-        observation,
-        expected_postcondition=obligation.expected_postcondition,
-    )
-    if verification.disposition is not VerificationDisposition.VERIFIED:
-        raise AssertionError(
-            "Admin semantic verification rejected Kernel-confirmed outcome: "
-            + verification.reason
+
+    summaries: list[str] = []
+    for obligation in obligations:
+        capability = capability_for(obligation)
+        first = bridge.prepare(case, obligation, governance)
+        second = bridge.prepare(case, obligation, governance)
+        if first is None or second is None:
+            raise AssertionError(f"{capability}: Kernel cutover did not create a durable projection")
+        if second != first:
+            raise AssertionError(f"{capability}: replay changed the durable execution projection")
+        _assert_kernel_lineage(first, capability=capability)
+
+        effect_id = sandbox_effect_id(capability, obligation.subject_ref)
+        response = httpx.get(f"{sandbox_base_url}/v1/effects/{effect_id}", timeout=5.0)
+        response.raise_for_status()
+        observed = response.json()
+        if observed.get("state") != obligation.expected_postcondition:
+            raise AssertionError(f"{capability}: sandbox reality does not match frozen postcondition")
+
+        effect = EffectRecord(
+            case_id=case.case_id,
+            case_version=case.version,
+            authority_epoch=case.authority_epoch,
+            authorization_id=uuid4(),
+            obligation_id=obligation.obligation_id,
+            governance_basis_id=governance.basis_id,
+            target_system=obligation.target_system,
+            operation=obligation.required_operation,
+            subject_ref=obligation.subject_ref,
+            reversibility=EffectReversibility.CORRECTABLE,
+            authority_class=obligation.authority_class,
+            created_at=now,
+            updated_at=now,
         )
+        execution = provider.execute(effect, dict(case.fact_snapshot.facts))
+        if execution.status is not ProviderExecutionStatus.SUCCEEDED:
+            raise AssertionError(f"{capability}: Admin Kernel projection did not surface success")
+        observation = provider.observe(effect)
+        verification = verify_onboarding_observation(
+            effect,
+            observation,
+            expected_postcondition=obligation.expected_postcondition,
+        )
+        if verification.disposition is not VerificationDisposition.VERIFIED:
+            raise AssertionError(
+                f"{capability}: Admin semantic verification rejected Kernel-confirmed outcome: "
+                + verification.reason
+            )
+        summaries.append(
+            f"{capability} execution_ref={first.kernel_execution_ref} provider={first.kernel_provider_id}"
+        )
+
     if trap.execute_calls != 0 or trap.observe_calls != 0:
-        raise AssertionError("Kernel-owned HRIS capability touched the legacy provider")
+        raise AssertionError("Kernel-owned HRIS/IAM capabilities touched the legacy provider")
 
     print(
-        "cross-repo HRIS cutover verified: "
-        f"execution_ref={first.kernel_execution_ref} "
-        f"provider={first.kernel_provider_id} "
-        "legacy_execute=0 legacy_observe=0"
+        "cross-repo dual cutover verified: "
+        + " | ".join(summaries)
+        + " | legacy_execute=0 legacy_observe=0"
     )
 
 
