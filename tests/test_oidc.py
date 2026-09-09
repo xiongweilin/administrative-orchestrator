@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import json
 import time
 
 import httpx
@@ -41,6 +43,24 @@ def _token(private, kid: str, *, issuer: str = ISSUER, audience: str = AUDIENCE)
     )
 
 
+def _verifier(*, client: httpx.Client | None = None) -> OidcVerifier:
+    return OidcVerifier(
+        issuer=ISSUER,
+        audience=AUDIENCE,
+        allowed_algorithms=("RS256", "ES256"),
+        jwks_cache_ttl_seconds=300,
+        clock_skew_seconds=30,
+        timeout_seconds=1,
+        client=client,
+    )
+
+
+def _compact_header(value) -> str:
+    raw = json.dumps(value, separators=(",", ":")).encode()
+    protected = base64.urlsafe_b64encode(raw).decode().rstrip("=")
+    return f"{protected}.e30.signature"
+
+
 def test_oidc_verifies_asymmetric_token_and_ignores_authority_claims() -> None:
     private, public_jwk = _material("kid-1")
 
@@ -52,15 +72,7 @@ def test_oidc_verifies_asymmetric_token_and_ignores_authority_claims() -> None:
         return httpx.Response(404)
 
     client = httpx.Client(transport=httpx.MockTransport(handler))
-    verifier = OidcVerifier(
-        issuer=ISSUER,
-        audience=AUDIENCE,
-        allowed_algorithms=("RS256", "ES256"),
-        jwks_cache_ttl_seconds=300,
-        clock_skew_seconds=30,
-        timeout_seconds=1,
-        client=client,
-    )
+    verifier = _verifier(client=client)
 
     claims = verifier.verify(_token(private, "kid-1"))
     assert claims["sub"] == "external:alice"
@@ -68,6 +80,19 @@ def test_oidc_verifies_asymmetric_token_and_ignores_authority_claims() -> None:
     # The verifier returns identity claims only; no Administrative role is
     # materialized by OIDC verification itself.
     assert "decision_role" not in claims
+
+
+def test_oidc_protected_header_parsing_fails_closed_before_claims_are_decoded() -> None:
+    verifier = _verifier()
+
+    for malformed in ("", "not-a-jwt", "@@@.e30.signature", _compact_header(["RS256", "kid"])):
+        with pytest.raises(OidcVerificationError, match="token (header|is empty)"):
+            verifier.verify(malformed)
+
+    with pytest.raises(OidcVerificationError, match="algorithm is not allowed"):
+        verifier.verify(_compact_header({"alg": "none", "kid": "kid-1"}))
+    with pytest.raises(OidcVerificationError, match="kid is required"):
+        verifier.verify(_compact_header({"alg": "RS256"}))
 
 
 def test_unknown_kid_forces_one_jwks_refresh_for_rotation() -> None:
