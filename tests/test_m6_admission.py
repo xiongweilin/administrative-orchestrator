@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 
@@ -13,15 +13,26 @@ from administrative_orchestrator.admission import (
 from administrative_orchestrator.intake.models import (
     CandidateAdministrativeRequest,
     CandidateStatus,
+    IntakeAssessment,
     IntakeDisposition,
     IntakeReceipt,
     IntakeVerificationStatus,
 )
-from administrative_orchestrator.intake.repository import IntakeRepository, PromotionRecordRow
+from administrative_orchestrator.intake.repository import (
+    AssessmentConflict,
+    IntakeRepository,
+    PromotionRecordRow,
+)
 from administrative_orchestrator.persistence import CaseRow, RequestRow, SqlStore
 
 
-def _setup() -> tuple[SqlStore, IntakeRepository, CandidateAdministrativeRequest]:
+def _setup(
+    *,
+    candidate_status: CandidateStatus = CandidateStatus.ACTIVE,
+    include_receipt: bool = True,
+    receipt_status: IntakeVerificationStatus = IntakeVerificationStatus.VERIFIED,
+    receipt_artifact: UUID | None = None,
+) -> tuple[SqlStore, IntakeRepository, CandidateAdministrativeRequest]:
     store = SqlStore("sqlite+pysqlite:///:memory:")
     store.init_schema()
     repository = IntakeRepository(store)
@@ -32,19 +43,36 @@ def _setup() -> tuple[SqlStore, IntakeRepository, CandidateAdministrativeRequest
             candidate_requester="external:actor:1",
             candidate_intent="onboard employee:1",
             source_refs=(uuid4(),),
+            status=candidate_status,
         )
     )
-    repository.persist_intake_receipt(
-        IntakeReceipt(
-            source_system="test-provider",
-            tenant_ref="tenant:test",
-            source_event_id="event:1",
-            verification_status=IntakeVerificationStatus.VERIFIED,
-            artifact_ref=candidate.source_refs[0],
-            delivery_digest="delivery:1",
+    if include_receipt:
+        repository.persist_intake_receipt(
+            IntakeReceipt(
+                source_system="test-provider",
+                tenant_ref="tenant:test",
+                source_event_id="event:1",
+                verification_status=receipt_status,
+                artifact_ref=(
+                    candidate.source_refs[0]
+                    if receipt_artifact is None
+                    else receipt_artifact
+                ),
+                delivery_digest="delivery:1",
+            )
         )
-    )
     return store, repository, candidate
+
+
+def _final_admit(
+    repository: IntakeRepository, candidate: CandidateAdministrativeRequest
+) -> IntakeAssessment:
+    return IntakeAssessmentService(repository).finalize_human(
+        candidate.candidate_id,
+        IntakeDisposition.ADMIT,
+        reviewer_principal_id="principal:reviewer",
+        basis={"reviewed": True},
+    )
 
 
 def test_model_suggestion_cannot_promote() -> None:
@@ -138,4 +166,174 @@ def test_redelivery_with_different_requester_is_rejected() -> None:
             tenant_ref="tenant:test",
             source_event_id="event:1",
             requester_principal_id="principal:other",
+        )
+
+
+def test_assessment_rejects_missing_proof_and_invalid_targets() -> None:
+    _, repository, candidate = _setup()
+    service = IntakeAssessmentService(repository)
+
+    with pytest.raises(AdmissionRejected):
+        service.suggest(uuid4(), IntakeDisposition.ADMIT)
+    with pytest.raises(AdmissionRejected):
+        service.finalize_deterministic(
+            candidate.candidate_id,
+            IntakeDisposition.ADMIT,
+            rule_ref=" ",
+            input_digest="inputs:1",
+        )
+    with pytest.raises(AdmissionRejected):
+        service.finalize_human(
+            candidate.candidate_id,
+            IntakeDisposition.ADMIT,
+            reviewer_principal_id=" ",
+        )
+
+    _, superseded_repository, superseded = _setup(
+        candidate_status=CandidateStatus.SUPERSEDED
+    )
+    with pytest.raises(AdmissionRejected):
+        IntakeAssessmentService(superseded_repository).finalize_human(
+            superseded.candidate_id,
+            IntakeDisposition.ADMIT,
+            reviewer_principal_id="principal:reviewer",
+            basis={"reviewed": True},
+        )
+
+def test_final_assessment_is_idempotent_and_conflicts_are_rejected() -> None:
+    _, repository, candidate = _setup()
+    service = IntakeAssessmentService(repository)
+    first = _final_admit(repository, candidate)
+
+    assert service.finalize_human(
+        candidate.candidate_id,
+        IntakeDisposition.ADMIT,
+        reviewer_principal_id="principal:reviewer",
+        basis={"reviewed": True},
+    ) == first
+
+    with pytest.raises(AssessmentConflict):
+        service.finalize_deterministic(
+            candidate.candidate_id,
+            IntakeDisposition.ADMIT,
+            rule_ref="m6-test-rule-v1",
+            input_digest="inputs:1",
+            basis={"reviewed": True},
+        )
+
+
+def test_promotion_rejects_invalid_context_and_lineage() -> None:
+    store, repository, candidate = _setup()
+    assessment = _final_admit(repository, candidate)
+    service = IntakePromotionService(store, repository)
+
+    with pytest.raises(AdmissionRejected):
+        service.promote(
+            candidate,
+            assessment,
+            source_system="test-provider",
+            tenant_ref="tenant:test",
+            source_event_id="event:1",
+            requester_principal_id=" ",
+        )
+
+    tampered_candidate = candidate.model_copy(
+        update={"candidate_intent": "tampered intent"}
+    )
+    with pytest.raises(AdmissionRejected):
+        service.promote(
+            tampered_candidate,
+            assessment,
+            source_system="test-provider",
+            tenant_ref="tenant:test",
+            source_event_id="event:1",
+            requester_principal_id="principal:requester",
+        )
+
+    tampered_assessment = assessment.model_copy(
+        update={"basis": {"reviewed": "tampered"}}
+    )
+    with pytest.raises(AdmissionRejected):
+        service.promote(
+            candidate,
+            tampered_assessment,
+            source_system="test-provider",
+            tenant_ref="tenant:test",
+            source_event_id="event:1",
+            requester_principal_id="principal:requester",
+        )
+
+
+def test_promotion_rejects_non_active_candidate_and_non_admit_assessment() -> None:
+    admitted_store, admitted_repository, admitted_candidate = _setup(
+        candidate_status=CandidateStatus.ADMITTED
+    )
+    admitted_assessment = _final_admit(admitted_repository, admitted_candidate)
+    with pytest.raises(AdmissionRejected):
+        IntakePromotionService(admitted_store, admitted_repository).promote(
+            admitted_candidate,
+            admitted_assessment,
+            source_system="test-provider",
+            tenant_ref="tenant:test",
+            source_event_id="event:1",
+            requester_principal_id="principal:requester",
+        )
+
+    clarification_store, clarification_repository, clarification_candidate = _setup()
+    clarification = IntakeAssessmentService(clarification_repository).finalize_human(
+        clarification_candidate.candidate_id,
+        IntakeDisposition.NEEDS_CLARIFICATION,
+        reviewer_principal_id="principal:reviewer",
+        basis={"reviewed": True},
+    )
+    with pytest.raises(AdmissionRejected):
+        IntakePromotionService(clarification_store, clarification_repository).promote(
+            clarification_candidate,
+            clarification,
+            source_system="test-provider",
+            tenant_ref="tenant:test",
+            source_event_id="event:1",
+            requester_principal_id="principal:requester",
+        )
+
+
+def test_promotion_requires_verified_receipt_and_matching_artifact() -> None:
+    missing_store, missing_repository, missing_candidate = _setup(include_receipt=False)
+    missing_assessment = _final_admit(missing_repository, missing_candidate)
+    with pytest.raises(AdmissionRejected):
+        IntakePromotionService(missing_store, missing_repository).promote(
+            missing_candidate,
+            missing_assessment,
+            source_system="test-provider",
+            tenant_ref="tenant:test",
+            source_event_id="event:1",
+            requester_principal_id="principal:requester",
+        )
+
+    pending_store, pending_repository, pending_candidate = _setup(
+        receipt_status=IntakeVerificationStatus.PENDING
+    )
+    pending_assessment = _final_admit(pending_repository, pending_candidate)
+    with pytest.raises(AdmissionRejected):
+        IntakePromotionService(pending_store, pending_repository).promote(
+            pending_candidate,
+            pending_assessment,
+            source_system="test-provider",
+            tenant_ref="tenant:test",
+            source_event_id="event:1",
+            requester_principal_id="principal:requester",
+        )
+
+    mismatch_store, mismatch_repository, mismatch_candidate = _setup(
+        receipt_artifact=uuid4()
+    )
+    mismatch_assessment = _final_admit(mismatch_repository, mismatch_candidate)
+    with pytest.raises(AdmissionRejected):
+        IntakePromotionService(mismatch_store, mismatch_repository).promote(
+            mismatch_candidate,
+            mismatch_assessment,
+            source_system="test-provider",
+            tenant_ref="tenant:test",
+            source_event_id="event:1",
+            requester_principal_id="principal:requester",
         )
