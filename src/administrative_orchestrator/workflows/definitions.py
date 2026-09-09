@@ -12,6 +12,7 @@ from ..fact_acquisition import AuthoritativeFactRevalidator, build_hris_source
 from ..integrations.kernel.bridge import KernelExecutionBridge
 from ..integrations.kernel.effect_provider import KernelCutoverEffectProvider
 from ..integrations.kernel.onboarding import prepare_onboarding_kernel_shadow
+from ..observability import record_governance_revalidation
 from ..onboarding_execution import OnboardingExecutionEngine
 from ..persistence import SqlStore
 from ..service import require_reopen
@@ -55,6 +56,7 @@ def drive_onboarding_case_step(case_id: str) -> dict[str, Any]:
                 hris_source,
                 max_age_seconds=settings.authoritative_fact_max_age_seconds,
             ).validate(case)
+            record_governance_revalidation(valid=fact_validation.valid)
             if not fact_validation.valid:
                 reopened = require_reopen(case, ReopenReason.GOVERNANCE_STALE)
                 store.update_case(
