@@ -250,6 +250,11 @@ jobs:
           curl --fail --silent http://127.0.0.1:8020/v1/contracts >/dev/null
 
           uv run python scripts/kernel_pre_receipt_restart_e2e.py phase2
+      - name: Prove durable reconciliation identity survives fresh provider process
+        env:
+          ADMIN_SANDBOX_BASE_URL: http://127.0.0.1:8010
+          PORTABLE_RUNTIME_ADMIN_E2E_STATE_PATH: ./kernel-cutover-kernel.db
+        run: uv run python scripts/kernel_reconciliation_identity_e2e.py
       - name: Cross-repo service logs
         if: failure()
         run: |
