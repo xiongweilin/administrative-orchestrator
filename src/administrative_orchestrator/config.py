@@ -110,7 +110,7 @@ class Settings(BaseSettings):
             self.kernel_responsibility_admission_policy_ref.strip()
         ):
             raise ValueError(
-                "kernel_responsibility_admission_policy_ref is required in admission/cutover mode"
+                "kernel_responsibility_admission_policy_ref is required in admission mode and cutover mode"
             )
         if self.runtime_profile == "production":
             if self.auth_mode != "oidc":
