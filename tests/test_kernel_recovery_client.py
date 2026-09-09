@@ -86,6 +86,35 @@ def test_recovery_client_submits_only_historical_execution_identity(
     }
 
 
+def test_resolution_inspection_returns_current_resolution_and_preserves_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: dict[str, object] = {}
+
+    def fake_get(url: str, *, timeout: float):
+        seen.update({"url": url, "timeout": timeout})
+        return StubResponse(_resolution_payload())
+
+    monkeypatch.setattr(httpx, "get", fake_get)
+    client = HttpKernelRecoveryClient("http://kernel.test/", timeout_seconds=2.5)
+
+    resolution = client.inspect(
+        "execution:kernel:1",
+        expected_work_ref="work:kernel:1",
+    )
+
+    assert resolution is not None
+    assert resolution.current_status == "recovered-completed"
+    assert resolution.recovery_application_ref == "recovery-application:kernel:1"
+    assert seen == {
+        "url": (
+            "http://kernel.test/v1/domain-effects/executions/"
+            "execution:kernel:1/resolution"
+        ),
+        "timeout": 2.5,
+    }
+
+
 def test_resolution_inspection_returns_none_only_for_unknown_execution(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -97,6 +126,33 @@ def test_resolution_inspection_returns_none_only_for_unknown_execution(
     client = HttpKernelRecoveryClient("http://kernel.test")
 
     assert client.inspect("execution:missing") is None
+
+
+def test_recovery_transport_and_empty_identity_fail_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = HttpKernelRecoveryClient("http://kernel.test")
+
+    with pytest.raises(KernelRecoveryError, match="requires execution_ref"):
+        client.recover("   ")
+    with pytest.raises(KernelRecoveryError, match="inspection requires execution_ref"):
+        client.inspect("")
+
+    monkeypatch.setattr(
+        httpx,
+        "post",
+        lambda *args, **kwargs: StubResponse({}, status_code=503),
+    )
+    with pytest.raises(KernelRecoveryError, match="recovery request failed"):
+        client.recover("execution:kernel:1")
+
+    monkeypatch.setattr(
+        httpx,
+        "get",
+        lambda *args, **kwargs: StubResponse({}, status_code=503),
+    )
+    with pytest.raises(KernelRecoveryError, match="resolution inspection failed"):
+        client.inspect("execution:kernel:1")
 
 
 def test_recovery_client_rejects_authority_schema_identity_and_incomplete_completion(
@@ -112,6 +168,8 @@ def test_recovery_client_rejects_authority_schema_identity_and_incomplete_comple
         ({**payload, "work_ref": "work:rebound"}, "Work identity rebound"),
         ({**payload, "current_status": "retry-approved"}, "unknown recovery status"),
         ({**payload, "evidence_ref": None}, "lacks refs"),
+        ({**payload, "processed_at": "not-a-date"}, "processed_at is invalid"),
+        ({**payload, "reason": None}, "reason must be a string"),
     )
     for raw, message in cases:
         monkeypatch.setattr(
