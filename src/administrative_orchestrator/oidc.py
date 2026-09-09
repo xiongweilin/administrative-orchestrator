@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import base64
+import binascii
+import json
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -59,10 +62,7 @@ class OidcVerifier:
     def verify(self, token: str) -> dict[str, Any]:
         if not token:
             raise OidcVerificationError("OIDC token is empty")
-        try:
-            header = jwt.get_unverified_header(token)
-        except jwt.PyJWTError as exc:
-            raise OidcVerificationError("OIDC token header is invalid") from exc
+        header = _parse_protected_header(token)
 
         algorithm = header.get("alg")
         key_id = header.get("kid")
@@ -163,6 +163,29 @@ class OidcVerifier:
         if not isinstance(raw, dict):
             raise OidcVerificationError("OIDC endpoint must return a JSON object")
         return raw
+
+
+def _parse_protected_header(token: str) -> dict[str, Any]:
+    """Parse only the compact-JWS protected header; claims are never decoded here.
+
+    The header is untrusted routing metadata used solely to select an allowed
+    algorithm and a candidate key id. Claims are parsed only by `jwt.decode`
+    after cryptographic signature verification succeeds.
+    """
+
+    parts = token.split(".")
+    if len(parts) != 3 or not parts[0]:
+        raise OidcVerificationError("OIDC token header is invalid")
+    protected = parts[0]
+    padding = "=" * (-len(protected) % 4)
+    try:
+        raw = base64.urlsafe_b64decode((protected + padding).encode("ascii"))
+        header = json.loads(raw)
+    except (UnicodeEncodeError, binascii.Error, json.JSONDecodeError) as exc:
+        raise OidcVerificationError("OIDC token header is invalid") from exc
+    if not isinstance(header, dict):
+        raise OidcVerificationError("OIDC token header must be a JSON object")
+    return header
 
 
 __all__ = ["OidcMetadata", "OidcVerificationError", "OidcVerifier"]
