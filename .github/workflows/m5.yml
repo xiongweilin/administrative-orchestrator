@@ -116,7 +116,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: xiongweilin/agent-kernel
-          ref: 6b154f54a140da9fa97d6556720ae5744e95ffce
+          ref: 0233ba4e576b60a0702637bd93c764df9b0848d5
           path: .integration/agent-kernel
       - uses: astral-sh/setup-uv@v6
         with:
