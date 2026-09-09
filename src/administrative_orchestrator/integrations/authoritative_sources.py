@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from enum import StrEnum
 from typing import Any, Protocol
 
 from pydantic import BaseModel, Field
 
-from ..domain import FactAuthority, FactSnapshot, normalize_datetime, utcnow
+from ..domain import FactAssertion, FactAuthority, FactSnapshot, normalize_datetime, utcnow
 
 
 class SourceFreshness(StrEnum):
@@ -48,9 +48,30 @@ class AuthoritativeRecord(BaseModel):
             digest=hashlib.sha256(canonical.encode()).hexdigest(),
         )
 
+    def is_fresh_at(self, at: datetime, *, max_age_seconds: int) -> bool:
+        at = normalize_datetime(at)
+        return (
+            self.freshness is SourceFreshness.CURRENT
+            and self.observed_at <= at
+            and at - self.observed_at <= timedelta(seconds=max_age_seconds)
+        )
+
     def as_fact_snapshot(self, *, owner: str) -> FactSnapshot:
         if self.freshness is not SourceFreshness.CURRENT:
             raise ValueError("only current authoritative records may mint FactSnapshot(AUTHORITATIVE)")
+        assertions = {
+            key: FactAssertion(
+                value=value,
+                authority=FactAuthority.AUTHORITATIVE,
+                source=self.source,
+                owner=owner,
+                source_ref=self.source_ref,
+                source_version=self.source_version,
+                observed_at=self.observed_at,
+                digest=self.digest,
+            )
+            for key, value in self.value.items()
+        }
         return FactSnapshot(
             source=self.source,
             owner=owner,
@@ -59,6 +80,7 @@ class AuthoritativeRecord(BaseModel):
             source_version=self.source_version,
             observed_at=self.observed_at,
             facts=dict(self.value),
+            assertions=assertions,
             digest=self.digest,
         )
 
