@@ -13,6 +13,7 @@ from administrative_orchestrator.domain import (
     PolicyRef,
 )
 from administrative_orchestrator.effect_provider import (
+    ObservationAvailability,
     ProviderExecutionResult,
     ProviderExecutionStatus,
     RealityObservation,
@@ -36,6 +37,10 @@ from administrative_orchestrator.service import (
     start_policy_evaluation,
 )
 from administrative_orchestrator.unit_of_work import AdministrativeUnitOfWork
+from administrative_orchestrator.verification import (
+    VerificationDisposition,
+    verify_onboarding_observation,
+)
 
 FIXED_TIME = datetime(2026, 9, 9, 3, 45, tzinfo=UTC)
 
@@ -216,7 +221,32 @@ def test_kernel_hris_completion_cannot_discharge_case_before_iam_is_confirmed() 
     partial = engine.run(authorized.case_id)
 
     assert partial.status is CaseStatus.RECONCILING
-    outcomes = ExecutionRepository(store).list_outcomes(
+    execution_repository = ExecutionRepository(store)
+    effects = execution_repository.list_effects(partial.case_id, partial.authority_epoch)
+    obligation_set = ObligationRepository(store).get_current(
+        partial.case_id,
+        partial.authority_epoch,
+    )
+    assert obligation_set is not None
+    hris_effect = next(item for item in effects if item.target_system == "hris")
+    hris_obligation = next(
+        item for item in obligation_set.obligations if item.target_system == "hris"
+    )
+    hris_observation = provider.observe(hris_effect)
+    hris_verification = verify_onboarding_observation(
+        hris_effect,
+        hris_observation,
+        partial.fact_snapshot.facts if partial.fact_snapshot else {},
+        expected_postcondition=hris_obligation.expected_postcondition,
+    )
+    assert hris_observation.availability is ObservationAvailability.AVAILABLE, (
+        hris_observation.model_dump(mode="json")
+    )
+    assert hris_verification.disposition is VerificationDisposition.VERIFIED, (
+        hris_verification.model_dump(mode="json")
+    )
+
+    outcomes = execution_repository.list_outcomes(
         partial.case_id,
         partial.authority_epoch,
     )
@@ -234,7 +264,7 @@ def test_kernel_hris_completion_cannot_discharge_case_before_iam_is_confirmed() 
     completed = engine.run(authorized.case_id)
 
     assert completed.status is CaseStatus.COMPLETED
-    completed_outcomes = ExecutionRepository(store).list_outcomes(
+    completed_outcomes = execution_repository.list_outcomes(
         completed.case_id,
         completed.authority_epoch,
     )
