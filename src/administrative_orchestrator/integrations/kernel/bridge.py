@@ -7,18 +7,23 @@ from ...obligations import AdministrativeObligation
 from ...persistence import SqlStore
 from .client import HttpKernelResponsibilityClient, KernelResponsibilityClient
 from .compatibility import HttpKernelContractProbe, KernelCompatibilityError, KernelContractIdentity
-from .mapper import derive_effect_intent, derive_execution_grant, project_to_kernel
+from .mapper import capability_for, derive_effect_intent, derive_execution_grant, project_to_kernel
 from .models import KernelProjectionStatus, KernelShadowProjection
 from .repository import KernelBridgeRepository
 
+# First physical cutover is deliberately capability-scoped. A second capability
+# must prove this runtime seam is generic before this set is expanded.
+KERNEL_CUTOVER_CAPABILITIES = frozenset({"administrative.hris.employee.create.v1"})
+
 
 class KernelExecutionBridge:
-    """Hand governed administrative work into Agent Kernel responsibility semantics.
+    """Hand governed administrative work into Agent Kernel action semantics.
 
     `shadow` records/submits only the canonical proposal prefix. `admission`
-    additionally asks Kernel to evaluate that proposal through its own priority,
-    portfolio, reservation, commitment, and Work chain. Neither mode creates
-    runtime authorization, InvocationPermit, provider execution, or Outcome.
+    additionally asks Kernel to materialize Work. `cutover` does the same for
+    every projected obligation, but transfers physical execution ownership only
+    for explicitly cut-over capabilities. Non-owned capabilities remain on the
+    legacy Administrative provider path.
     """
 
     def __init__(
@@ -47,6 +52,17 @@ class KernelExecutionBridge:
     def admission_shadow(self) -> bool:
         return self.settings.kernel_bridge_mode == "admission"
 
+    @property
+    def cutover(self) -> bool:
+        return self.settings.kernel_bridge_mode == "cutover"
+
+    @property
+    def requires_work_admission(self) -> bool:
+        return self.settings.kernel_bridge_mode in {"admission", "cutover"}
+
+    def owns(self, obligation: AdministrativeObligation) -> bool:
+        return self.cutover and capability_for(obligation) in KERNEL_CUTOVER_CAPABILITIES
+
     def compatibility(self) -> KernelContractIdentity:
         if not self.enabled:
             raise KernelCompatibilityError("kernel bridge is disabled")
@@ -54,14 +70,19 @@ class KernelExecutionBridge:
             self._compatibility = HttpKernelContractProbe(
                 self.settings.kernel_base_url,
                 timeout_seconds=self.settings.kernel_contract_timeout_seconds,
-                require_work_admission=self.admission_shadow,
+                require_work_admission=self.requires_work_admission,
+                require_domain_effect_execution=self.cutover,
             ).fetch_identity()
         if (
-            self.admission_shadow
+            self.requires_work_admission
             and self._compatibility.responsibility_work_admission_contract is None
         ):
             raise KernelCompatibilityError(
-                "kernel admission mode requires responsibility-work-admission-v1"
+                "kernel admission/cutover mode requires responsibility-work-admission-v1"
+            )
+        if self.cutover and self._compatibility.bounded_domain_effect_execution_contract is None:
+            raise KernelCompatibilityError(
+                "kernel cutover is fail-closed without bounded-domain-effect-execution-v1"
             )
         return self._compatibility
 
@@ -81,11 +102,6 @@ class KernelExecutionBridge:
     ) -> KernelShadowProjection | None:
         if not self.enabled:
             return None
-        if self.settings.kernel_bridge_mode == "cutover":
-            raise KernelCompatibilityError(
-                "kernel cutover is fail-closed until runtime authorization and the unique "
-                "Kernel RealityBoundary path are configured"
-            )
 
         identity = self.compatibility()
         grant = self.repository.put_grant(
@@ -102,25 +118,44 @@ class KernelExecutionBridge:
         if self.shadow_only:
             return projection
 
-        if self.admission_shadow:
-            if projection.status in {
-                KernelProjectionStatus.ADMITTED,
-                KernelProjectionStatus.REJECTED,
-            }:
-                return projection
-            if projection.status is not KernelProjectionStatus.SUBMITTED:
-                raise KernelCompatibilityError(
-                    f"kernel Work admission cannot continue from {projection.status.value}"
-                )
+        if self.requires_work_admission and projection.status is KernelProjectionStatus.SUBMITTED:
             receipt = self.client().admit(
                 projection,
-                expected_policy_ref=(
-                    self.settings.kernel_responsibility_admission_policy_ref
-                ),
+                expected_policy_ref=self.settings.kernel_responsibility_admission_policy_ref,
             )
-            return self.repository.mark_work_admission(projection, receipt)
+            projection = self.repository.mark_work_admission(projection, receipt)
 
-        return projection
+        if self.admission_shadow or projection.status is KernelProjectionStatus.REJECTED:
+            return projection
+
+        if not self.cutover or not self.owns(obligation):
+            return projection
+
+        if projection.status is KernelProjectionStatus.CUTOVER:
+            return projection
+        if projection.status is not KernelProjectionStatus.ADMITTED:
+            raise KernelCompatibilityError(
+                f"kernel physical execution cannot continue from {projection.status.value}"
+            )
+        if projection.kernel_execution_status is not None:
+            # A non-completed receipt is still a durable execution fact. Never
+            # redispatch through either Kernel or the legacy provider merely
+            # because the business obligation remains unresolved.
+            return projection
+        if not self.settings.external_effects_enabled:
+            # Projection and Work admission may proceed while global physical
+            # effects are disabled, but neither Kernel nor the legacy provider
+            # may cross reality under that deployment state.
+            return projection
+
+        execution = self.client().execute(projection, grant, intent)
+        return self.repository.mark_execution(projection, execution)
+
+    def projection_for_obligation(
+        self,
+        obligation: AdministrativeObligation,
+    ) -> KernelShadowProjection | None:
+        return self.repository.get_projection_for_obligation(obligation.obligation_id)
 
 
-__all__ = ["KernelExecutionBridge"]
+__all__ = ["KERNEL_CUTOVER_CAPABILITIES", "KernelExecutionBridge"]
