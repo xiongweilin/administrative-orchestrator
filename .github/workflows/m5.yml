@@ -24,7 +24,10 @@ jobs:
           tests/test_oidc.py
           tests/test_m5_production_trust.py
           tests/test_m5_production_connectors.py
+          tests/test_m5_production_readiness.py
+          tests/test_m5_observability.py
           tests/test_m5_dr.py
+          tests/test_m5_kernel_state_dr.py
 
   operations-console:
     runs-on: ubuntu-latest
