@@ -8,11 +8,13 @@ from dbos import DBOS
 from ..config import get_settings
 from ..domain import CaseStatus
 from ..effect_provider import EffectProvider, HttpEffectProvider
+from ..fact_acquisition import build_hris_source
 from ..integrations.kernel.bridge import KernelExecutionBridge
 from ..integrations.kernel.effect_provider import KernelCutoverEffectProvider
 from ..integrations.kernel.onboarding import prepare_onboarding_kernel_shadow
 from ..onboarding_execution import OnboardingExecutionEngine
 from ..persistence import SqlStore
+from ..production_trust_execution import ProductionTrustOnboardingExecutionEngine
 from .protocol import (
     CASE_CHANGED_TOPIC,
     NORMAL_WAKE_TIMEOUT_SECONDS,
@@ -30,14 +32,7 @@ TERMINAL_STATUSES = frozenset(
 
 @DBOS.step(name="administrative_drive_onboarding_case")
 def drive_onboarding_case_step(case_id: str) -> dict[str, Any]:
-    """Drive one durable business transition with capability-scoped reality ownership.
-
-    Kernel shadow/admission remains non-physical. In cutover mode the bridge may
-    execute only explicitly owned capabilities, subject to the global physical
-    effects gate. The provider adapter then consumes those durable Kernel facts
-    and structurally forbids local execute/read-back fallback for the same
-    capability, while non-owned capabilities remain on the legacy provider.
-    """
+    """Drive one durable business transition with capability-scoped reality ownership."""
     settings = get_settings()
     store = SqlStore(settings.worker_database_url or settings.database_url)
     case = store.get_case(UUID(case_id))
@@ -69,7 +64,18 @@ def drive_onboarding_case_step(case_id: str) -> dict[str, Any]:
         )
         if bridge is not None and bridge.cutover:
             provider = KernelCutoverEffectProvider(provider, bridge)
-        case = OnboardingExecutionEngine(store, provider).run(UUID(case_id))
+
+        hris_source = build_hris_source(settings)
+        if hris_source is None:
+            engine = OnboardingExecutionEngine(store, provider)
+        else:
+            engine = ProductionTrustOnboardingExecutionEngine(
+                store,
+                provider,
+                hris_source=hris_source,
+                max_fact_age_seconds=settings.authoritative_fact_max_age_seconds,
+            )
+        case = engine.run(UUID(case_id))
 
     return {
         "case_id": case_id,

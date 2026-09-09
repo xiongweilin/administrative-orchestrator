@@ -1,0 +1,68 @@
+from __future__ import annotations
+
+import sqlite3
+from pathlib import Path
+
+import pytest
+
+from administrative_orchestrator.kernel_state_dr import (
+    KernelStateRecoveryError,
+    backup_kernel_state,
+    restore_kernel_state,
+    verify_kernel_state_backup,
+)
+
+
+def _create_state(path: Path) -> None:
+    with sqlite3.connect(path) as db:
+        db.execute("PRAGMA journal_mode=WAL")
+        db.execute("CREATE TABLE attempts (request_ref TEXT PRIMARY KEY, state TEXT NOT NULL)")
+        db.execute("INSERT INTO attempts VALUES (?, ?)", ("req-1", "reconciling"))
+        db.commit()
+
+
+def test_kernel_state_backup_verify_restore_round_trip(tmp_path: Path):
+    source = tmp_path / "kernel.db"
+    backup = tmp_path / "backup" / "kernel.db"
+    restored = tmp_path / "restored.db"
+    backup.parent.mkdir()
+    _create_state(source)
+
+    digest = backup_kernel_state(source, backup)
+
+    assert len(digest) == 64
+    assert verify_kernel_state_backup(backup) == digest
+    assert backup.with_name("kernel.db.sha256").is_file()
+
+    restored_digest = restore_kernel_state(backup, restored)
+    assert restored_digest == digest
+    with sqlite3.connect(restored) as db:
+        assert db.execute("SELECT request_ref, state FROM attempts").fetchall() == [
+            ("req-1", "reconciling")
+        ]
+
+
+def test_kernel_state_restore_requires_explicit_force(tmp_path: Path):
+    source = tmp_path / "kernel.db"
+    backup = tmp_path / "backup.db"
+    destination = tmp_path / "destination.db"
+    _create_state(source)
+    backup_kernel_state(source, backup)
+    _create_state(destination)
+
+    with pytest.raises(KernelStateRecoveryError, match="already exists"):
+        restore_kernel_state(backup, destination)
+
+    restore_kernel_state(backup, destination, force=True)
+
+
+def test_kernel_state_manifest_detects_tampering(tmp_path: Path):
+    source = tmp_path / "kernel.db"
+    backup = tmp_path / "backup.db"
+    _create_state(source)
+    backup_kernel_state(source, backup)
+    manifest = backup.with_name("backup.db.sha256")
+    manifest.write_text("0" * 64 + "  backup.db\n", encoding="utf-8")
+
+    with pytest.raises(KernelStateRecoveryError, match="digest does not match"):
+        verify_kernel_state_backup(backup)
