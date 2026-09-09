@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+from administrative_orchestrator.domain import CaseStatus
 from administrative_orchestrator.execution_repository import ExecutionRepository
 from administrative_orchestrator.integrations.kernel.effect_provider import (
     KernelCutoverEffectProvider,
@@ -13,7 +14,6 @@ from administrative_orchestrator.integrations.kernel.models import (
 from administrative_orchestrator.integrations.kernel.recovery import KernelExecutionResolution
 from administrative_orchestrator.onboarding_execution import OnboardingExecutionEngine
 from administrative_orchestrator.persistence import SqlStore
-from administrative_orchestrator.domain import CaseStatus
 from tests.test_kernel_obligation_completion import (
     FIXED_TIME,
     MutableKernelBridge,
@@ -48,7 +48,6 @@ class RecoveryClient:
         self.inspect_calls = 0
 
     def _resolution(self, execution_ref: str, expected_work_ref: str | None):
-        self.recover_calls += 0
         if not execution_ref.startswith("execution:hris:"):
             return None
         refs = self.repository._refs("hris")
