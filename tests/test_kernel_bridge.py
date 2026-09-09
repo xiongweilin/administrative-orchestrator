@@ -150,6 +150,7 @@ def _compatibility(
     *,
     work_admission: bool = False,
     execution: bool = False,
+    recovery: bool = False,
     evidence: bool = False,
 ) -> KernelContractIdentity:
     return KernelContractIdentity(
@@ -163,6 +164,12 @@ def _compatibility(
         ),
         bounded_domain_effect_execution_contract=(
             "bounded-domain-effect-execution-v1" if execution else None
+        ),
+        bounded_domain_effect_recovery_contract=(
+            "bounded-domain-effect-recovery-v1" if recovery else None
+        ),
+        bounded_domain_effect_resolution_view=(
+            "bounded-domain-effect-resolution-v1" if recovery else None
         ),
         domain_effect_verification_evidence_view=(
             "domain-effect-verification-evidence-view-v1" if evidence else None
@@ -248,6 +255,7 @@ def _catalog(
     *,
     include_work_admission: bool = False,
     include_execution: bool = False,
+    include_recovery: bool = False,
     include_evidence: bool = False,
 ) -> dict[str, object]:
     contracts: dict[str, object] = {
@@ -263,6 +271,11 @@ def _catalog(
     if include_execution:
         contracts["bounded_domain_effect_execution"] = {
             "current": "bounded-domain-effect-execution-v1"
+        }
+    if include_recovery:
+        contracts["bounded_domain_effect_recovery"] = {
+            "current": "bounded-domain-effect-recovery-v1",
+            "resolution": "bounded-domain-effect-resolution-v1",
         }
     raw: dict[str, object] = {
         "catalog_version": "portable-runtime-contracts-v1",
@@ -293,25 +306,41 @@ def test_kernel_contract_gate_preserves_shadow_compatibility_and_gates_admission
     ) == _compatibility(work_admission=True)
 
     execution_raw = _catalog(include_work_admission=True, include_execution=True)
-    with pytest.raises(KernelCompatibilityError, match="domain_effect_verification_evidence"):
+    with pytest.raises(KernelCompatibilityError, match="bounded_domain_effect_recovery"):
         validate_kernel_catalog(
             execution_raw,
             require_work_admission=True,
             require_domain_effect_execution=True,
+            require_domain_effect_recovery=True,
+        )
+
+    recovery_raw = _catalog(
+        include_work_admission=True,
+        include_execution=True,
+        include_recovery=True,
+    )
+    with pytest.raises(KernelCompatibilityError, match="domain_effect_verification_evidence"):
+        validate_kernel_catalog(
+            recovery_raw,
+            require_work_admission=True,
+            require_domain_effect_execution=True,
+            require_domain_effect_recovery=True,
             require_domain_effect_evidence=True,
         )
 
     cutover_raw = _catalog(
         include_work_admission=True,
         include_execution=True,
+        include_recovery=True,
         include_evidence=True,
     )
     assert validate_kernel_catalog(
         cutover_raw,
         require_work_admission=True,
         require_domain_effect_execution=True,
+        require_domain_effect_recovery=True,
         require_domain_effect_evidence=True,
-    ) == _compatibility(work_admission=True, execution=True, evidence=True)
+    ) == _compatibility(work_admission=True, execution=True, recovery=True, evidence=True)
 
     changed = {
         **admission_raw,
@@ -550,7 +579,12 @@ def test_cutover_executes_owned_hris_once_and_persists_complete_kernel_lineage()
             external_effects_enabled=True,
             kernel_responsibility_admission_policy_ref="responsibility-admission:admin@1",
         ),
-        compatibility=_compatibility(work_admission=True, execution=True, evidence=True),
+        compatibility=_compatibility(
+            work_admission=True,
+            execution=True,
+            recovery=True,
+            evidence=True,
+        ),
         client=client,
     )
 
@@ -593,7 +627,12 @@ def test_cutover_global_effect_gate_stops_before_kernel_physical_execution() -> 
             kernel_bridge_mode="cutover",
             external_effects_enabled=False,
         ),
-        compatibility=_compatibility(work_admission=True, execution=True, evidence=True),
+        compatibility=_compatibility(
+            work_admission=True,
+            execution=True,
+            recovery=True,
+            evidence=True,
+        ),
         client=client,
     )
 

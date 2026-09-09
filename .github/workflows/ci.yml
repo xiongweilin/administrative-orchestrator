@@ -255,6 +255,67 @@ jobs:
           ADMIN_SANDBOX_BASE_URL: http://127.0.0.1:8010
           PORTABLE_RUNTIME_ADMIN_E2E_STATE_PATH: ./kernel-cutover-kernel.db
         run: uv run python scripts/kernel_reconciliation_identity_e2e.py
+      - name: Prove ambiguous provider result recovers across a fresh Kernel process exactly once
+        env:
+          ADMIN_KERNEL_BASE_URL: http://127.0.0.1:8020
+          ADMIN_SANDBOX_BASE_URL: http://127.0.0.1:8010
+          ADMIN_AMBIGUOUS_RECOVERY_DB_PATH: ./kernel-ambiguous-admin.db
+          PORTABLE_RUNTIME_ADMIN_E2E_RESULT_COMMIT_FAIL_ONCE_PATH: ./kernel-ambiguous-result.marker
+        run: |
+          old_kernel_pid="$(cat kernel.pid)"
+          kill "$old_kernel_pid"
+          for i in {1..40}; do
+            if ! kill -0 "$old_kernel_pid" 2>/dev/null; then break; fi
+            sleep 0.25
+          done
+          if kill -0 "$old_kernel_pid" 2>/dev/null; then
+            echo "Kernel process did not terminate before ambiguous recovery proof"
+            exit 1
+          fi
+
+          rm -f kernel-ambiguous-admin.db kernel-ambiguous-kernel.db kernel-ambiguous-kernel.db-wal kernel-ambiguous-kernel.db-shm kernel-ambiguous-result.marker kernel-ambiguous-fault.log kernel-ambiguous-restart.log
+          PORTABLE_RUNTIME_RESPONSIBILITY_ADMISSION_PROFILE=administrative-public-v2 \
+          PORTABLE_RUNTIME_BOUNDED_DOMAIN_EFFECT_FACTORY=scripts.kernel_cutover_stack:build \
+          PORTABLE_RUNTIME_ADMIN_E2E_STATE_PATH=./kernel-ambiguous-kernel.db \
+          PORTABLE_RUNTIME_ADMIN_E2E_RESULT_COMMIT_FAIL_ONCE_PATH=./kernel-ambiguous-result.marker \
+          uv run uvicorn portable_runtime.public_contracts.http:create_configured_public_app --factory --host 127.0.0.1 --port 8020 >kernel-ambiguous-fault.log 2>&1 &
+          fault_kernel_pid=$!
+          echo "$fault_kernel_pid" > kernel.pid
+          for i in {1..40}; do
+            if curl --fail --silent http://127.0.0.1:8020/v1/contracts >/dev/null; then break; fi
+            sleep 0.5
+          done
+          curl --fail --silent http://127.0.0.1:8020/v1/contracts >/dev/null
+
+          uv run python scripts/kernel_ambiguous_recovery_e2e.py phase1
+
+          kill "$fault_kernel_pid"
+          for i in {1..40}; do
+            if ! kill -0 "$fault_kernel_pid" 2>/dev/null; then break; fi
+            sleep 0.25
+          done
+          if kill -0 "$fault_kernel_pid" 2>/dev/null; then
+            echo "faulting Kernel process did not terminate"
+            exit 1
+          fi
+
+          PORTABLE_RUNTIME_RESPONSIBILITY_ADMISSION_PROFILE=administrative-public-v2 \
+          PORTABLE_RUNTIME_BOUNDED_DOMAIN_EFFECT_FACTORY=scripts.kernel_cutover_stack:build \
+          PORTABLE_RUNTIME_ADMIN_E2E_STATE_PATH=./kernel-ambiguous-kernel.db \
+          uv run uvicorn portable_runtime.public_contracts.http:create_configured_public_app --factory --host 127.0.0.1 --port 8020 >kernel-ambiguous-restart.log 2>&1 &
+          recovered_kernel_pid=$!
+          echo "$recovered_kernel_pid" > kernel.pid
+          if [ "$recovered_kernel_pid" = "$fault_kernel_pid" ]; then
+            echo "ambiguous recovery restart reused the same process id unexpectedly"
+            exit 1
+          fi
+          for i in {1..40}; do
+            if curl --fail --silent http://127.0.0.1:8020/v1/contracts >/dev/null; then break; fi
+            sleep 0.5
+          done
+          curl --fail --silent http://127.0.0.1:8020/v1/contracts >/dev/null
+
+          uv run python scripts/kernel_ambiguous_recovery_e2e.py phase2
       - name: Cross-repo service logs
         if: failure()
         run: |
@@ -266,6 +327,10 @@ jobs:
           cat kernel-restart.log || true
           echo '--- kernel-pre-receipt-restart.log ---'
           cat kernel-pre-receipt-restart.log || true
+          echo '--- kernel-ambiguous-fault.log ---'
+          cat kernel-ambiguous-fault.log || true
+          echo '--- kernel-ambiguous-restart.log ---'
+          cat kernel-ambiguous-restart.log || true
           echo '--- lost-ack-phase1.log ---'
           cat lost-ack-phase1.log || true
           echo '--- pre-receipt-phase1.log ---'
