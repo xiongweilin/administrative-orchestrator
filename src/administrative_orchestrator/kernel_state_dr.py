@@ -73,10 +73,12 @@ def restore_kernel_state(backup: Path, destination: Path, *, force: bool = False
 def _sqlite_backup(source: Path, destination: Path) -> None:
     source_uri = f"{source.as_uri()}?mode=ro"
     try:
-        with sqlite3.connect(source_uri, uri=True, timeout=30.0) as source_db:
-            with sqlite3.connect(destination, timeout=30.0) as destination_db:
-                source_db.backup(destination_db)
-                destination_db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        with (
+            sqlite3.connect(source_uri, uri=True, timeout=30.0) as source_db,
+            sqlite3.connect(destination, timeout=30.0) as destination_db,
+        ):
+            source_db.backup(destination_db)
+            destination_db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
     except sqlite3.Error as exc:
         raise KernelStateRecoveryError(f"SQLite backup failed: {exc}") from exc
 
