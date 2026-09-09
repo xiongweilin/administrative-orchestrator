@@ -31,17 +31,20 @@ authenticated person / service / system event
                              |
                    ApprovalSatisfaction
                              |
-                   ExecutionAuthorization
+                   AdministrativeExecutionGrant
                              |
-                        typed effect
+                    bounded effect intent
                              |
                              v
                        Agent Kernel
+                 Work / runtime authority
                  physical RealityBoundary
                              |
                   external system reality
                              |
-                 semantic read-back / reconcile
+                Kernel verification/recovery
+                             |
+                    domain semantic readback
                              |
                              v
                     ConfirmedOutcome
@@ -57,10 +60,12 @@ Core separations:
 ```text
 Request != AdministrativeCase
 AI interpretation != authoritative fact
+External identity != Administrative authority
 Historical role assignment != current authority
 Recommendation != Decision
 One Decision != multi-party approval satisfaction
-ApprovalSatisfaction != ExecutionAuthorization
+ApprovalSatisfaction != AdministrativeExecutionGrant
+AdministrativeExecutionGrant != Kernel runtime authorization
 Administrative obligation != Kernel Work
 Kernel evidence != Administrative ConfirmedOutcome
 Effect dispatch != realized effect
@@ -71,7 +76,7 @@ Workflow completed != responsibility discharged
 Exception != permission to improvise
 ```
 
-`agent-kernel` remains the generic semantic/runtime authority for Work/Run, verification/revision, reopen, persistent responsibility, and physical cut-over recovery semantics. This repository owns administrative-domain facts, organization/identity/policy interpretation, deterministic administrative workflows, business connector contracts, administrative effect profiles, completion contracts, and domain-specific reconciliation.
+`agent-kernel` remains the generic semantic/runtime authority for persistent responsibility, Work/Run/Attempt, runtime authorization, the unique physical `RealityBoundary`, execution verification/recovery, and generic Outcome/revision semantics. This repository owns administrative-domain facts, organization/identity/policy interpretation, deterministic administrative workflows, business integration contracts, administrative obligations/effect intents, semantic completion, and exception operations.
 
 DBOS is deliberately confined to the durable orchestration boundary. `AdministrativeCase` remains the business state machine and source of current administrative workflow truth.
 
@@ -94,7 +99,7 @@ The first executable slice is **employee onboarding** because it forces multi-ac
 
 ## Current milestone: M5 Production Trust & Reality Integration
 
-M0–M4 established the semantic foundation, durable governed execution, organizational authority/policy, and Agent Kernel convergence/cut-over invariants. M5 makes that reference architecture production-shaped without collapsing those ownership boundaries.
+M0–M4 established the semantic foundation, durable governed execution, organizational authority/policy, administrative correctness, and Agent Kernel convergence/cut-over invariants. M5 makes that reference architecture production-shaped without collapsing those ownership boundaries.
 
 The M5 implementation now includes:
 
@@ -112,7 +117,8 @@ The M5 implementation now includes:
 - online Agent Kernel SQLite backup/verify/restore using SQLite backup semantics, integrity checks, atomic publication, and SHA-256 manifests;
 - PostgreSQL `pg_dump -> destroy -> pg_restore -> semantic verification` DR CI;
 - Operations Console TypeScript typecheck and production build gate;
-- a pinned Agent Kernel production-baseline cutover lane plus the existing `agent-kernel/main` recovery canary.
+- a pinned Agent Kernel production-baseline cutover lane plus the existing `agent-kernel/main` recovery canary;
+- SonarQube Cloud scan and new-code Quality Gate acceptance.
 
 The supported Agent Kernel revision is currently:
 
@@ -120,11 +126,14 @@ The supported Agent Kernel revision is currently:
 6b154f54a140da9fa97d6556720ae5744e95ffce
 ```
 
-M5 has an explicit acceptance boundary: repository CI can prove code, migration, restart, cut-over, DR, and ambiguity semantics, but it cannot truthfully prove enterprise OIDC/Odoo/Keycloak credentials or network policy without real staging systems. The correct milestone status is therefore **implementation/CI complete when all PR gates are green; real-staging acceptance pending until the external checklist is executed**.
+M5 has an explicit acceptance boundary: repository CI can prove code, migration, restart, cut-over, DR, ambiguity semantics, and static/security quality gates, but it cannot truthfully prove enterprise OIDC/Odoo/Keycloak credentials or network policy without real staging systems. The correct milestone status is therefore **repository implementation/CI complete; real-staging acceptance pending until the external checklist is executed**.
 
 See:
 
-- `docs/milestones/M5.md` for milestone acceptance and SLO targets;
+- `docs/architecture.md` for the current M4/M5 ownership topology;
+- `docs/adr/0001-domain-kernel-dbos-ownership.md` for canonical semantic ownership;
+- `docs/adr/0002-repository-and-deployment-boundaries.md` for why service/process separation does not currently imply more repositories;
+- `docs/milestones/M5.md` for milestone acceptance evidence, staging checklist, and SLO targets;
 - `docs/production-operations.md` for deployment, observability, backup/restore, incident, and staging procedures.
 
 ## Development principles
@@ -171,14 +180,15 @@ src/administrative_orchestrator/
     completion.py            domain completion contract
     messaging.py             transactional outbox / retry / dead-letter
     workflows/               DBOS durability boundary
-operations-console/          OIDC human exception UI
+operations-console/          OIDC human exception UI (TypeScript)
 docs/
     architecture.md
     production-operations.md
+    adr/
+        0001-domain-kernel-dbos-ownership.md
+        0002-repository-and-deployment-boundaries.md
     contracts/
-    milestones/M0.md
-    milestones/M2.md
-    milestones/M5.md
+    milestones/
 scripts/
     production_preflight.py
     production_kernel_stack.py
@@ -186,6 +196,12 @@ scripts/
     postgres_dr_fixture.py
 tests/
 ```
+
+## Repository and deployment boundary
+
+The repository is intentionally a product monorepo even though the production topology has multiple processes and two implementation languages. Administrative API, Operations API, worker, product-specific integration code, migrations, Operations Console, deployment assets, DR, and docs currently share one Administrative semantic/versioning and acceptance lifecycle.
+
+`agent-kernel` remains a separate repository because it owns a genuinely independent generic runtime contract and lifecycle. New repositories should be created only when a component acquires independent consumers, release cadence, ownership/SLA/security controls, or stable external versioning needs—not merely because it is a separate service, container, language, or large directory. See ADR 0002.
 
 ## Local development
 
@@ -221,7 +237,7 @@ Do not start physical cut-over workers when this gate fails.
 
 ## CI model
 
-The normal CI lane proves full repository behavior, including PostgreSQL/DBOS restart recovery, Compose E2E, and the current `agent-kernel/main` recovery canary.
+The normal CI lane proves full repository behavior, including PostgreSQL/DBOS restart recovery, Compose E2E, SonarQube Cloud Quality Gate, and the current `agent-kernel/main` recovery canary.
 
 The M5 workflow separately proves:
 
