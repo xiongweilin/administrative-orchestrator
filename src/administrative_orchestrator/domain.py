@@ -168,6 +168,19 @@ class EvidenceRef(UtcModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class FactAssertion(UtcModel):
+    """One field-level fact with its own epistemic/authority provenance."""
+
+    value: Any
+    authority: FactAuthority
+    source: str
+    owner: str
+    source_ref: str | None = None
+    source_version: str | None = None
+    observed_at: datetime = Field(default_factory=utcnow)
+    digest: str | None = None
+
+
 class FactSnapshot(UtcModel):
     snapshot_id: UUID = Field(default_factory=uuid4)
     source: str
@@ -177,7 +190,17 @@ class FactSnapshot(UtcModel):
     source_version: str | None = None
     observed_at: datetime = Field(default_factory=utcnow)
     facts: dict[str, Any] = Field(default_factory=dict)
+    assertions: dict[str, FactAssertion] = Field(default_factory=dict)
     digest: str | None = None
+
+    @model_validator(mode="after")
+    def assertion_values_match_flattened_facts(self) -> FactSnapshot:
+        for key, assertion in self.assertions.items():
+            if key not in self.facts:
+                raise ValueError(f"fact assertion {key!r} has no flattened fact")
+            if self.facts[key] != assertion.value:
+                raise ValueError(f"fact assertion {key!r} does not match flattened fact")
+        return self
 
 
 class AdministrativeRequest(UtcModel):
