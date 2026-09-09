@@ -13,6 +13,7 @@ from fastapi import HTTPException, Request, status
 from .authority import AuthorityRepository
 from .config import Settings
 from .domain import Principal
+from .oidc import OidcVerificationError, OidcVerifier
 from .persistence import SqlStore
 
 
@@ -31,6 +32,7 @@ class Authenticator:
     def __init__(self, store: SqlStore, settings: Settings) -> None:
         self.repository = AuthorityRepository(store)
         self.settings = settings
+        self._oidc_verifier: OidcVerifier | None = None
 
     def authenticate(self, request: Request) -> AuthenticatedPrincipal:
         mode = self.settings.auth_mode.strip().lower()
@@ -38,6 +40,8 @@ class Authenticator:
             return self._authenticate_development(request)
         if mode == "jwt":
             return self._authenticate_jwt(request)
+        if mode == "oidc":
+            return self._authenticate_oidc(request)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="unsupported authentication mode",
@@ -62,19 +66,49 @@ class Authenticator:
             external_subject=principal_id,
         )
 
-    def _authenticate_jwt(self, request: Request) -> AuthenticatedPrincipal:
-        header = request.headers.get("Authorization", "")
-        if not header.startswith("Bearer "):
+    def _authenticate_oidc(self, request: Request) -> AuthenticatedPrincipal:
+        token = self._bearer_token(request)
+        if self._oidc_verifier is None:
+            self._oidc_verifier = OidcVerifier(
+                issuer=self.settings.oidc_issuer,
+                audience=self.settings.oidc_audience,
+                allowed_algorithms=self.settings.oidc_algorithms,
+                jwks_cache_ttl_seconds=self.settings.oidc_jwks_cache_ttl_seconds,
+                clock_skew_seconds=self.settings.oidc_clock_skew_seconds,
+                timeout_seconds=self.settings.oidc_http_timeout_seconds,
+                allow_insecure_http=self.settings.oidc_allow_insecure_http,
+            )
+        try:
+            claims = self._oidc_verifier.verify(token)
+        except OidcVerificationError as exc:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Bearer token is required",
+                detail="invalid OIDC bearer token",
+            ) from exc
+
+        subject = str(claims["sub"]).strip()
+        principal = self.repository.resolve_identity(
+            provider=self.settings.oidc_issuer.rstrip("/"),
+            external_subject=subject,
+        )
+        if principal is None:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="authenticated identity is not currently bound to an active principal",
             )
+        return AuthenticatedPrincipal(
+            principal=principal,
+            auth_mode="oidc",
+            external_subject=subject,
+        )
+
+    def _authenticate_jwt(self, request: Request) -> AuthenticatedPrincipal:
+        token = self._bearer_token(request)
         if not self.settings.jwt_secret:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="JWT authentication is not configured",
             )
-        token = header.removeprefix("Bearer ").strip()
         try:
             claims = _decode_hs256_jwt(
                 token,
@@ -104,6 +138,22 @@ class Authenticator:
             external_subject=subject,
         )
 
+    @staticmethod
+    def _bearer_token(request: Request) -> str:
+        header = request.headers.get("Authorization", "")
+        if not header.startswith("Bearer "):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Bearer token is required",
+            )
+        token = header.removeprefix("Bearer ").strip()
+        if not token:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Bearer token is required",
+            )
+        return token
+
 
 def _decode_hs256_jwt(
     token: str,
@@ -112,6 +162,8 @@ def _decode_hs256_jwt(
     issuer: str,
     audience: str,
 ) -> dict[str, Any]:
+    """Legacy compatibility verifier used only outside the production profile."""
+
     parts = token.split(".")
     if len(parts) != 3:
         raise ValueError("JWT must have three segments")
@@ -119,7 +171,7 @@ def _decode_hs256_jwt(
     header = _decode_json_segment(encoded_header)
     claims = _decode_json_segment(encoded_payload)
     if header.get("alg") != "HS256":
-        raise ValueError("only HS256 is accepted by this deployment profile")
+        raise ValueError("only HS256 is accepted by this compatibility profile")
 
     signing_input = f"{encoded_header}.{encoded_payload}".encode()
     expected = hmac.new(secret.encode(), signing_input, hashlib.sha256).digest()
@@ -131,6 +183,7 @@ def _decode_hs256_jwt(
     subject = claims.get("sub")
     issued_at = claims.get("iat")
     expires_at = claims.get("exp")
+    not_before = claims.get("nbf")
     if not isinstance(subject, str) or not subject.strip():
         raise ValueError("JWT sub is required")
     if not isinstance(issued_at, int) or not isinstance(expires_at, int):
@@ -139,6 +192,8 @@ def _decode_hs256_jwt(
         raise ValueError("JWT iat is in the future")
     if expires_at <= now:
         raise ValueError("JWT has expired")
+    if isinstance(not_before, int) and not_before > now + 60:
+        raise ValueError("JWT is not yet valid")
     if claims.get("iss") != issuer:
         raise ValueError("JWT issuer mismatch")
     token_audience = claims.get("aud")
