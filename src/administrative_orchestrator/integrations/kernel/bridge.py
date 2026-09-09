@@ -142,6 +142,11 @@ class KernelExecutionBridge:
             # redispatch through either Kernel or the legacy provider merely
             # because the business obligation remains unresolved.
             return projection
+        if not self.settings.external_effects_enabled:
+            # Projection and Work admission may proceed while global physical
+            # effects are disabled, but neither Kernel nor the legacy provider
+            # may cross reality under that deployment state.
+            return projection
 
         execution = self.client().execute(projection, grant, intent)
         return self.repository.mark_execution(projection, execution)
