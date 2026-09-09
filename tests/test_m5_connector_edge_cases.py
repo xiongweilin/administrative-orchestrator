@@ -467,7 +467,7 @@ async def test_keycloak_location_reconcile_and_search_user_contracts(monkeypatch
 
     connector = _keycloak_connector()
     monkeypatch.setattr(connector, "_request", AsyncMock(return_value=httpx.Response(503)))
-    with pytest.raises(_TransportUnknown, match="search is ambiguous"):
+    with pytest.raises(_TransportUnknown, match="search returned HTTP 503"):
         await connector._find_by_attribute("administrative_request_ref", "request:1")
 
     monkeypatch.setattr(connector, "_request", AsyncMock(return_value=httpx.Response(403)))
@@ -508,7 +508,7 @@ async def test_keycloak_token_request_user_and_verifier_fail_closed(monkeypatch)
 
     connector = _keycloak_connector()
     monkeypatch.setattr(connector, "_request", AsyncMock(return_value=httpx.Response(503)))
-    with pytest.raises(_TransportUnknown, match="user read is ambiguous"):
+    with pytest.raises(_TransportUnknown, match="user read returned HTTP 503"):
         await connector._get_user("u-1")
 
     monkeypatch.setattr(connector, "_request", AsyncMock(return_value=httpx.Response(403)))
