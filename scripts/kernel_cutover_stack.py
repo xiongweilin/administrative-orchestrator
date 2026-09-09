@@ -5,7 +5,6 @@ from typing import Any
 from uuid import NAMESPACE_URL, UUID, uuid5
 
 import httpx
-
 from portable_runtime.core.capabilities import (
     CapabilityRequest,
     CapabilityResult,
