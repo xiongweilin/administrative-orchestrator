@@ -9,11 +9,13 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     String,
     UniqueConstraint,
     Uuid,
     select,
+    text,
 )
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Mapped, mapped_column
@@ -42,6 +44,10 @@ class SourceArtifactConflict(RuntimeError):
 
 class PromotionConflict(RuntimeError):
     """A candidate or request was already promoted with different lineage."""
+
+
+class AssessmentConflict(RuntimeError):
+    """A candidate already has a different final intake assessment."""
 
 
 class SourceArtifactRow(Base):
@@ -196,6 +202,13 @@ class IntakeAssessmentRow(Base):
         CheckConstraint(
             "NOT (is_final AND authority = 'model_suggestion')",
             name="ck_final_assessment_not_model",
+        ),
+        Index(
+            "uq_intake_final_assessment_candidate",
+            "candidate_ref",
+            unique=True,
+            sqlite_where=text("is_final = 1"),
+            postgresql_where=text("is_final"),
         ),
     )
 
@@ -579,6 +592,11 @@ class IntakeRepository:
             db.flush()
             return candidate
 
+    def get_candidate(self, candidate_ref: UUID) -> CandidateAdministrativeRequest | None:
+        with self.store.sessions() as db:
+            row = db.get(CandidateAdministrativeRequestRow, candidate_ref)
+            return None if row is None else _candidate_from_row(row)
+
     def append_case_update(self, update: CandidateCaseUpdate) -> CandidateCaseUpdate:
         with self.store.sessions.begin() as db:
             db.add(
@@ -610,8 +628,31 @@ class IntakeRepository:
                     created_at=assessment.created_at,
                 )
             )
-            db.flush()
+            try:
+                db.flush()
+            except IntegrityError as exc:
+                raise AssessmentConflict(
+                    "candidate already has a different final intake assessment"
+                ) from exc
             return assessment
+
+    def get_assessment(self, assessment_ref: UUID) -> IntakeAssessment | None:
+        with self.store.sessions() as db:
+            row = db.get(IntakeAssessmentRow, assessment_ref)
+            return None if row is None else _assessment_from_row(row)
+
+    def list_assessments(self, candidate_ref: UUID) -> list[IntakeAssessment]:
+        with self.store.sessions() as db:
+            rows = (
+                db.execute(
+                    select(IntakeAssessmentRow)
+                    .where(IntakeAssessmentRow.candidate_ref == candidate_ref)
+                    .order_by(IntakeAssessmentRow.created_at)
+                )
+                .scalars()
+                .all()
+            )
+            return [_assessment_from_row(row) for row in rows]
 
     def persist_promotion(self, promotion: PromotionRecord) -> PromotionRecord:
         with self.store.sessions.begin() as db:
@@ -669,6 +710,7 @@ __all__ = [
     "CandidateCaseUpdateRow",
     "CandidateFactAssertionRow",
     "EvidenceSpanRow",
+    "AssessmentConflict",
     "IntakeAssessmentRow",
     "IntakeReceiptConflict",
     "IntakeReceiptRow",
