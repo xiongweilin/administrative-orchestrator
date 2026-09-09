@@ -99,3 +99,61 @@ jobs:
       - name: Stop full stack
         if: always()
         run: docker compose down -v --remove-orphans
+
+  kernel-cutover-integration:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Administrative Orchestrator
+        uses: actions/checkout@v4
+      - name: Checkout Agent Kernel main
+        uses: actions/checkout@v4
+        with:
+          repository: xiongweilin/agent-kernel
+          ref: main
+          path: .integration/agent-kernel
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+      - name: Install both repositories
+        run: |
+          uv sync --extra dev
+          uv pip install --python .venv/bin/python -e .integration/agent-kernel
+      - name: Start Administrative sandbox and Agent Kernel
+        env:
+          ADMIN_SANDBOX_DATABASE_URL: sqlite+pysqlite:///./kernel-cutover-sandbox.db
+          ADMIN_SANDBOX_BASE_URL: http://127.0.0.1:8010
+          PORTABLE_RUNTIME_RESPONSIBILITY_ADMISSION_PROFILE: administrative-public
+          PORTABLE_RUNTIME_BOUNDED_DOMAIN_EFFECT_FACTORY: scripts.kernel_cutover_stack:build
+        run: |
+          rm -f kernel-cutover-sandbox.db
+          uv run uvicorn administrative_orchestrator.sandbox:app --host 127.0.0.1 --port 8010 >sandbox.log 2>&1 &
+          echo $! > sandbox.pid
+          for i in {1..40}; do
+            if curl --fail --silent http://127.0.0.1:8010/healthz >/dev/null; then break; fi
+            sleep 0.5
+          done
+          curl --fail --silent http://127.0.0.1:8010/healthz >/dev/null
+          uv run uvicorn portable_runtime.public_contracts.http:create_configured_public_app --factory --host 127.0.0.1 --port 8020 >kernel.log 2>&1 &
+          echo $! > kernel.pid
+          for i in {1..40}; do
+            if curl --fail --silent http://127.0.0.1:8020/v1/contracts >/dev/null; then break; fi
+            sleep 0.5
+          done
+          curl --fail --silent http://127.0.0.1:8020/v1/contracts >/dev/null
+      - name: Prove Admin to Kernel to sandbox physical cutover
+        env:
+          ADMIN_KERNEL_BASE_URL: http://127.0.0.1:8020
+          ADMIN_SANDBOX_BASE_URL: http://127.0.0.1:8010
+        run: uv run python scripts/kernel_cutover_e2e.py
+      - name: Cross-repo service logs
+        if: failure()
+        run: |
+          echo '--- sandbox.log ---'
+          cat sandbox.log || true
+          echo '--- kernel.log ---'
+          cat kernel.log || true
+      - name: Stop cross-repo services
+        if: always()
+        run: |
+          test ! -f kernel.pid || kill "$(cat kernel.pid)" || true
+          test ! -f sandbox.pid || kill "$(cat sandbox.pid)" || true
