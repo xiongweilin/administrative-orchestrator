@@ -23,7 +23,9 @@ from administrative_orchestrator.effect_provider import (
 )
 from administrative_orchestrator.governance import GovernanceBasis
 from administrative_orchestrator.integrations.kernel.bridge import KernelExecutionBridge
-from administrative_orchestrator.integrations.kernel.effect_provider import KernelCutoverEffectProvider
+from administrative_orchestrator.integrations.kernel.effect_provider import (
+    KernelCutoverEffectProvider,
+)
 from administrative_orchestrator.integrations.kernel.models import KernelProjectionStatus
 from administrative_orchestrator.obligations import AdministrativeObligation
 from administrative_orchestrator.persistence import SqlStore
@@ -31,7 +33,7 @@ from administrative_orchestrator.verification import (
     VerificationDisposition,
     verify_onboarding_observation,
 )
-from scripts.kernel_cutover_stack import sandbox_effect_id
+from kernel_cutover_stack import sandbox_effect_id
 
 
 class ForbiddenFallbackProvider:
