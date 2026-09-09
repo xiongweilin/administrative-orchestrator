@@ -7,6 +7,7 @@ from ...obligations import AdministrativeObligation
 from ...persistence import SqlStore
 from .client import HttpKernelResponsibilityClient, KernelResponsibilityClient
 from .compatibility import HttpKernelContractProbe, KernelCompatibilityError, KernelContractIdentity
+from .evidence import HttpKernelEvidenceClient, KernelEvidenceClient
 from .mapper import capability_for, derive_effect_intent, derive_execution_grant, project_to_kernel
 from .models import KernelProjectionStatus, KernelShadowProjection
 from .repository import KernelBridgeRepository
@@ -39,12 +40,14 @@ class KernelExecutionBridge:
         settings: Settings | None = None,
         compatibility: KernelContractIdentity | None = None,
         client: KernelResponsibilityClient | None = None,
+        evidence_client: KernelEvidenceClient | None = None,
     ) -> None:
         self.store = store
         self.settings = settings or get_settings()
         self.repository = KernelBridgeRepository(store)
         self._compatibility = compatibility
         self._client = client
+        self._evidence_client = evidence_client
 
     @property
     def enabled(self) -> bool:
@@ -78,6 +81,7 @@ class KernelExecutionBridge:
                 timeout_seconds=self.settings.kernel_contract_timeout_seconds,
                 require_work_admission=self.requires_work_admission,
                 require_domain_effect_execution=self.cutover,
+                require_domain_effect_evidence=self.cutover,
             ).fetch_identity()
         if (
             self.requires_work_admission
@@ -90,6 +94,10 @@ class KernelExecutionBridge:
             raise KernelCompatibilityError(
                 "kernel cutover is fail-closed without bounded-domain-effect-execution-v1"
             )
+        if self.cutover and self._compatibility.domain_effect_verification_evidence_view is None:
+            raise KernelCompatibilityError(
+                "kernel cutover is fail-closed without domain-effect-verification-evidence-view-v1"
+            )
         return self._compatibility
 
     def client(self) -> KernelResponsibilityClient:
@@ -99,6 +107,14 @@ class KernelExecutionBridge:
                 timeout_seconds=self.settings.kernel_contract_timeout_seconds,
             )
         return self._client
+
+    def evidence_client(self) -> KernelEvidenceClient:
+        if self._evidence_client is None:
+            self._evidence_client = HttpKernelEvidenceClient(
+                self.settings.kernel_base_url,
+                timeout_seconds=self.settings.kernel_contract_timeout_seconds,
+            )
+        return self._evidence_client
 
     def prepare(
         self,
