@@ -7,6 +7,9 @@ EXPECTED_PERSISTENT_RESPONSIBILITY = "persistent-responsibility-v1"
 EXPECTED_DOMAIN_RESPONSIBILITY_PROPOSAL = "domain-responsibility-proposal-v1"
 EXPECTED_RESPONSIBILITY_WORK_ADMISSION = "responsibility-work-admission-v1"
 EXPECTED_BOUNDED_DOMAIN_EFFECT_EXECUTION = "bounded-domain-effect-execution-v1"
+EXPECTED_DOMAIN_EFFECT_VERIFICATION_EVIDENCE_VIEW = (
+    "domain-effect-verification-evidence-view-v1"
+)
 
 
 class KernelCompatibilityError(RuntimeError):
@@ -22,6 +25,7 @@ class KernelContractIdentity:
     domain_responsibility_proposal_contract: str
     responsibility_work_admission_contract: str | None = None
     bounded_domain_effect_execution_contract: str | None = None
+    domain_effect_verification_evidence_view: str | None = None
 
 
 def validate_kernel_catalog(
@@ -29,6 +33,7 @@ def validate_kernel_catalog(
     *,
     require_work_admission: bool = False,
     require_domain_effect_execution: bool = False,
+    require_domain_effect_evidence: bool = False,
 ) -> KernelContractIdentity:
     try:
         contracts = raw["contracts"]
@@ -42,18 +47,32 @@ def validate_kernel_catalog(
             raise TypeError("domain_responsibility_proposal must be an object")
         persistent = persistent_responsibility["current"]
         domain_proposal = domain_responsibility_proposal["current"]
+
         work_admission_contract: str | None = None
         work_admission = contracts.get("responsibility_work_admission")
         if work_admission is not None:
             if not isinstance(work_admission, dict):
                 raise TypeError("responsibility_work_admission must be an object")
             work_admission_contract = str(work_admission["current"])
+
         execution_contract: str | None = None
         bounded_execution = contracts.get("bounded_domain_effect_execution")
         if bounded_execution is not None:
             if not isinstance(bounded_execution, dict):
                 raise TypeError("bounded_domain_effect_execution must be an object")
             execution_contract = str(bounded_execution["current"])
+
+        evidence_view: str | None = None
+        views = raw.get("views")
+        if views is not None:
+            if not isinstance(views, dict):
+                raise TypeError("views must be an object")
+            domain_evidence = views.get("domain_effect_verification_evidence")
+            if domain_evidence is not None:
+                if not isinstance(domain_evidence, dict):
+                    raise TypeError("domain_effect_verification_evidence view must be an object")
+                evidence_view = str(domain_evidence["current"])
+
         identity = KernelContractIdentity(
             catalog_version=str(raw["catalog_version"]),
             owner=str(raw["owner"]),
@@ -62,6 +81,7 @@ def validate_kernel_catalog(
             domain_responsibility_proposal_contract=str(domain_proposal),
             responsibility_work_admission_contract=work_admission_contract,
             bounded_domain_effect_execution_contract=execution_contract,
+            domain_effect_verification_evidence_view=evidence_view,
         )
     except (KeyError, TypeError, ValueError) as exc:
         raise KernelCompatibilityError("kernel contract catalog is structurally incomplete") from exc
@@ -113,6 +133,16 @@ def validate_kernel_catalog(
             f"expected {EXPECTED_BOUNDED_DOMAIN_EFFECT_EXECUTION!r}"
         )
     if (
+        identity.domain_effect_verification_evidence_view is not None
+        and identity.domain_effect_verification_evidence_view
+        != EXPECTED_DOMAIN_EFFECT_VERIFICATION_EVIDENCE_VIEW
+    ):
+        mismatches.append(
+            "domain_effect_verification_evidence="
+            f"{identity.domain_effect_verification_evidence_view!r}, "
+            f"expected {EXPECTED_DOMAIN_EFFECT_VERIFICATION_EVIDENCE_VIEW!r}"
+        )
+    if (
         require_work_admission
         and identity.responsibility_work_admission_contract
         != EXPECTED_RESPONSIBILITY_WORK_ADMISSION
@@ -130,6 +160,15 @@ def validate_kernel_catalog(
             "bounded_domain_effect_execution is required for cutover mode: "
             f"expected {EXPECTED_BOUNDED_DOMAIN_EFFECT_EXECUTION!r}"
         )
+    if (
+        require_domain_effect_evidence
+        and identity.domain_effect_verification_evidence_view
+        != EXPECTED_DOMAIN_EFFECT_VERIFICATION_EVIDENCE_VIEW
+    ):
+        mismatches.append(
+            "domain_effect_verification_evidence is required for cutover mode: "
+            f"expected {EXPECTED_DOMAIN_EFFECT_VERIFICATION_EVIDENCE_VIEW!r}"
+        )
     if mismatches:
         raise KernelCompatibilityError("incompatible agent-kernel contracts: " + "; ".join(mismatches))
     return identity
@@ -143,11 +182,13 @@ class HttpKernelContractProbe:
         timeout_seconds: float = 3.0,
         require_work_admission: bool = False,
         require_domain_effect_execution: bool = False,
+        require_domain_effect_evidence: bool = False,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.timeout_seconds = timeout_seconds
         self.require_work_admission = require_work_admission
         self.require_domain_effect_execution = require_domain_effect_execution
+        self.require_domain_effect_evidence = require_domain_effect_evidence
 
     def fetch_identity(self) -> KernelContractIdentity:
         import httpx
@@ -167,12 +208,14 @@ class HttpKernelContractProbe:
             payload,
             require_work_admission=self.require_work_admission,
             require_domain_effect_execution=self.require_domain_effect_execution,
+            require_domain_effect_evidence=self.require_domain_effect_evidence,
         )
 
 
 __all__ = [
     "EXPECTED_BOUNDED_DOMAIN_EFFECT_EXECUTION",
     "EXPECTED_CATALOG_VERSION",
+    "EXPECTED_DOMAIN_EFFECT_VERIFICATION_EVIDENCE_VIEW",
     "EXPECTED_DOMAIN_RESPONSIBILITY_PROPOSAL",
     "EXPECTED_OWNER",
     "EXPECTED_PERSISTENT_RESPONSIBILITY",
