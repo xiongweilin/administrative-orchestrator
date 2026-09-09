@@ -197,9 +197,10 @@ def _windows_overlap(left: IdentityBinding, right: IdentityBinding) -> bool:
     right_end = right.valid_until
     if left_end is not None and normalize_datetime(left_end) <= normalize_datetime(right.valid_from):
         return False
-    if right_end is not None and normalize_datetime(right_end) <= normalize_datetime(left.valid_from):
-        return False
-    return True
+    return not (
+        right_end is not None
+        and normalize_datetime(right_end) <= normalize_datetime(left.valid_from)
+    )
 
 
 __all__ = [
