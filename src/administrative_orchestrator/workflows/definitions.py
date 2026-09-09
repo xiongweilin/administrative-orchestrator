@@ -6,13 +6,15 @@ from uuid import UUID
 from dbos import DBOS
 
 from ..config import get_settings
-from ..domain import CaseStatus
+from ..domain import CaseStatus, ReopenReason
 from ..effect_provider import EffectProvider, HttpEffectProvider
+from ..fact_acquisition import AuthoritativeFactRevalidator, build_hris_source
 from ..integrations.kernel.bridge import KernelExecutionBridge
 from ..integrations.kernel.effect_provider import KernelCutoverEffectProvider
 from ..integrations.kernel.onboarding import prepare_onboarding_kernel_shadow
 from ..onboarding_execution import OnboardingExecutionEngine
 from ..persistence import SqlStore
+from ..service import require_reopen
 from .protocol import (
     CASE_CHANGED_TOPIC,
     NORMAL_WAKE_TIMEOUT_SECONDS,
@@ -30,14 +32,7 @@ TERMINAL_STATUSES = frozenset(
 
 @DBOS.step(name="administrative_drive_onboarding_case")
 def drive_onboarding_case_step(case_id: str) -> dict[str, Any]:
-    """Drive one durable business transition with capability-scoped reality ownership.
-
-    Kernel shadow/admission remains non-physical. In cutover mode the bridge may
-    execute only explicitly owned capabilities, subject to the global physical
-    effects gate. The provider adapter then consumes those durable Kernel facts
-    and structurally forbids local execute/read-back fallback for the same
-    capability, while non-owned capabilities remain on the legacy provider.
-    """
+    """Drive one durable business transition with capability-scoped reality ownership."""
     settings = get_settings()
     store = SqlStore(settings.worker_database_url or settings.database_url)
     case = store.get_case(UUID(case_id))
@@ -50,6 +45,32 @@ def drive_onboarding_case_step(case_id: str) -> dict[str, Any]:
         CaseStatus.VERIFYING,
         CaseStatus.RECONCILING,
     }:
+        # M5 production trust: if a real authoritative HRIS is configured, re-read
+        # the exact employee dependencies before Work crosses or confirms reality.
+        # A changed department/employment fact invalidates governance even when
+        # the Administrative case authority_epoch itself did not change.
+        hris_source = build_hris_source(settings)
+        if hris_source is not None:
+            fact_validation = AuthoritativeFactRevalidator(
+                hris_source,
+                max_age_seconds=settings.authoritative_fact_max_age_seconds,
+            ).validate(case)
+            if not fact_validation.valid:
+                reopened = require_reopen(case, ReopenReason.GOVERNANCE_STALE)
+                store.update_case(
+                    reopened,
+                    expected_previous_version=case.version,
+                    event_type="case.authoritative_fact_revalidation_required",
+                    payload={"reasons": list(fact_validation.reasons)},
+                )
+                return {
+                    "case_id": case_id,
+                    "status": reopened.status.value,
+                    "case_version": reopened.version,
+                    "authority_epoch": reopened.authority_epoch,
+                    "reason": "authoritative_fact_stale",
+                }
+
         bridge: KernelExecutionBridge | None = None
         if settings.kernel_bridge_mode != "disabled":
             bridge = KernelExecutionBridge(store, settings=settings)
