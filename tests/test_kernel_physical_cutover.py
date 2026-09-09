@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from uuid import UUID, uuid4
@@ -301,12 +302,7 @@ def test_rebound_or_missing_kernel_evidence_fails_closed_without_legacy_fallback
     assert missing.availability is ObservationAvailability.UNKNOWN
     assert missing.error_class == "kernel_evidence_unavailable"
 
-    rebound = KernelEvidenceView(
-        **{
-            **evidence.__dict__,
-            "work_ref": "work:rebound",
-        }
-    )
+    rebound = replace(evidence, work_ref="work:rebound")
     rebound_provider = KernelCutoverEffectProvider(
         legacy,
         FakeKernelBridge(
