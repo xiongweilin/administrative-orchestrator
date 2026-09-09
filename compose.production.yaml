@@ -84,7 +84,7 @@ services:
       context: .
       dockerfile: Dockerfile.kernel
       args:
-        AGENT_KERNEL_REF: ${AGENT_KERNEL_REF:-0233ba4e576b60a0702637bd93c764df9b0848d5}
+        AGENT_KERNEL_REF: ${AGENT_KERNEL_REF:-fe4b3f4bf2e376bd7105caf7d15d77e2483c7197}
     image: administrative-agent-kernel:production
     restart: unless-stopped
     environment:
