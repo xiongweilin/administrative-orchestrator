@@ -6,16 +6,15 @@ from uuid import UUID
 from dbos import DBOS
 
 from ..config import get_settings
-from ..domain import CaseStatus, ReopenReason
+from ..domain import CaseStatus
 from ..effect_provider import EffectProvider, HttpEffectProvider
-from ..fact_acquisition import AuthoritativeFactRevalidator, build_hris_source
+from ..fact_acquisition import build_hris_source
 from ..integrations.kernel.bridge import KernelExecutionBridge
 from ..integrations.kernel.effect_provider import KernelCutoverEffectProvider
 from ..integrations.kernel.onboarding import prepare_onboarding_kernel_shadow
-from ..observability import record_governance_revalidation
 from ..onboarding_execution import OnboardingExecutionEngine
 from ..persistence import SqlStore
-from ..service import require_reopen
+from ..production_trust_execution import ProductionTrustOnboardingExecutionEngine
 from .protocol import (
     CASE_CHANGED_TOPIC,
     NORMAL_WAKE_TIMEOUT_SECONDS,
@@ -46,33 +45,6 @@ def drive_onboarding_case_step(case_id: str) -> dict[str, Any]:
         CaseStatus.VERIFYING,
         CaseStatus.RECONCILING,
     }:
-        # M5 production trust: if a real authoritative HRIS is configured, re-read
-        # the exact employee dependencies before Work crosses or confirms reality.
-        # A changed department/employment fact invalidates governance even when
-        # the Administrative case authority_epoch itself did not change.
-        hris_source = build_hris_source(settings)
-        if hris_source is not None:
-            fact_validation = AuthoritativeFactRevalidator(
-                hris_source,
-                max_age_seconds=settings.authoritative_fact_max_age_seconds,
-            ).validate(case)
-            record_governance_revalidation(valid=fact_validation.valid)
-            if not fact_validation.valid:
-                reopened = require_reopen(case, ReopenReason.GOVERNANCE_STALE)
-                store.update_case(
-                    reopened,
-                    expected_previous_version=case.version,
-                    event_type="case.authoritative_fact_revalidation_required",
-                    payload={"reasons": list(fact_validation.reasons)},
-                )
-                return {
-                    "case_id": case_id,
-                    "status": reopened.status.value,
-                    "case_version": reopened.version,
-                    "authority_epoch": reopened.authority_epoch,
-                    "reason": "authoritative_fact_stale",
-                }
-
         bridge: KernelExecutionBridge | None = None
         if settings.kernel_bridge_mode != "disabled":
             bridge = KernelExecutionBridge(store, settings=settings)
@@ -92,7 +64,18 @@ def drive_onboarding_case_step(case_id: str) -> dict[str, Any]:
         )
         if bridge is not None and bridge.cutover:
             provider = KernelCutoverEffectProvider(provider, bridge)
-        case = OnboardingExecutionEngine(store, provider).run(UUID(case_id))
+
+        hris_source = build_hris_source(settings)
+        if hris_source is None:
+            engine = OnboardingExecutionEngine(store, provider)
+        else:
+            engine = ProductionTrustOnboardingExecutionEngine(
+                store,
+                provider,
+                hris_source=hris_source,
+                max_fact_age_seconds=settings.authoritative_fact_max_age_seconds,
+            )
+        case = engine.run(UUID(case_id))
 
     return {
         "case_id": case_id,
