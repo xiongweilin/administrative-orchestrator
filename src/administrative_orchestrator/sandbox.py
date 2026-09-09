@@ -9,7 +9,7 @@ from uuid import UUID
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
-from sqlalchemy import JSON, DateTime, String, Uuid, create_engine
+from sqlalchemy import JSON, DateTime, Integer, String, Uuid, create_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
 from .config import get_settings
@@ -38,6 +38,7 @@ class RealizedEffectRow(SandboxBase):
     payload_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
     state_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
     digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    apply_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     realized_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
@@ -80,6 +81,7 @@ class ObservationResponse(BaseModel):
     provider_ref: str
     state: dict[str, Any]
     digest: str
+    apply_attempts: int
     observed_at: datetime
 
 
@@ -118,6 +120,7 @@ def apply_effect(effect_id: UUID, body: ApplyEffectBody) -> ApplyEffectResponse:
                     status_code=409,
                     detail="effect id already realized with different semantics",
                 )
+            existing.apply_attempts += 1
             return ApplyEffectResponse(provider_ref=provider_ref)
         db.add(
             RealizedEffectRow(
@@ -128,6 +131,7 @@ def apply_effect(effect_id: UUID, body: ApplyEffectBody) -> ApplyEffectResponse:
                 payload_json=body.payload,
                 state_json=state,
                 digest=digest,
+                apply_attempts=1,
                 realized_at=utcnow(),
             )
         )
@@ -147,5 +151,6 @@ def observe_effect(effect_id: UUID) -> ObservationResponse:
             provider_ref=f"sandbox:{effect_id}",
             state=row.state_json,
             digest=row.digest,
+            apply_attempts=row.apply_attempts,
             observed_at=row.realized_at,
         )
