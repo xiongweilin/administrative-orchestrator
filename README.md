@@ -97,7 +97,7 @@ Planned vertical slices:
 
 The first executable slice is **employee onboarding** because it forces multi-actor coordination, long-lived state, identity, policy, approvals, multiple external systems, semantic verification, and bounded completion.
 
-## Current milestone: M5 Production Trust & Reality Integration
+## Current milestone: M6 Trusted Perception & Admission
 
 M0–M4 established the semantic foundation, durable governed execution, organizational authority/policy, administrative correctness, and Agent Kernel convergence/cut-over invariants. M5 makes that reference architecture production-shaped without collapsing those ownership boundaries.
 
@@ -128,12 +128,23 @@ fe4b3f4bf2e376bd7105caf7d15d77e2483c7197
 
 M5 has an explicit acceptance boundary: repository CI can prove code, migration, restart, cut-over, DR, ambiguity semantics, and static/security quality gates, while the external checklist proves enterprise OIDC/Odoo/Keycloak credentials and network behavior. The isolated real-staging checklist, final exact-head CI, squash merge, and post-merge main CI now pass on the supported Kernel revision `fe4b3f4bf2e376bd7105caf7d15d77e2483c7197`; M5 is **complete for the recorded scope**.
 
+M6 is the upstream **Trusted Perception & Admission** milestone. Its first
+slice establishes the Administrative Intake Plane contract: authenticated
+provider delivery, immutable source/evidence/interpretation lineage,
+candidate-only modeling, explicit assessment, and human-confirmed promotion
+into the existing M5 request/case path. M6 is **in progress**; see
+`docs/milestones/M6.md` and ADR 0003 for the current boundary. No model output,
+provider delivery, or external sender can mint Administrative authority or
+Agent Kernel Work.
+
 See:
 
 - `docs/architecture.md` for the current M4/M5 ownership topology;
 - `docs/adr/0001-domain-kernel-dbos-ownership.md` for canonical semantic ownership;
 - `docs/adr/0002-repository-and-deployment-boundaries.md` for why service/process separation does not currently imply more repositories;
 - `docs/milestones/M5.md` for milestone acceptance evidence, staging checklist, and SLO targets;
+- `docs/milestones/M6.md` for the Trusted Perception & Admission delivery plan and gates;
+- `docs/adr/0003-trusted-perception-and-admission.md` for the intake, candidate, and admission boundary;
 - `docs/production-operations.md` for deployment, observability, backup/restore, incident, and staging procedures.
 
 ## Development principles
