@@ -11,6 +11,18 @@ from administrative_orchestrator.kernel_state_dr import (
 )
 
 
+def backup(source: Path, destination: Path) -> None:
+    backup_kernel_state(source, destination)
+
+
+def verify(path: Path) -> None:
+    verify_kernel_state_backup(path)
+
+
+def restore(source_backup: Path, destination: Path) -> None:
+    restore_kernel_state(source_backup, destination)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description=(
