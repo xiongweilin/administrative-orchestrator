@@ -28,6 +28,7 @@ from administrative_orchestrator.effect_provider import (
     RealityObservation,
 )
 from administrative_orchestrator.execution_repository import ExecutionRepository
+from administrative_orchestrator.integrations.kernel.evidence import KernelEvidenceView
 from administrative_orchestrator.integrations.kernel.models import (
     KernelExecutionStatus,
     KernelProjectionStatus,
@@ -128,6 +129,15 @@ class RestartKernelRepository:
     def _intent_id(obligation_id: UUID) -> UUID:
         return uuid5(NAMESPACE_URL, f"kernel-restart:intent:{obligation_id}")
 
+    @staticmethod
+    def _refs(target: str) -> dict[str, str]:
+        return {
+            "work": f"work:restart:{target}",
+            "run": f"run:restart:{target}",
+            "action": f"action:restart:{target}",
+            "evidence": f"evidence:restart:{target}",
+        }
+
     def get_projection_for_obligation(self, obligation_id: UUID):
         obligation = self._obligation(obligation_id)
         if obligation is None or obligation.target_system not in {"hris", "iam"}:
@@ -135,6 +145,7 @@ class RestartKernelRepository:
         if not self.state.receipts_completed:
             return None
         target = obligation.target_system
+        refs = self._refs(target)
         return SimpleNamespace(
             obligation_id=obligation_id,
             intent_id=self._intent_id(obligation_id),
@@ -143,7 +154,10 @@ class RestartKernelRepository:
             kernel_execution_ref=f"execution:restart:{target}",
             kernel_provider_id=f"provider:restart:{target}",
             kernel_execution_processed_at=datetime.now(UTC),
-            kernel_evidence_ref=f"evidence:restart:{target}",
+            kernel_work_ref=refs["work"],
+            kernel_run_ref=refs["run"],
+            kernel_action_ref=refs["action"],
+            kernel_evidence_ref=refs["evidence"],
         )
 
     def get_intent(self, intent_id: UUID):
@@ -158,6 +172,42 @@ class RestartKernelRepository:
                 )
         return None
 
+    def evidence(self, evidence_ref: str) -> KernelEvidenceView | None:
+        obligation_set = self._obligation_set()
+        if obligation_set is None or not self.state.receipts_completed:
+            return None
+        for obligation in obligation_set.obligations:
+            target = obligation.target_system
+            if target not in {"hris", "iam"}:
+                continue
+            refs = self._refs(target)
+            if refs["evidence"] != evidence_ref:
+                continue
+            expected = dict(obligation.expected_postcondition)
+            return KernelEvidenceView(
+                evidence_ref=evidence_ref,
+                action_ref=refs["action"],
+                work_ref=refs["work"],
+                run_ref=refs["run"],
+                objective_result="pass",
+                observed_postcondition=dict(expected),
+                expected_postcondition=dict(expected),
+                verification_request_ref=f"verification-request:restart:{target}",
+                verification_attempt_ref=f"verification-attempt:restart:{target}",
+                verifier_provider_id=f"verifier:restart:{target}",
+                verifier_provider_execution_binding_ref=f"binding:restart:{target}",
+                captured_at=datetime.now(UTC),
+            )
+        return None
+
+
+class RestartKernelEvidenceClient:
+    def __init__(self, repository: RestartKernelRepository) -> None:
+        self.repository = repository
+
+    def inspect(self, evidence_ref: str):
+        return self.repository.evidence(evidence_ref)
+
 
 class RestartKernelBridge:
     enabled = True
@@ -165,6 +215,10 @@ class RestartKernelBridge:
 
     def __init__(self, store: SqlStore, state: KernelReceiptState) -> None:
         self.repository = RestartKernelRepository(store, state)
+        self._evidence_client = RestartKernelEvidenceClient(self.repository)
+
+    def evidence_client(self):
+        return self._evidence_client
 
     def prepare(self, *args, **kwargs):
         del args, kwargs
