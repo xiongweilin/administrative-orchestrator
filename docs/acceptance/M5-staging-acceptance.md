@@ -1,6 +1,6 @@
 # M5 staging acceptance record
 
-Status: **BLOCKED — real staging evidence is present, but promoted Agent Kernel `0233ba4e…` pre-receipt recovery does not pass**
+Status: **BLOCKED — real staging failed on historical Kernel `0233ba4e…`; repaired Kernel `fe4b3f4b…` is now the supported baseline but still requires real-staging revalidation**
 
 This record separates evidence from the isolated task-scoped staging deployment, repository CI, and the cross-repository Agent Kernel canary. It is not a production-readiness claim. Existing local infrastructure stacks were left running and unchanged; the staging topology was isolated under `D:\infrastructure\compose\administrative-m5-staging`.
 
@@ -8,22 +8,23 @@ This record separates evidence from the isolated task-scoped staging deployment,
 
 | Item | Observed value / result |
 | --- | --- |
-| Acceptance observation time | 2026-09-09T23:22:33+08:00 |
+| Acceptance observation time | 2026-09-09T23:22:33+08:00 for the last real-staging run; repository repair/promotion followed afterward |
 | Administrative branch | `codex/m5-production-trust-reality-integration` |
-| Administrative implementation head tested | `5c7c0aafebb4759bc43e25376617b8dd87f92c41` |
+| Administrative implementation head last tested in real staging | `5c7c0aafebb4759bc43e25376617b8dd87f92c41` |
 | Administrative base | `main` at `cddb5bc5f34ece1a6dffa683f089310e670fcd0d` |
-| Supported Agent Kernel revision | `0233ba4e576b60a0702637bd93c764df9b0848d5` |
-| Pinned Agent Kernel checkout | `main` at `0233ba4e576b60a0702637bd93c764df9b0848d5`; clean |
-| Pinned revision versus Kernel remote `main` | identical (`0233ba4e576b60a0702637bd93c764df9b0848d5`) |
-| PR #19 | open, Draft, mergeable state `clean` |
-| Repository CI and M5 Production Trust | PASS — all 8 reported checks successful |
-| Isolated real staging deployment | PASS — Administrative/API/worker/Operations/Kernel plus Odoo, Keycloak, gateway, and PostgreSQL services running |
+| Current supported Agent Kernel revision | `fe4b3f4bf2e376bd7105caf7d15d77e2483c7197` |
+| Last Agent Kernel revision tested in real staging | `0233ba4e576b60a0702637bd93c764df9b0848d5` — historical failing baseline |
+| Kernel repair | PR #95 merged; qualification remains pre-action and fresh-process post-action recovery replays the historical qualification only after a Kernel-proven committed action boundary |
+| PR #19 | open, Draft; it must remain Draft pending real-staging revalidation and the remaining M5 gates |
+| Repository CI before PR #95 promotion | PASS; a new full Administrative CI/M5 run is required on the `fe4b3f4b…` pin |
+| Isolated real staging deployment | PASS — Administrative/API/worker/Operations/Kernel plus Odoo, Keycloak, gateway, and PostgreSQL services running during the recorded staging exercise |
 | Staging configuration | PRESENT in a task-scoped ignored file; secret values intentionally omitted from this record |
-| Promoted Kernel runtime | PASS for deployment identity — healthy container; `portable-runtime` direct URL resolved to `0233ba4e576b60a0702637bd93c764df9b0848d5` |
+| Historical promoted Kernel runtime | PASS for deployment identity — the tested healthy container resolved `portable-runtime` to `0233ba4e576b60a0702637bd93c764df9b0848d5` |
+| Current promoted Kernel runtime | NOT YET REVALIDATED IN REAL STAGING — rebuild/restart must prove exact `fe4b3f4bf2e376bd7105caf7d15d77e2483c7197` before rerunning recovery gates |
 | Existing local infrastructure | PRESERVED — no existing commerce, Dify, gateway, observability, or Odoo stack was stopped, replaced, or deleted |
-| Production preflight | PASS — production image executed with the merged task-scoped staging configuration and pinned Kernel revision |
+| Production preflight | PASS on the historical tested staging configuration; rerun is required after the current Kernel image promotion |
 
-Repository CI proves repository contracts and test fixtures. The staging evidence below additionally exercises real OIDC, Odoo, Keycloak, TLS, network, credential separation, live correlation, and recovery paths. It does not waive the failed pinned/main recovery gates.
+Repository CI proves repository contracts and test fixtures. The staging evidence below additionally exercises real OIDC, Odoo, Keycloak, TLS, network, credential separation, live correlation, and recovery paths. Historical failures remain evidence even after a Kernel repair; they become closed only after the repaired supported revision passes the same real-staging counterexample.
 
 ## Staging gate results
 
@@ -47,19 +48,23 @@ Repository CI proves repository contracts and test fixtures. The staging evidenc
 | Administrative PostgreSQL measured RPO/RTO | BLOCKED | Backup elapsed `0.658s` and restore elapsed `6.231s` were measured, but a service-level outage-to-ready RTO and last-accepted-write-to-backup RPO were not measured |
 | Kernel state backup/restore | PASS for restore exercise | SQLite online backup and restore passed `quick_check`; runtime record count `953`, lease count `21`, and the recovered receipt were present |
 | Kernel measured RPO/RTO | BLOCKED | Backup elapsed `0.324s` and file restore elapsed `0.156s` were measured, but fresh-process service-ready RTO and last-accepted-write RPO were not measured |
-| Pre-promotion dual cutover evidence | PASS — historical | The earlier staging container executed both HRIS and IAM physical cutovers; legacy execute/observe paths remained unused; this row is not a current promoted-baseline claim |
-| Pre-promotion lost-ACK recovery evidence | PASS — historical | The earlier staging container recovered the committed effect with one sandbox apply attempt and no redispatch; this row is not a current promoted-baseline claim |
-| Promoted Kernel pre-receipt crash recovery | **BLOCKED** | Real staging phase 1 for subject `m5-pre-receipt-20260909-225933` crossed Odoo exactly once (`odoo_subject_identity_count=1`) with no Kernel receipt, execution ref `execution_bounded_domain_effect_1ecc04e3d2b5949708285b29a9a67243`; after a standard promoted-process restart, phase 2 returned HTTP `409`, and a read-only state-copy diagnostic identified `domain effect authorization was consumed before qualification closure` before existing-attempt recovery could run |
-| Promoted Kernel ambiguous result-commit recovery | **BLOCKED / NOT RUN IN THIS PASS** | The mandatory run stopped at the real pre-receipt blocker; the older sandbox/6b result is historical and is not evidence for promoted `0233ba4e…` staging acceptance |
-| Fresh-process Kernel recovery overall | **BLOCKED** | Lost-ACK path passes, but pre-receipt and ambiguous-result mandatory paths are not both recoverable |
-| Main canary | **BLOCKED** | Pinned revision equals current Kernel `main`; the failing recovery gates therefore also block a main canary pass |
-| M5 merge decision | **BLOCKED** | Do not mark PR #19 Ready or merge while any mandatory recovery or RPO/RTO gate is blocked |
+| Pre-promotion dual cutover evidence | PASS — historical | The earlier staging container executed both HRIS and IAM physical cutovers; legacy execute/observe paths remained unused; this row is not a current supported-baseline claim |
+| Pre-promotion lost-ACK recovery evidence | PASS — historical | The earlier staging container recovered the committed effect with one sandbox apply attempt and no redispatch; this row is not a current supported-baseline claim |
+| Kernel `0233ba4e…` pre-receipt crash recovery | **FAIL — HISTORICAL** | Real staging phase 1 for subject `m5-pre-receipt-20260909-225933` crossed Odoo exactly once (`odoo_subject_identity_count=1`) with no Kernel receipt, execution ref `execution_bounded_domain_effect_1ecc04e3d2b5949708285b29a9a67243`; after a standard fresh-process restart, phase 2 returned HTTP `409`, and a read-only state-copy diagnostic identified `domain effect authorization was consumed before qualification closure` before existing-attempt recovery could run |
+| Kernel PR #95 repair | PASS at Kernel repository/conformance level | Fix preserves qualification as a pre-action closure; only a current activation proven as `resume_after_committed_action_boundary=true` can replay the historical qualification bound to the committed dispatch/fencing lineage; no second qualification event or provider invocation is created |
+| Current `fe4b3f4b…` pre-receipt crash recovery | **BLOCKED / REVALIDATION REQUIRED** | The exact historical counterexample above must be rerun against a fresh production Kernel container whose installed revision is `fe4b3f4bf2e376bd7105caf7d15d77e2483c7197` |
+| Current `fe4b3f4b…` ambiguous result-commit recovery | **BLOCKED / NOT YET RUN IN REAL STAGING** | The mandatory real-staging run must prove fresh-process recovery, exact independent verifier routing, no blind redispatch, one physical outcome, immutable historical `execution-unknown`, and a new `recovered-completed` resolution |
+| Fresh-process Kernel recovery overall | **BLOCKED** | Lost-ACK path passes historically, but the two mandatory recovery counterexamples must both pass on the current supported baseline |
+| Repository pinned/main canary on `fe4b3f4b…` | **PENDING** | Administrative branch promotion must complete a new full CI and M5 Production Trust run; repository success will not substitute for real-staging revalidation |
+| M5 merge decision | **BLOCKED** | Do not mark PR #19 Ready or merge while any mandatory recovery, OIDC key-rotation, or formal RPO/RTO gate is blocked |
 
 ## Detailed evidence boundary
 
 The strongest real-staging path is the completed dual-provider case `92c82e8a-d022-47a1-acf1-fa6256689330`: two effects succeeded, two independently verified outcomes were recorded, and the Odoo and Keycloak readbacks matched the approved subject facts. The controlled Odoo response-loss case `75acc308-e66c-4a27-a89c-b545f1797657` separately demonstrated that one committed physical effect was reconciled after a fresh Kernel recovery without blind redispatch.
 
-The remaining blocker is in the cross-repository Kernel contract, not the isolated staging network. The promoted container runs the exact supported/current-main revision `0233ba4e…`. The real pre-receipt fixture establishes the physical boundary and one Odoo subject identity, but fresh-process execution fails in `DomainEffectQualificationAssessment` because the authorization use is already consumed before the existing succeeded Attempt can be resumed. The phase-2 state copy contains the succeeded Attempt but no Outcome, Evidence, or bounded receipt. No change was made to `D:\agent\agent-kernel`; any repair must be a separate Kernel branch and PR before this record can be reopened, and no Administrative fallback/workaround is authorized.
+The historical pre-receipt blocker was in the cross-repository Kernel contract, not the isolated staging network. On `0233ba4e…`, the real pre-receipt fixture established the physical boundary and one Odoo subject identity, but fresh-process execution failed in `DomainEffectQualificationAssessment` because a new fencing generation attempted a new qualification closure after the canonical AuthorizationUse had already been consumed at the committed action boundary. The phase-2 state copy contained the succeeded Attempt but no Outcome, Evidence, or bounded receipt.
+
+Agent Kernel PR #95 repaired that sequencing without weakening qualification ordering: the current activation must first prove a committed action boundary, and qualification then replays the historical pre-action closure identified by the committed dispatch's historical fencing generation. The repair was merged as `fe4b3f4bf2e376bd7105caf7d15d77e2483c7197` and promoted as the Administrative supported baseline. This record remains blocked until the same real-staging counterexample passes on that exact revision. No Administrative fallback/workaround is authorized.
 
 ## Protected configuration references
 
@@ -105,16 +110,18 @@ The following references are present only as names in the task-scoped local conf
 - `ADMIN_OPERATIONS_OIDC_CLIENT_ID`
 - `ADMIN_OPERATIONS_OIDC_SCOPE`
 
-The supported Kernel revision remains `0233ba4e576b60a0702637bd93c764df9b0848d5`; this blocked record authorizes no revision promotion and no production cutover.
+The current supported Kernel revision is `fe4b3f4bf2e376bd7105caf7d15d77e2483c7197`. Promotion does not authorize production cutover or M5 completion before the real-staging recovery, key-rotation, and RPO/RTO gates pass.
 
 ## Required unblock evidence
 
-1. Repair the pre-receipt recovery protocol in a separate Agent Kernel branch and PR; do not modify Agent Kernel in Administrative PR #19.
-2. Re-run the isolated pre-receipt and ambiguous-result tests against a fresh Kernel process and verify no blind redispatch, one physical apply, durable receipt, independent verification, and terminal recovery state.
-3. Re-run the pinned/current-main canary at the repaired Kernel revision and record the exact revision; keep the current production pin unchanged until that canary passes.
-4. Measure service-level RPO/RTO from a defined outage/last-accepted-write boundary through service-ready and semantic verification for both PostgreSQL and Kernel state.
-5. Only after every mandatory row is PASS may PR #19 be marked Ready, merged, or described as M5 complete.
+1. Rebuild/restart the isolated staging Kernel from the standard production image and prove the installed `portable-runtime` resolves exactly to `fe4b3f4bf2e376bd7105caf7d15d77e2483c7197`.
+2. Re-run the real pre-receipt counterexample and prove fresh-process completion from the existing succeeded Attempt without a second physical dispatch, second qualification closure, or new runtime authority.
+3. Re-run the real ambiguous-result counterexample and prove exact independent verifier routing, canonical recovery, immutable historical `execution-unknown`, a new `recovered-completed` resolution, and exactly one physical external outcome.
+4. Execute OIDC signing-key rotation against the staging realm and prove running-process JWKS refresh for a new `kid` plus fail-closed rejection of an unknown key after refresh.
+5. Measure service-level RPO/RTO from a defined outage/last-accepted-write boundary through service-ready and semantic verification for both Administrative/DBOS PostgreSQL and Kernel state.
+6. Re-run production preflight and the full Administrative repository CI/M5 workflows on the current supported Kernel pin.
+7. Only after every mandatory row is PASS may PR #19 be marked Ready, merged, or described as M5 complete.
 
 ## Residual risk
 
-Until the above evidence exists, the remaining risks are durable recovery after a pre-receipt crash, terminal recovery after an ambiguous result-commit boundary, untested OIDC signing-key rotation, and unmeasured service-level RPO/RTO. Real staging happy-path, governance invalidation, least-privilege rejection, observability, and one response-loss reconciliation path are recorded as evidence, but they do not compensate for a failed recovery contract.
+Until the above evidence exists, the remaining risks are unverified real-staging recovery on the repaired Kernel baseline, terminal recovery after an ambiguous result-commit boundary, untested OIDC signing-key rotation, and unmeasured service-level RPO/RTO. Real staging happy-path, governance invalidation, least-privilege rejection, observability, and one response-loss reconciliation path are recorded as evidence, but they do not compensate for an unverified current recovery baseline.
