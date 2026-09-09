@@ -1,0 +1,21 @@
+name: Sonar diagnostic
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  gate-conditions:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Print current PR quality-gate conditions
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          curl --fail --silent --show-error \
+            -u "${SONAR_TOKEN}:" \
+            "https://sonarcloud.io/api/qualitygates/project_status?projectKey=metratio_administrative-orchestrator&pullRequest=${PR_NUMBER}" \
+            | python -c 'import json,sys; data=json.load(sys.stdin)["projectStatus"]; print(json.dumps({"status": data.get("status"), "conditions": data.get("conditions", [])}, indent=2))'
