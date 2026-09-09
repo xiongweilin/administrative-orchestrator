@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 
 from ...domain import EffectRecord
@@ -13,7 +14,7 @@ from ...effect_provider import (
     RealityObservation,
 )
 from .bridge import KERNEL_CUTOVER_CAPABILITIES, KernelExecutionBridge
-from .models import KernelExecutionStatus, KernelProjectionStatus
+from .models import KernelExecutionStatus, KernelProjectionStatus, KernelShadowProjection
 
 
 def _effect_capability(effect: EffectRecord) -> str:
@@ -40,7 +41,6 @@ class KernelCutoverEffectProvider:
         self.bridge = bridge
 
     def execute(self, effect: EffectRecord, payload: dict[str, Any]) -> ProviderExecutionResult:
-        del payload
         if not self._kernel_owned(effect):
             return self.fallback.execute(effect, payload)
         projection = self._projection(effect)
@@ -123,8 +123,8 @@ class KernelCutoverEffectProvider:
         if status is KernelExecutionStatus.VERIFIED_FAIL:
             # Kernel already performed the authoritative independent read-back.
             # Preserve its negative judgment without fabricating a successful
-            # local observation; the Admin verifier will deterministically
-            # classify this sentinel state as a postcondition mismatch.
+            # local observation; the Admin verifier deterministically treats
+            # this sentinel state as a frozen-postcondition mismatch.
             return RealityObservation(
                 availability=ObservationAvailability.AVAILABLE,
                 presence=ObservationPresence.PRESENT,
@@ -151,7 +151,7 @@ class KernelCutoverEffectProvider:
             and _effect_capability(effect) in KERNEL_CUTOVER_CAPABILITIES
         )
 
-    def _projection(self, effect: EffectRecord):
+    def _projection(self, effect: EffectRecord) -> KernelShadowProjection | None:
         if effect.obligation_id is None:
             return None
         projection = self.bridge.repository.get_projection_for_obligation(effect.obligation_id)
@@ -165,7 +165,7 @@ class KernelCutoverEffectProvider:
         return projection
 
     @staticmethod
-    def _provider_ref(projection) -> str | None:
+    def _provider_ref(projection: KernelShadowProjection | None) -> str:
         if projection is None:
             return "agent-kernel:unresolved"
         execution_ref = projection.kernel_execution_ref or "unresolved"
@@ -175,8 +175,8 @@ class KernelCutoverEffectProvider:
     @staticmethod
     def _unknown_observation(
         effect: EffectRecord,
-        provider_ref: str | None,
-        observed_at,
+        provider_ref: str,
+        observed_at: datetime,
         error_class: str,
     ) -> RealityObservation:
         return RealityObservation(
