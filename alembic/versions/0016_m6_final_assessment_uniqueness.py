@@ -1,6 +1,6 @@
 """m6 final intake assessment uniqueness
 
-Revision ID: 0016_m6_final_assessment_uniqueness
+Revision ID: 0016_m6_assess_unique
 Revises: 0015_m6_intake_core
 """
 
@@ -10,7 +10,7 @@ import sqlalchemy as sa
 from alembic import op
 
 
-revision: str = "0016_m6_final_assessment_uniqueness"
+revision: str = "0016_m6_assess_unique"
 down_revision: str | None = "0015_m6_intake_core"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
