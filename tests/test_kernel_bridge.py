@@ -150,6 +150,7 @@ def _compatibility(
     *,
     work_admission: bool = False,
     execution: bool = False,
+    evidence: bool = False,
 ) -> KernelContractIdentity:
     return KernelContractIdentity(
         catalog_version="portable-runtime-contracts-v1",
@@ -162,6 +163,9 @@ def _compatibility(
         ),
         bounded_domain_effect_execution_contract=(
             "bounded-domain-effect-execution-v1" if execution else None
+        ),
+        domain_effect_verification_evidence_view=(
+            "domain-effect-verification-evidence-view-v1" if evidence else None
         ),
     )
 
@@ -244,6 +248,7 @@ def _catalog(
     *,
     include_work_admission: bool = False,
     include_execution: bool = False,
+    include_evidence: bool = False,
 ) -> dict[str, object]:
     contracts: dict[str, object] = {
         "persistent_responsibility": {"current": "persistent-responsibility-v1"},
@@ -259,12 +264,19 @@ def _catalog(
         contracts["bounded_domain_effect_execution"] = {
             "current": "bounded-domain-effect-execution-v1"
         }
-    return {
+    raw: dict[str, object] = {
         "catalog_version": "portable-runtime-contracts-v1",
         "owner": "portable-runtime/contracts",
         "runtime_protocol": "2.0",
         "contracts": contracts,
     }
+    if include_evidence:
+        raw["views"] = {
+            "domain_effect_verification_evidence": {
+                "current": "domain-effect-verification-evidence-view-v1"
+            }
+        }
+    return raw
 
 
 def test_kernel_contract_gate_preserves_shadow_compatibility_and_gates_admission() -> None:
@@ -280,12 +292,26 @@ def test_kernel_contract_gate_preserves_shadow_compatibility_and_gates_admission
         require_work_admission=True,
     ) == _compatibility(work_admission=True)
 
-    cutover_raw = _catalog(include_work_admission=True, include_execution=True)
+    execution_raw = _catalog(include_work_admission=True, include_execution=True)
+    with pytest.raises(KernelCompatibilityError, match="domain_effect_verification_evidence"):
+        validate_kernel_catalog(
+            execution_raw,
+            require_work_admission=True,
+            require_domain_effect_execution=True,
+            require_domain_effect_evidence=True,
+        )
+
+    cutover_raw = _catalog(
+        include_work_admission=True,
+        include_execution=True,
+        include_evidence=True,
+    )
     assert validate_kernel_catalog(
         cutover_raw,
         require_work_admission=True,
         require_domain_effect_execution=True,
-    ) == _compatibility(work_admission=True, execution=True)
+        require_domain_effect_evidence=True,
+    ) == _compatibility(work_admission=True, execution=True, evidence=True)
 
     changed = {
         **admission_raw,
@@ -524,7 +550,7 @@ def test_cutover_executes_owned_hris_once_and_persists_complete_kernel_lineage()
             external_effects_enabled=True,
             kernel_responsibility_admission_policy_ref="responsibility-admission:admin@1",
         ),
-        compatibility=_compatibility(work_admission=True, execution=True),
+        compatibility=_compatibility(work_admission=True, execution=True, evidence=True),
         client=client,
     )
 
@@ -567,7 +593,7 @@ def test_cutover_global_effect_gate_stops_before_kernel_physical_execution() -> 
             kernel_bridge_mode="cutover",
             external_effects_enabled=False,
         ),
-        compatibility=_compatibility(work_admission=True, execution=True),
+        compatibility=_compatibility(work_admission=True, execution=True, evidence=True),
         client=client,
     )
 
