@@ -24,6 +24,14 @@ class KernelWorkAdmissionStatus(StrEnum):
     PORTFOLIO_REJECTED = "portfolio-rejected"
 
 
+class KernelExecutionStatus(StrEnum):
+    AUTHORIZATION_REJECTED = "authorization-rejected"
+    EXECUTION_FAILED = "execution-failed"
+    EXECUTION_UNKNOWN = "execution-unknown"
+    VERIFIED_FAIL = "verified-fail"
+    COMPLETED = "completed"
+
+
 class AdministrativeExecutionGrant(UtcModel):
     """Business permission to discharge exactly one administrative obligation.
 
@@ -95,7 +103,17 @@ class KernelShadowProjection(UtcModel):
     kernel_reservation_ref: str | None = None
     kernel_commitment_ref: str | None = None
     kernel_work_ref: str | None = None
+    kernel_execution_status: KernelExecutionStatus | None = None
+    kernel_execution_ref: str | None = None
     kernel_run_ref: str | None = None
+    kernel_request_ref: str | None = None
+    kernel_authorization_ref: str | None = None
+    kernel_provider_id: str | None = None
+    kernel_action_ref: str | None = None
+    kernel_outcome_ref: str | None = None
+    kernel_evidence_ref: str | None = None
+    kernel_execution_responsibility_ref: str | None = None
+    kernel_execution_processed_at: datetime | None = None
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
 
@@ -160,12 +178,48 @@ class KernelShadowProjection(UtcModel):
             ):
                 raise ValueError("priority rejection must stop before resource admission refs")
 
+        execution_refs = (
+            self.kernel_execution_ref,
+            self.kernel_run_ref,
+            self.kernel_request_ref,
+            self.kernel_authorization_ref,
+            self.kernel_provider_id,
+            self.kernel_action_ref,
+            self.kernel_outcome_ref,
+            self.kernel_evidence_ref,
+            self.kernel_execution_responsibility_ref,
+            self.kernel_execution_processed_at,
+        )
+        if self.kernel_execution_status is None and any(value is not None for value in execution_refs):
+            raise ValueError("kernel execution refs require an execution status")
+        if self.kernel_execution_status is not None and not self.kernel_execution_ref:
+            raise ValueError("kernel execution status requires execution ref")
+
+        if self.status is KernelProjectionStatus.CUTOVER:
+            if self.kernel_execution_status is not KernelExecutionStatus.COMPLETED:
+                raise ValueError("cutover projection requires completed Kernel execution")
+            required_execution_refs = (
+                self.kernel_execution_ref,
+                self.kernel_run_ref,
+                self.kernel_request_ref,
+                self.kernel_authorization_ref,
+                self.kernel_provider_id,
+                self.kernel_action_ref,
+                self.kernel_outcome_ref,
+                self.kernel_evidence_ref,
+                self.kernel_execution_responsibility_ref,
+                self.kernel_execution_processed_at,
+            )
+            if any(value is None or value == "" for value in required_execution_refs):
+                raise ValueError("cutover projection requires complete Kernel execution lineage")
+
         return self
 
 
 __all__ = [
     "AdministrativeEffectIntent",
     "AdministrativeExecutionGrant",
+    "KernelExecutionStatus",
     "KernelProjectionStatus",
     "KernelShadowProjection",
     "KernelWorkAdmissionStatus",

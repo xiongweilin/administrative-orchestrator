@@ -16,6 +16,7 @@ from administrative_orchestrator.domain import (
 from administrative_orchestrator.governance import GovernanceBasis
 from administrative_orchestrator.integrations.kernel.bridge import KernelExecutionBridge
 from administrative_orchestrator.integrations.kernel.client import (
+    KernelExecutionReceipt,
     KernelProposalReceipt,
     KernelSubmissionError,
     KernelWorkAdmissionError,
@@ -32,6 +33,7 @@ from administrative_orchestrator.integrations.kernel.mapper import (
     project_to_kernel,
 )
 from administrative_orchestrator.integrations.kernel.models import (
+    KernelExecutionStatus,
     KernelProjectionStatus,
     KernelWorkAdmissionStatus,
 )
@@ -49,12 +51,15 @@ class FakeKernelClient:
         fail_submit: bool = False,
         fail_admit: bool = False,
         admission_status: str = "work-materialized",
+        execution_status: str = "completed",
     ) -> None:
         self.fail_submit = fail_submit
         self.fail_admit = fail_admit
         self.admission_status = admission_status
+        self.execution_status = execution_status
         self.submit_calls = 0
         self.admit_calls = 0
+        self.execute_calls = 0
 
     def submit(self, projection):
         self.submit_calls += 1
@@ -104,8 +109,48 @@ class FakeKernelClient:
             work_ref=f"work:{proposal_ref}",
         )
 
+    def execute(self, projection, grant, intent):
+        del grant, intent
+        self.execute_calls += 1
+        work_ref = projection.kernel_work_ref
+        assert work_ref is not None
+        execution_ref = f"execution:{work_ref}"
+        if self.execution_status != "completed":
+            return KernelExecutionReceipt(
+                status=self.execution_status,
+                execution_ref=execution_ref,
+                work_ref=work_ref,
+                processed_at=NOW,
+                run_ref=f"run:{work_ref}",
+                request_ref=f"request:{work_ref}",
+                authorization_ref=f"authorization:{work_ref}",
+                provider_id="provider:hris:kernel",
+            )
+        return KernelExecutionReceipt(
+            status="completed",
+            execution_ref=execution_ref,
+            work_ref=work_ref,
+            processed_at=NOW,
+            run_ref=f"run:{work_ref}",
+            request_ref=f"request:{work_ref}",
+            authorization_ref=f"authorization:{work_ref}",
+            provider_id="provider:hris:kernel",
+            action_ref=f"action:{work_ref}",
+            outcome_ref=f"outcome:{work_ref}",
+            evidence_ref=f"evidence:{work_ref}",
+            responsibility_ref=projection.kernel_responsibility_ref,
+        )
 
-def _compatibility(*, work_admission: bool = False) -> KernelContractIdentity:
+    def inspect_execution(self, execution_ref: str, *, expected_work_ref: str | None = None):
+        del execution_ref, expected_work_ref
+        return None
+
+
+def _compatibility(
+    *,
+    work_admission: bool = False,
+    execution: bool = False,
+) -> KernelContractIdentity:
     return KernelContractIdentity(
         catalog_version="portable-runtime-contracts-v1",
         owner="portable-runtime/contracts",
@@ -114,6 +159,9 @@ def _compatibility(*, work_admission: bool = False) -> KernelContractIdentity:
         domain_responsibility_proposal_contract="domain-responsibility-proposal-v1",
         responsibility_work_admission_contract=(
             "responsibility-work-admission-v1" if work_admission else None
+        ),
+        bounded_domain_effect_execution_contract=(
+            "bounded-domain-effect-execution-v1" if execution else None
         ),
     )
 
@@ -192,7 +240,11 @@ def _projection_inputs():
     return case, governance, obligation
 
 
-def _catalog(*, include_work_admission: bool = False) -> dict[str, object]:
+def _catalog(
+    *,
+    include_work_admission: bool = False,
+    include_execution: bool = False,
+) -> dict[str, object]:
     contracts: dict[str, object] = {
         "persistent_responsibility": {"current": "persistent-responsibility-v1"},
         "domain_responsibility_proposal": {
@@ -202,6 +254,10 @@ def _catalog(*, include_work_admission: bool = False) -> dict[str, object]:
     if include_work_admission:
         contracts["responsibility_work_admission"] = {
             "current": "responsibility-work-admission-v1"
+        }
+    if include_execution:
+        contracts["bounded_domain_effect_execution"] = {
+            "current": "bounded-domain-effect-execution-v1"
         }
     return {
         "catalog_version": "portable-runtime-contracts-v1",
@@ -223,6 +279,13 @@ def test_kernel_contract_gate_preserves_shadow_compatibility_and_gates_admission
         admission_raw,
         require_work_admission=True,
     ) == _compatibility(work_admission=True)
+
+    cutover_raw = _catalog(include_work_admission=True, include_execution=True)
+    assert validate_kernel_catalog(
+        cutover_raw,
+        require_work_admission=True,
+        require_domain_effect_execution=True,
+    ) == _compatibility(work_admission=True, execution=True)
 
     changed = {
         **admission_raw,
@@ -292,6 +355,7 @@ def test_shadow_bridge_submits_once_and_stops_before_work_admission() -> None:
     assert first.kernel_run_ref is None
     assert client.submit_calls == 1
     assert client.admit_calls == 0
+    assert client.execute_calls == 0
 
 
 def test_admission_shadow_materializes_kernel_work_once_without_run_or_authority() -> None:
@@ -327,6 +391,7 @@ def test_admission_shadow_materializes_kernel_work_once_without_run_or_authority
     assert first.kernel_run_ref is None
     assert client.submit_calls == 1
     assert client.admit_calls == 1
+    assert client.execute_calls == 0
 
 
 def test_admission_rejection_is_terminal_shadow_state_without_work() -> None:
@@ -355,6 +420,7 @@ def test_admission_rejection_is_terminal_shadow_state_without_work() -> None:
     assert first.kernel_run_ref is None
     assert client.submit_calls == 1
     assert client.admit_calls == 1
+    assert client.execute_calls == 0
 
 
 def test_lost_proposal_ack_leaves_shadow_for_idempotent_replay() -> None:
@@ -444,6 +510,75 @@ def test_cutover_without_authority_and_reality_boundary_fails_closed_before_pers
         bridge.prepare(case, obligation, governance)
 
     assert KernelBridgeRepository(store).list_projections(case.case_id, case.authority_epoch) == []
+
+
+def test_cutover_executes_owned_hris_once_and_persists_complete_kernel_lineage() -> None:
+    store = SqlStore("sqlite+pysqlite:///:memory:")
+    store.init_schema()
+    case, governance, obligation = _projection_inputs()
+    client = FakeKernelClient()
+    bridge = KernelExecutionBridge(
+        store,
+        settings=Settings(
+            kernel_bridge_mode="cutover",
+            external_effects_enabled=True,
+            kernel_responsibility_admission_policy_ref="responsibility-admission:admin@1",
+        ),
+        compatibility=_compatibility(work_admission=True, execution=True),
+        client=client,
+    )
+
+    first = bridge.prepare(case, obligation, governance)
+    second = bridge.prepare(case, obligation, governance)
+
+    assert first is not None
+    assert first == second
+    assert first.status is KernelProjectionStatus.CUTOVER
+    assert first.kernel_execution_status is KernelExecutionStatus.COMPLETED
+    assert first.kernel_work_ref
+    assert first.kernel_execution_ref
+    assert first.kernel_run_ref
+    assert first.kernel_request_ref
+    assert first.kernel_authorization_ref
+    assert first.kernel_provider_id == "provider:hris:kernel"
+    assert first.kernel_action_ref
+    assert first.kernel_outcome_ref
+    assert first.kernel_evidence_ref
+    assert first.kernel_execution_responsibility_ref == first.kernel_responsibility_ref
+    assert first.kernel_execution_processed_at == NOW
+    assert client.submit_calls == 1
+    assert client.admit_calls == 1
+    assert client.execute_calls == 1
+
+    persisted = KernelBridgeRepository(store).get_projection_for_obligation(
+        obligation.obligation_id
+    )
+    assert persisted == first
+
+
+def test_cutover_global_effect_gate_stops_before_kernel_physical_execution() -> None:
+    store = SqlStore("sqlite+pysqlite:///:memory:")
+    store.init_schema()
+    case, governance, obligation = _projection_inputs()
+    client = FakeKernelClient()
+    bridge = KernelExecutionBridge(
+        store,
+        settings=Settings(
+            kernel_bridge_mode="cutover",
+            external_effects_enabled=False,
+        ),
+        compatibility=_compatibility(work_admission=True, execution=True),
+        client=client,
+    )
+
+    projection = bridge.prepare(case, obligation, governance)
+
+    assert projection is not None
+    assert projection.status is KernelProjectionStatus.ADMITTED
+    assert projection.kernel_execution_status is None
+    assert client.submit_calls == 1
+    assert client.admit_calls == 1
+    assert client.execute_calls == 0
 
 
 def test_execution_grant_rejects_stale_or_cross_case_governance() -> None:

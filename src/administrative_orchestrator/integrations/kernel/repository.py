@@ -8,10 +8,15 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from ...domain import AuthorityClass, PolicyRef, utcnow
 from ...persistence import Base, SqlStore
-from .client import KernelProposalReceipt, KernelWorkAdmissionReceipt
+from .client import (
+    KernelExecutionReceipt,
+    KernelProposalReceipt,
+    KernelWorkAdmissionReceipt,
+)
 from .models import (
     AdministrativeEffectIntent,
     AdministrativeExecutionGrant,
+    KernelExecutionStatus,
     KernelProjectionStatus,
     KernelShadowProjection,
     KernelWorkAdmissionStatus,
@@ -105,7 +110,17 @@ class KernelBridgeProjectionRow(Base):
     kernel_reservation_ref: Mapped[str | None] = mapped_column(String(512))
     kernel_commitment_ref: Mapped[str | None] = mapped_column(String(512))
     kernel_work_ref: Mapped[str | None] = mapped_column(String(512))
+    kernel_execution_status: Mapped[str | None] = mapped_column(String(64))
+    kernel_execution_ref: Mapped[str | None] = mapped_column(String(512))
     kernel_run_ref: Mapped[str | None] = mapped_column(String(512))
+    kernel_request_ref: Mapped[str | None] = mapped_column(String(512))
+    kernel_authorization_ref: Mapped[str | None] = mapped_column(String(512))
+    kernel_provider_id: Mapped[str | None] = mapped_column(String(512))
+    kernel_action_ref: Mapped[str | None] = mapped_column(String(512))
+    kernel_outcome_ref: Mapped[str | None] = mapped_column(String(512))
+    kernel_evidence_ref: Mapped[str | None] = mapped_column(String(512))
+    kernel_execution_responsibility_ref: Mapped[str | None] = mapped_column(String(512))
+    kernel_execution_processed_at: Mapped[Any | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[Any] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[Any] = mapped_column(DateTime(timezone=True), nullable=False)
 
@@ -144,6 +159,11 @@ class KernelBridgeRepository:
             )
         return grant
 
+    def get_grant(self, grant_id: UUID) -> AdministrativeExecutionGrant | None:
+        with self.store.sessions() as db:
+            row = db.get(AdministrativeExecutionGrantRow, grant_id)
+            return None if row is None else self._grant_from_row(row)
+
     def put_intent(self, intent: AdministrativeEffectIntent) -> AdministrativeEffectIntent:
         with self.store.sessions.begin() as db:
             row = db.get(AdministrativeEffectIntentRow, intent.intent_id)
@@ -170,6 +190,11 @@ class KernelBridgeRepository:
             )
         return intent
 
+    def get_intent(self, intent_id: UUID) -> AdministrativeEffectIntent | None:
+        with self.store.sessions() as db:
+            row = db.get(AdministrativeEffectIntentRow, intent_id)
+            return None if row is None else self._intent_from_row(row)
+
     def put_projection(self, projection: KernelShadowProjection) -> KernelShadowProjection:
         with self.store.sessions.begin() as db:
             row = db.get(KernelBridgeProjectionRow, projection.projection_id)
@@ -188,9 +213,7 @@ class KernelBridgeRepository:
                     obligation_id=projection.obligation_id,
                     contract_catalog=projection.contract_catalog,
                     runtime_protocol=projection.runtime_protocol,
-                    persistent_responsibility_contract=(
-                        projection.persistent_responsibility_contract
-                    ),
+                    persistent_responsibility_contract=projection.persistent_responsibility_contract,
                     responsibility_json=dict(projection.responsibility_payload),
                     admission_json=dict(projection.admission_payload),
                     assessment_json=dict(projection.assessment_payload),
@@ -212,7 +235,21 @@ class KernelBridgeRepository:
                     kernel_reservation_ref=projection.kernel_reservation_ref,
                     kernel_commitment_ref=projection.kernel_commitment_ref,
                     kernel_work_ref=projection.kernel_work_ref,
+                    kernel_execution_status=(
+                        projection.kernel_execution_status.value
+                        if projection.kernel_execution_status is not None
+                        else None
+                    ),
+                    kernel_execution_ref=projection.kernel_execution_ref,
                     kernel_run_ref=projection.kernel_run_ref,
+                    kernel_request_ref=projection.kernel_request_ref,
+                    kernel_authorization_ref=projection.kernel_authorization_ref,
+                    kernel_provider_id=projection.kernel_provider_id,
+                    kernel_action_ref=projection.kernel_action_ref,
+                    kernel_outcome_ref=projection.kernel_outcome_ref,
+                    kernel_evidence_ref=projection.kernel_evidence_ref,
+                    kernel_execution_responsibility_ref=projection.kernel_execution_responsibility_ref,
+                    kernel_execution_processed_at=projection.kernel_execution_processed_at,
                     created_at=projection.created_at,
                     updated_at=projection.updated_at,
                 )
@@ -251,13 +288,12 @@ class KernelBridgeRepository:
                 raise KernelBridgePersistenceError(
                     f"kernel projection cannot submit from {current.status.value}"
                 )
-            now = utcnow()
             row.status = KernelProjectionStatus.SUBMITTED.value
             row.kernel_responsibility_ref = receipt.responsibility_ref
             row.kernel_admission_ref = receipt.admission_ref
             row.kernel_assessment_ref = receipt.assessment_ref
             row.kernel_proposal_ref = receipt.proposal_ref
-            row.updated_at = now
+            row.updated_at = utcnow()
             db.flush()
             return self._projection_from_row(row)
 
@@ -303,6 +339,50 @@ class KernelBridgeRepository:
             row.kernel_reservation_ref = receipt.reservation_ref
             row.kernel_commitment_ref = receipt.commitment_ref
             row.kernel_work_ref = receipt.work_ref
+            row.updated_at = utcnow()
+            db.flush()
+            return self._projection_from_row(row)
+
+    def mark_execution(
+        self,
+        projection: KernelShadowProjection,
+        receipt: KernelExecutionReceipt,
+    ) -> KernelShadowProjection:
+        with self.store.sessions.begin() as db:
+            row = db.get(KernelBridgeProjectionRow, projection.projection_id)
+            if row is None:
+                raise KernelBridgePersistenceError("kernel projection is not persisted")
+            current = self._projection_from_row(row)
+            if not self._same_projection_semantics(current, projection):
+                raise KernelBridgePersistenceError("kernel projection semantics changed before execution")
+            if current.kernel_work_ref != receipt.work_ref:
+                raise KernelBridgePersistenceError("Kernel execution Work identity rebound")
+            target_status = (
+                KernelProjectionStatus.CUTOVER
+                if receipt.status == KernelExecutionStatus.COMPLETED.value
+                else KernelProjectionStatus.ADMITTED
+            )
+            if current.kernel_execution_status is not None:
+                if current.status is not target_status or self._execution_refs(current) != self._execution_receipt_refs(receipt):
+                    raise KernelBridgePersistenceError("Kernel execution receipt identity rebound")
+                return current
+            if current.status is not KernelProjectionStatus.ADMITTED:
+                raise KernelBridgePersistenceError(
+                    f"kernel projection cannot execute from {current.status.value}"
+                )
+
+            row.status = target_status.value
+            row.kernel_execution_status = receipt.status
+            row.kernel_execution_ref = receipt.execution_ref
+            row.kernel_run_ref = receipt.run_ref
+            row.kernel_request_ref = receipt.request_ref
+            row.kernel_authorization_ref = receipt.authorization_ref
+            row.kernel_provider_id = receipt.provider_id
+            row.kernel_action_ref = receipt.action_ref
+            row.kernel_outcome_ref = receipt.outcome_ref
+            row.kernel_evidence_ref = receipt.evidence_ref
+            row.kernel_execution_responsibility_ref = receipt.responsibility_ref
+            row.kernel_execution_processed_at = receipt.processed_at
             row.updated_at = utcnow()
             db.flush()
             return self._projection_from_row(row)
@@ -365,6 +445,40 @@ class KernelBridgeRepository:
         )
 
     @staticmethod
+    def _execution_refs(projection: KernelShadowProjection) -> tuple[object, ...]:
+        return (
+            projection.kernel_execution_status.value
+            if projection.kernel_execution_status is not None
+            else None,
+            projection.kernel_execution_ref,
+            projection.kernel_run_ref,
+            projection.kernel_request_ref,
+            projection.kernel_authorization_ref,
+            projection.kernel_provider_id,
+            projection.kernel_action_ref,
+            projection.kernel_outcome_ref,
+            projection.kernel_evidence_ref,
+            projection.kernel_execution_responsibility_ref,
+            projection.kernel_execution_processed_at,
+        )
+
+    @staticmethod
+    def _execution_receipt_refs(receipt: KernelExecutionReceipt) -> tuple[object, ...]:
+        return (
+            receipt.status,
+            receipt.execution_ref,
+            receipt.run_ref,
+            receipt.request_ref,
+            receipt.authorization_ref,
+            receipt.provider_id,
+            receipt.action_ref,
+            receipt.outcome_ref,
+            receipt.evidence_ref,
+            receipt.responsibility_ref,
+            receipt.processed_at,
+        )
+
+    @staticmethod
     def _same_projection_semantics(
         left: KernelShadowProjection,
         right: KernelShadowProjection,
@@ -383,7 +497,17 @@ class KernelBridgeRepository:
             "kernel_reservation_ref",
             "kernel_commitment_ref",
             "kernel_work_ref",
+            "kernel_execution_status",
+            "kernel_execution_ref",
             "kernel_run_ref",
+            "kernel_request_ref",
+            "kernel_authorization_ref",
+            "kernel_provider_id",
+            "kernel_action_ref",
+            "kernel_outcome_ref",
+            "kernel_evidence_ref",
+            "kernel_execution_responsibility_ref",
+            "kernel_execution_processed_at",
             "updated_at",
         }
         return left.model_dump(mode="json", exclude=excluded) == right.model_dump(
@@ -457,7 +581,21 @@ class KernelBridgeRepository:
             kernel_reservation_ref=row.kernel_reservation_ref,
             kernel_commitment_ref=row.kernel_commitment_ref,
             kernel_work_ref=row.kernel_work_ref,
+            kernel_execution_status=(
+                KernelExecutionStatus(row.kernel_execution_status)
+                if row.kernel_execution_status is not None
+                else None
+            ),
+            kernel_execution_ref=row.kernel_execution_ref,
             kernel_run_ref=row.kernel_run_ref,
+            kernel_request_ref=row.kernel_request_ref,
+            kernel_authorization_ref=row.kernel_authorization_ref,
+            kernel_provider_id=row.kernel_provider_id,
+            kernel_action_ref=row.kernel_action_ref,
+            kernel_outcome_ref=row.kernel_outcome_ref,
+            kernel_evidence_ref=row.kernel_evidence_ref,
+            kernel_execution_responsibility_ref=row.kernel_execution_responsibility_ref,
+            kernel_execution_processed_at=row.kernel_execution_processed_at,
             created_at=row.created_at,
             updated_at=row.updated_at,
         )
