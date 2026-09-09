@@ -15,6 +15,7 @@ from portable_runtime.core.capabilities import (
 from portable_runtime.core.capability_contract import CapabilityContract, CapabilityContractRegistry
 from portable_runtime.core.provider_semantics import ProviderSemanticContract
 from portable_runtime.core.registry import ProviderRegistry
+from portable_runtime.core.reliability import ReliabilityControls
 from portable_runtime.core.runtime import Runtime
 from portable_runtime.public_contracts.domain_effect import (
     BoundedDomainEffectExecutionProfile,
@@ -280,10 +281,18 @@ def _iam_contract() -> CapabilityContract:
 def build() -> tuple[Runtime, BoundedDomainEffectExecutionService]:
     store = InvocationSpecificationInMemoryStateStore()
     registry = ProviderRegistry()
+    # The generic Runtime default is a personal/local safety profile with a
+    # five-second global side-effect cooldown. This deployment represents one
+    # server-owned Administrative execution lane, where independently admitted
+    # HRIS and IAM obligations must be able to discharge back-to-back. Keep all
+    # rate, parallelism, blast-radius, exposure and side-effect budgets active;
+    # only the personal interactive cooldown is explicitly disabled.
+    reliability = ReliabilityControls(cooldown_seconds=0)
     runtime = Runtime(
         store=store,
         registry=registry,
         contract_registry=CapabilityContractRegistry(contracts=[_iam_contract()]),
+        reliability=reliability,
         runtime_id="runtime:administrative-cross-repo-e2e",
     )
 
