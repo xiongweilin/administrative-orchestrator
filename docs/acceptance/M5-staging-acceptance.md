@@ -1,6 +1,6 @@
 # M5 staging acceptance record
 
-Status: **Gates A–F PASS — final exact-head CI and PR merge closure pending**
+Status: **Gates A–F PASS — PR #19 merged and post-merge main CI PASS**
 
 This record separates evidence from the isolated task-scoped staging deployment, repository CI, and the cross-repository Agent Kernel canary. It is not a production-readiness claim. Existing local infrastructure stacks were left running and unchanged; the staging topology was isolated under `D:\infrastructure\compose\administrative-m5-staging`.
 
@@ -15,7 +15,7 @@ This record separates evidence from the isolated task-scoped staging deployment,
 | Current supported Agent Kernel revision | `fe4b3f4bf2e376bd7105caf7d15d77e2483c7197` |
 | Last Agent Kernel revision tested in real staging | `0233ba4e576b60a0702637bd93c764df9b0848d5` — historical failing baseline |
 | Kernel repair | PR #95 merged; qualification remains pre-action and fresh-process post-action recovery replays the historical qualification only after a Kernel-proven committed action boundary |
-| PR #19 | open, Draft; all real-staging gates pass, so only final exact-head CI and merge closure remain |
+| PR #19 | MERGED — squash merge commit `e75d40b3ee867af6d9d3b8849b6259c271695a9c`; post-merge main CI and M5 Production Trust both passed |
 | Repository CI before PR #95 promotion | PASS; a new full Administrative CI/M5 run is required on the `fe4b3f4b…` pin |
 | Isolated real staging deployment | PASS — Administrative/API/worker/Operations/Kernel plus Odoo, Keycloak, gateway, and PostgreSQL services running during the recorded staging exercise |
 | Gate A exact production image/provenance | PASS — `administrative-agent-kernel:production` image `sha256:644bbf4f043021a1faab724d3a8b940afa1bcb4bdb1d4e09e9cbcbcdeb4f8910`; installed `portable-runtime` provenance resolves exactly to `fe4b3f4bf2e376bd7105caf7d15d77e2483c7197`; `/v1/contracts` returned `200` |
@@ -57,8 +57,8 @@ Repository CI proves repository contracts and test fixtures. The staging evidenc
 | Current `fe4b3f4b…` pre-receipt crash recovery | PASS | Subject `m5-pre-receipt-20260910-000959`, execution `execution_bounded_domain_effect_335547658f47b8e54b24dad1d0f155e3`; phase 1 crossed Odoo exactly once, fresh process recovered with `resolution=completed`, and `legacy_execute=0`, `legacy_observe=0` |
 | Current `fe4b3f4b…` ambiguous result-commit recovery | PASS | Subject `m5-ambiguous-20260910-001201`, execution `execution_bounded_domain_effect_e54e7828b5a8e872f58992f6c847bd24`; fresh process returned `resolution=recovered-completed`, preserved historical execution-unknown semantics, observed one Odoo identity, and recorded `legacy_execute=0`, `legacy_observe=0` |
 | Fresh-process Kernel recovery overall | PASS | Both mandatory current-baseline counterexamples passed with one physical Odoo identity and no blind redispatch |
-| Repository pinned/main canary on `fe4b3f4b…` | PENDING FINAL CI | Prior exact-head checks at `f9e67be…` were green; this acceptance-record commit requires one final exact-head CI/M5 run |
-| M5 merge decision | PENDING FINAL CI | Real-staging Gates A–F pass; keep PR #19 Draft until the acceptance-record commit is green, then mark Ready and merge |
+| Repository pinned/main canary on `fe4b3f4b…` | PASS | PR head `35e6fe3…` checks were green; merge commit `e75d40b3…` main `CI` and `M5 Production Trust` runs both completed successfully |
+| M5 merge decision | PASS | Gates A–F passed, PR #19 was marked Ready and squash merged, and post-merge main checks passed |
 
 ## Detailed evidence boundary
 
@@ -118,14 +118,14 @@ The following references are present only as names in the task-scoped local conf
 - `ADMIN_OPERATIONS_OIDC_CLIENT_ID`
 - `ADMIN_OPERATIONS_OIDC_SCOPE`
 
-The current supported Kernel revision is `fe4b3f4bf2e376bd7105caf7d15d77e2483c7197`. Gates A–F now pass in isolated real staging; production cutover and M5 completion still require the final exact-head CI and PR merge closure recorded below.
+The current supported Kernel revision is `fe4b3f4bf2e376bd7105caf7d15d77e2483c7197`. Gates A–F pass in isolated real staging, and the final exact-head CI, squash merge, and post-merge main CI closure are complete for this recorded scope.
 
 ## Final closure evidence
 
 1. Gates A–F are PASS on the exact supported Kernel revision and final Administrative app image, with evidence above.
-2. Run the final exact-head Administrative CI/M5 workflows for the acceptance-record commit.
-3. If final CI is green, mark PR #19 Ready, squash merge it, and verify post-merge `main` CI before describing M5 as complete.
+2. The final exact-head Administrative CI/M5 workflows passed on PR head `35e6fe3…`.
+3. PR #19 was marked Ready, squash merged as `e75d40b3…`, and post-merge `main` `CI` plus `M5 Production Trust` passed.
 
 ## Residual risk
 
-The mandatory real-staging risks are closed for the recorded scope: repaired-Kernel fresh-process recovery, ambiguous result-commit recovery, OIDC key rotation, and measured PostgreSQL/DBOS and Kernel RPO/RTO all passed. Final CI and PR merge closure remain procedural gates for the milestone record.
+The mandatory M5 risks and procedural closure gates are closed for the recorded scope: repaired-Kernel fresh-process recovery, ambiguous result-commit recovery, OIDC key rotation, measured PostgreSQL/DBOS and Kernel RPO/RTO, exact-head CI, squash merge, and post-merge main CI all passed.
