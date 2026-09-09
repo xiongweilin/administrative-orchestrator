@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
@@ -50,7 +49,9 @@ class OdooEffectConnection:
             raise ConnectorConfigurationError("Odoo database and username are required")
         for field in (self.request_ref_field, self.subject_ref_field):
             if not field.startswith("x_"):
-                raise ConnectorConfigurationError("Odoo integration identity fields must be custom x_ fields")
+                raise ConnectorConfigurationError(
+                    "Odoo integration identity fields must be custom x_ fields"
+                )
 
 
 class OdooEmployeeEffectConnector:
@@ -108,8 +109,6 @@ class OdooEmployeeEffectConnector:
             manager_id = _odoo_numeric_ref(parameters.get("manager_ref"), "hr.employee")
             if manager_id is not None:
                 values["parent_id"] = manager_id
-            # Optional bridge-addon fields preserve business values that do not
-            # have a canonical Odoo hr.employee column.
             for source_key, target_field in {
                 "manager_principal_id": "x_administrative_manager_principal_id",
                 "employment_type": "x_administrative_employment_type",
@@ -390,6 +389,12 @@ class KeycloakIdentityEffectConnector:
                 f"/admin/realms/{self.connection.realm}/users",
                 json_body=body,
             )
+            if response.status_code >= 500:
+                return ConnectorResult(
+                    ConnectorStatus.UNKNOWN,
+                    error_code="KeycloakServerResultAmbiguous",
+                    error_message=f"Keycloak create returned HTTP {response.status_code}",
+                )
             if response.status_code not in {201, 204}:
                 return ConnectorResult(
                     ConnectorStatus.FAILED,
@@ -444,17 +449,39 @@ class KeycloakIdentityEffectConnector:
             f"/admin/realms/{self.connection.realm}/users",
             params={"q": f"{name}:{value}", "max": "2"},
         )
-        if response.status_code != 200:
+        if response.status_code >= 500:
             raise _TransportUnknown(f"Keycloak search returned HTTP {response.status_code}")
+        if response.status_code != 200:
+            raise _ApplicationRejected(f"Keycloak search rejected HTTP {response.status_code}")
         try:
             raw = response.json()
         except ValueError as exc:
             raise _TransportUnknown("Keycloak search returned invalid JSON") from exc
         return [item for item in raw if isinstance(item, dict)] if isinstance(raw, list) else []
 
+    async def _get_user(self, user_id: str) -> dict[str, Any]:
+        response = await self._request(
+            "GET",
+            f"/admin/realms/{self.connection.realm}/users/{user_id}",
+        )
+        if response.status_code >= 500:
+            raise _TransportUnknown(f"Keycloak user read returned HTTP {response.status_code}")
+        if response.status_code != 200:
+            raise _ApplicationRejected(f"Keycloak user read rejected HTTP {response.status_code}")
+        try:
+            raw = response.json()
+        except ValueError as exc:
+            raise _TransportUnknown("Keycloak user read returned invalid JSON") from exc
+        if not isinstance(raw, dict):
+            raise _TransportUnknown("Keycloak user read returned invalid representation")
+        return raw
+
     async def _token(self) -> str:
         secret = self.credentials.resolve(self.connection.credential)
-        url = f"{self.connection.base_url.rstrip('/')}/realms/{self.connection.realm}/protocol/openid-connect/token"
+        url = (
+            f"{self.connection.base_url.rstrip('/')}/realms/{self.connection.realm}"
+            "/protocol/openid-connect/token"
+        )
         data = {
             "grant_type": "client_credentials",
             "client_id": self.connection.client_id,
@@ -521,17 +548,22 @@ class KeycloakIdentityVerifier:
                 self.connector.connection.subject_ref_attribute,
                 subject_ref,
             )
-            if len(users) != 1:
+            if len(users) != 1 or not users[0].get("id"):
                 observed: dict[str, Any] = {}
             else:
-                user = users[0]
-                attributes = user.get("attributes") if isinstance(user.get("attributes"), dict) else {}
+                user = await self.connector._get_user(str(users[0]["id"]))
+                attributes = (
+                    user.get("attributes") if isinstance(user.get("attributes"), dict) else {}
+                )
                 expected_payload = expected_postcondition.get("payload")
                 expected_payload = expected_payload if isinstance(expected_payload, dict) else {}
                 payload: dict[str, Any] = {}
                 for key in expected_payload:
                     if key == "employee_ref":
-                        payload[key] = _first_attribute(attributes, "administrative_employee_ref") or subject_ref
+                        payload[key] = (
+                            _first_attribute(attributes, "administrative_employee_ref")
+                            or subject_ref
+                        )
                     else:
                         payload[key] = _first_attribute(attributes, f"administrative_{key}")
                 observed = {
@@ -545,7 +577,7 @@ class KeycloakIdentityVerifier:
                 ConnectorStatus.SUCCEEDED,
                 observed_postcondition=observed,
             )
-        except _TransportUnknown as exc:
+        except (_TransportUnknown, _ApplicationRejected) as exc:
             return ConnectorResult(
                 ConnectorStatus.UNAVAILABLE,
                 error_code=type(exc.__cause__).__name__ if exc.__cause__ else type(exc).__name__,
