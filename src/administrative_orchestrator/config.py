@@ -65,8 +65,11 @@ class Settings(BaseSettings):
     odoo_database: str = ""
     odoo_reader_username: str = ""
     odoo_reader_secret_env: str = "ADMIN_ODOO_READER_SECRET"
+    odoo_writer_username: str = ""
     odoo_writer_secret_env: str = "ADMIN_ODOO_WRITER_SECRET"
+    odoo_verifier_username: str = ""
     odoo_verifier_secret_env: str = "ADMIN_ODOO_VERIFIER_SECRET"
+    odoo_request_ref_field: str = "x_administrative_request_ref"
 
     iam_source_kind: Literal["disabled", "keycloak"] = "disabled"
     keycloak_base_url: str = ""
@@ -77,6 +80,7 @@ class Settings(BaseSettings):
     keycloak_writer_secret_env: str = "ADMIN_KEYCLOAK_WRITER_SECRET"
     keycloak_verifier_client_id: str = ""
     keycloak_verifier_secret_env: str = "ADMIN_KEYCLOAK_VERIFIER_SECRET"
+    keycloak_request_ref_attribute: str = "administrative_request_ref"
 
     connector_timeout_seconds: float = 10.0
     authoritative_fact_max_age_seconds: int = 300
