@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from typing import Any
 from uuid import NAMESPACE_URL, UUID, uuid5
 
@@ -30,6 +31,7 @@ from portable_runtime.responsibility.domain_effect_verified_outcome import (
 )
 from portable_runtime.stores.invocation_specification import (
     InvocationSpecificationInMemoryStateStore,
+    InvocationSpecificationSQLiteStateStore,
 )
 
 SANDBOX_BASE_URL = os.getenv("ADMIN_SANDBOX_BASE_URL", "http://127.0.0.1:8010").rstrip("/")
@@ -279,7 +281,12 @@ def _iam_contract() -> CapabilityContract:
 
 
 def build() -> tuple[Runtime, BoundedDomainEffectExecutionService]:
-    store = InvocationSpecificationInMemoryStateStore()
+    state_path = os.getenv("PORTABLE_RUNTIME_ADMIN_E2E_STATE_PATH")
+    store = (
+        InvocationSpecificationSQLiteStateStore(Path(state_path))
+        if state_path
+        else InvocationSpecificationInMemoryStateStore()
+    )
     registry = ProviderRegistry()
     # The generic Runtime default is a personal/local safety profile with a
     # five-second global side-effect cooldown. This deployment represents one

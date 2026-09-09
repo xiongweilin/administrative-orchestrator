@@ -127,8 +127,9 @@ jobs:
           ADMIN_SANDBOX_BASE_URL: http://127.0.0.1:8010
           PORTABLE_RUNTIME_RESPONSIBILITY_ADMISSION_PROFILE: administrative-public-v2
           PORTABLE_RUNTIME_BOUNDED_DOMAIN_EFFECT_FACTORY: scripts.kernel_cutover_stack:build
+          PORTABLE_RUNTIME_ADMIN_E2E_STATE_PATH: ./kernel-cutover-kernel.db
         run: |
-          rm -f kernel-cutover-sandbox.db
+          rm -f kernel-cutover-sandbox.db kernel-cutover-kernel.db kernel-cutover-kernel.db-wal kernel-cutover-kernel.db-shm
           uv run uvicorn administrative_orchestrator.sandbox:app --host 127.0.0.1 --port 8010 >sandbox.log 2>&1 &
           echo $! > sandbox.pid
           for i in {1..40}; do
@@ -148,14 +149,17 @@ jobs:
           ADMIN_KERNEL_BASE_URL: http://127.0.0.1:8020
           ADMIN_SANDBOX_BASE_URL: http://127.0.0.1:8010
         run: uv run python scripts/kernel_cutover_e2e.py
-      - name: Prove lost Kernel completion ACK cannot duplicate reality
+      - name: Prove lost completion ACK survives Admin and Kernel process restart
         env:
           ADMIN_KERNEL_BASE_URL: http://127.0.0.1:8020
           ADMIN_SANDBOX_BASE_URL: http://127.0.0.1:8010
           ADMIN_LOST_ACK_DB_PATH: ./kernel-lost-ack-admin.db
           ADMIN_LOST_ACK_RECEIPT_PATH: ./kernel-lost-ack-first-receipt.json
+          PORTABLE_RUNTIME_RESPONSIBILITY_ADMISSION_PROFILE: administrative-public-v2
+          PORTABLE_RUNTIME_BOUNDED_DOMAIN_EFFECT_FACTORY: scripts.kernel_cutover_stack:build
+          PORTABLE_RUNTIME_ADMIN_E2E_STATE_PATH: ./kernel-cutover-kernel.db
         run: |
-          rm -f kernel-lost-ack-admin.db kernel-lost-ack-first-receipt.json lost-ack-phase1.log
+          rm -f kernel-lost-ack-admin.db kernel-lost-ack-first-receipt.json lost-ack-phase1.log kernel-restart.log
           set +e
           uv run python scripts/kernel_lost_ack_e2e.py phase1 >lost-ack-phase1.log 2>&1
           phase1_status=$?
@@ -166,6 +170,31 @@ jobs:
             exit 1
           fi
           uv run python scripts/kernel_lost_ack_e2e.py verify
+
+          old_kernel_pid="$(cat kernel.pid)"
+          kill "$old_kernel_pid"
+          for i in {1..40}; do
+            if ! kill -0 "$old_kernel_pid" 2>/dev/null; then break; fi
+            sleep 0.25
+          done
+          if kill -0 "$old_kernel_pid" 2>/dev/null; then
+            echo "Kernel phase-1 process did not terminate"
+            exit 1
+          fi
+
+          uv run uvicorn portable_runtime.public_contracts.http:create_configured_public_app --factory --host 127.0.0.1 --port 8020 >kernel-restart.log 2>&1 &
+          new_kernel_pid=$!
+          echo "$new_kernel_pid" > kernel.pid
+          if [ "$new_kernel_pid" = "$old_kernel_pid" ]; then
+            echo "Kernel restart reused the same process id unexpectedly"
+            exit 1
+          fi
+          for i in {1..40}; do
+            if curl --fail --silent http://127.0.0.1:8020/v1/contracts >/dev/null; then break; fi
+            sleep 0.5
+          done
+          curl --fail --silent http://127.0.0.1:8020/v1/contracts >/dev/null
+
           uv run python scripts/kernel_lost_ack_e2e.py phase2
       - name: Cross-repo service logs
         if: failure()
@@ -174,6 +203,8 @@ jobs:
           cat sandbox.log || true
           echo '--- kernel.log ---'
           cat kernel.log || true
+          echo '--- kernel-restart.log ---'
+          cat kernel-restart.log || true
           echo '--- lost-ack-phase1.log ---'
           cat lost-ack-phase1.log || true
       - name: Stop cross-repo services
