@@ -144,6 +144,14 @@ development LiteLLM endpoint is not the public Administrative semantic
 contract and production configuration must not hard-code `127.0.0.1` or one
 provider.
 
+The candidate projection service is a pure boundary: it may select supported
+candidate fields and produce a `CandidateProjection` containing
+`CandidateAdministrativeRequest`, `CandidateFactAssertion`, and an optional
+`DraftResponse`. It cannot persist a request, resolve authority, call a
+provider, dispatch a draft, create a Decision or Grant, or submit Kernel Work.
+The string `DraftResponse` is therefore not an organizational communication
+effect; delivery requires a separate future contract and authority path.
+
 ### 6. Admission is explicit and staged
 
 M6 rollout states are:
