@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Annotated
 from uuid import UUID
 
 from fastapi import FastAPI, HTTPException, Query, Request
@@ -118,8 +119,8 @@ def readyz() -> dict[str, str]:
 @app.get("/v1/operations/cases", response_model=list[QueueItem])
 def case_queue(
     request: Request,
-    status_filter: list[CaseStatus] | None = Query(default=None, alias="status"),
-    limit: int = Query(default=200, ge=1, le=1000),
+    status_filter: Annotated[list[CaseStatus] | None, Query(alias="status")] = None,
+    limit: Annotated[int, Query(ge=1, le=1000)] = 200,
 ) -> list[QueueItem]:
     actor = _actor(request)
     _require(actor, AdministrativePermission.OPERATIONS_READ)
@@ -299,7 +300,7 @@ def deactivate_principal(
 @app.get("/v1/operations/authority-events", response_model=list[AuthorityLifecycleEvent])
 def authority_events(
     request: Request,
-    limit: int = Query(default=200, ge=1, le=1000),
+    limit: Annotated[int, Query(ge=1, le=1000)] = 200,
 ) -> list[AuthorityLifecycleEvent]:
     actor = _actor(request)
     _require(actor, AdministrativePermission.OPERATIONS_READ)
