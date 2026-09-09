@@ -7,6 +7,8 @@ EXPECTED_PERSISTENT_RESPONSIBILITY = "persistent-responsibility-v1"
 EXPECTED_DOMAIN_RESPONSIBILITY_PROPOSAL = "domain-responsibility-proposal-v1"
 EXPECTED_RESPONSIBILITY_WORK_ADMISSION = "responsibility-work-admission-v1"
 EXPECTED_BOUNDED_DOMAIN_EFFECT_EXECUTION = "bounded-domain-effect-execution-v1"
+EXPECTED_BOUNDED_DOMAIN_EFFECT_RECOVERY = "bounded-domain-effect-recovery-v1"
+EXPECTED_BOUNDED_DOMAIN_EFFECT_RESOLUTION = "bounded-domain-effect-resolution-v1"
 EXPECTED_DOMAIN_EFFECT_VERIFICATION_EVIDENCE_VIEW = (
     "domain-effect-verification-evidence-view-v1"
 )
@@ -25,6 +27,8 @@ class KernelContractIdentity:
     domain_responsibility_proposal_contract: str
     responsibility_work_admission_contract: str | None = None
     bounded_domain_effect_execution_contract: str | None = None
+    bounded_domain_effect_recovery_contract: str | None = None
+    bounded_domain_effect_resolution_view: str | None = None
     domain_effect_verification_evidence_view: str | None = None
 
 
@@ -33,6 +37,7 @@ def validate_kernel_catalog(
     *,
     require_work_admission: bool = False,
     require_domain_effect_execution: bool = False,
+    require_domain_effect_recovery: bool = False,
     require_domain_effect_evidence: bool = False,
 ) -> KernelContractIdentity:
     try:
@@ -62,6 +67,17 @@ def validate_kernel_catalog(
                 raise TypeError("bounded_domain_effect_execution must be an object")
             execution_contract = str(bounded_execution["current"])
 
+        recovery_contract: str | None = None
+        resolution_view: str | None = None
+        bounded_recovery = contracts.get("bounded_domain_effect_recovery")
+        if bounded_recovery is not None:
+            if not isinstance(bounded_recovery, dict):
+                raise TypeError("bounded_domain_effect_recovery must be an object")
+            recovery_contract = str(bounded_recovery["current"])
+            raw_resolution = bounded_recovery.get("resolution")
+            if raw_resolution is not None:
+                resolution_view = str(raw_resolution)
+
         evidence_view: str | None = None
         views = raw.get("views")
         if views is not None:
@@ -81,6 +97,8 @@ def validate_kernel_catalog(
             domain_responsibility_proposal_contract=str(domain_proposal),
             responsibility_work_admission_contract=work_admission_contract,
             bounded_domain_effect_execution_contract=execution_contract,
+            bounded_domain_effect_recovery_contract=recovery_contract,
+            bounded_domain_effect_resolution_view=resolution_view,
             domain_effect_verification_evidence_view=evidence_view,
         )
     except (KeyError, TypeError, ValueError) as exc:
@@ -133,6 +151,26 @@ def validate_kernel_catalog(
             f"expected {EXPECTED_BOUNDED_DOMAIN_EFFECT_EXECUTION!r}"
         )
     if (
+        identity.bounded_domain_effect_recovery_contract is not None
+        and identity.bounded_domain_effect_recovery_contract
+        != EXPECTED_BOUNDED_DOMAIN_EFFECT_RECOVERY
+    ):
+        mismatches.append(
+            "bounded_domain_effect_recovery="
+            f"{identity.bounded_domain_effect_recovery_contract!r}, "
+            f"expected {EXPECTED_BOUNDED_DOMAIN_EFFECT_RECOVERY!r}"
+        )
+    if (
+        identity.bounded_domain_effect_resolution_view is not None
+        and identity.bounded_domain_effect_resolution_view
+        != EXPECTED_BOUNDED_DOMAIN_EFFECT_RESOLUTION
+    ):
+        mismatches.append(
+            "bounded_domain_effect_resolution="
+            f"{identity.bounded_domain_effect_resolution_view!r}, "
+            f"expected {EXPECTED_BOUNDED_DOMAIN_EFFECT_RESOLUTION!r}"
+        )
+    if (
         identity.domain_effect_verification_evidence_view is not None
         and identity.domain_effect_verification_evidence_view
         != EXPECTED_DOMAIN_EFFECT_VERIFICATION_EVIDENCE_VIEW
@@ -160,6 +198,17 @@ def validate_kernel_catalog(
             "bounded_domain_effect_execution is required for cutover mode: "
             f"expected {EXPECTED_BOUNDED_DOMAIN_EFFECT_EXECUTION!r}"
         )
+    if require_domain_effect_recovery and (
+        identity.bounded_domain_effect_recovery_contract
+        != EXPECTED_BOUNDED_DOMAIN_EFFECT_RECOVERY
+        or identity.bounded_domain_effect_resolution_view
+        != EXPECTED_BOUNDED_DOMAIN_EFFECT_RESOLUTION
+    ):
+        mismatches.append(
+            "bounded_domain_effect_recovery/resolution are required for cutover mode: "
+            f"expected {EXPECTED_BOUNDED_DOMAIN_EFFECT_RECOVERY!r} + "
+            f"{EXPECTED_BOUNDED_DOMAIN_EFFECT_RESOLUTION!r}"
+        )
     if (
         require_domain_effect_evidence
         and identity.domain_effect_verification_evidence_view
@@ -182,12 +231,14 @@ class HttpKernelContractProbe:
         timeout_seconds: float = 3.0,
         require_work_admission: bool = False,
         require_domain_effect_execution: bool = False,
+        require_domain_effect_recovery: bool = False,
         require_domain_effect_evidence: bool = False,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.timeout_seconds = timeout_seconds
         self.require_work_admission = require_work_admission
         self.require_domain_effect_execution = require_domain_effect_execution
+        self.require_domain_effect_recovery = require_domain_effect_recovery
         self.require_domain_effect_evidence = require_domain_effect_evidence
 
     def fetch_identity(self) -> KernelContractIdentity:
@@ -208,12 +259,15 @@ class HttpKernelContractProbe:
             payload,
             require_work_admission=self.require_work_admission,
             require_domain_effect_execution=self.require_domain_effect_execution,
+            require_domain_effect_recovery=self.require_domain_effect_recovery,
             require_domain_effect_evidence=self.require_domain_effect_evidence,
         )
 
 
 __all__ = [
     "EXPECTED_BOUNDED_DOMAIN_EFFECT_EXECUTION",
+    "EXPECTED_BOUNDED_DOMAIN_EFFECT_RECOVERY",
+    "EXPECTED_BOUNDED_DOMAIN_EFFECT_RESOLUTION",
     "EXPECTED_CATALOG_VERSION",
     "EXPECTED_DOMAIN_EFFECT_VERIFICATION_EVIDENCE_VIEW",
     "EXPECTED_DOMAIN_RESPONSIBILITY_PROPOSAL",
