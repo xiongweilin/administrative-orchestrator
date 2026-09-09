@@ -4,7 +4,7 @@
 
 `administrative-orchestrator` is the primary administrative digital-automation reference system. It owns durable organization-facing cases and the business meaning of facts, policy, approvals, obligations, semantic verification, and completion. It is not a second generic Agent runtime and it does not replace authoritative HR, finance, IAM, document, messaging, or calendar systems.
 
-The current M5 reference chain is:
+The current M5 trusted-action chain is:
 
 ```text
 authenticated ingress
@@ -69,6 +69,36 @@ obligation-backed CompletionAssessment
 M4 completed the lower-half runtime convergence onto `agent-kernel`: cut-over writes no longer have an Administrative physical-provider fallback, and ambiguous execution is recovered by Kernel canonical recovery rather than by Administrative redispatch. M5 keeps that ownership model intact while adding production identity, authoritative facts, real-system connector contracts, human exception operations, observability, and recovery/DR gates.
 
 See `docs/adr/0001-domain-kernel-dbos-ownership.md` for semantic ownership and `docs/adr/0002-repository-and-deployment-boundaries.md` for repository/deployment boundaries.
+
+M6 adds an upstream perception/admission plane without changing that trusted
+action chain:
+
+```text
+provider event authenticity
+        |
+        v
+IntakeReceipt -> SourceArtifact -> EvidenceSpan
+        |
+        v
+InterpretationRecord
+        |
+        v
+candidate request / case update / candidate fact
+        |
+        v
+IntakeAssessment
+        |
+        v
+human-confirmed PromotionRecord
+        |
+        v
+existing IngressReceipt -> existing M5 AdministrativeRequest / Case path
+```
+
+The intake plane is not an authority plane. Source authenticity is not
+content truth, interpretation is not an authoritative fact, candidate state
+is not an AdministrativeRequest, and model confidence is not admission
+authority. The complete contract is recorded in ADR 0003.
 
 ## 2. Ownership boundaries
 
@@ -255,7 +285,7 @@ Service/process boundaries do not imply repository boundaries. The Administrativ
 - **M3 — administrative correctness:** resource authorization, dependency-scoped GovernanceBasis, obligation-backed completion, reality epistemics, fact-authority distinction, explicit policy lifecycle.
 - **M4 — kernel convergence:** compatibility gate, persistent responsibility/Work admission, administrative business-grant/effect-intent split, HRIS/IAM physical cut-over, unique Kernel RealityBoundary, and canonical ambiguous-result recovery.
 - **M5 — production trust and reality integration:** OIDC/JWKS, field-level authoritative provenance, Odoo/Keycloak read/write/verification contracts, Operations Console, observability, production preflight, DR gates, pinned Kernel baseline plus `agent-kernel/main` recovery canary. **Repository implementation/CI, isolated real-staging Gates A–F, squash merge, and post-merge main CI are complete for the recorded scope.**
-- **M6 — broader administrative slices:** offboarding, leave, expense, access, procurement, document approval, AP preparation, and scheduling only after M5 real-staging acceptance.
+- **M6 — trusted perception and admission:** authenticated non-structured source intake, evidence/provenance, candidate interpretation, identity/conversation semantics, explicit human-confirmed admission, and one real provider vertical slice. Broader Administrative domain expansion remains deferred.
 
 M5 staging acceptance is intentionally external to repository CI. The checklist and evidence requirements are in `docs/milestones/M5.md` and `docs/production-operations.md`.
 
