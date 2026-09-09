@@ -585,3 +585,10 @@ class SqlStore:
                 created_at=utcnow(),
             )
         )
+
+
+# Register Intake Plane tables in the shared metadata without moving the
+# already-stable M0-M5 persistence definitions out of this module. The import
+# occurs after Base and SqlStore are fully initialized, so intake/repository.py
+# can safely reuse the existing database/session boundary.
+from .intake import repository as _intake_repository  # noqa: E402, F401

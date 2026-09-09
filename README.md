@@ -128,11 +128,11 @@ fe4b3f4bf2e376bd7105caf7d15d77e2483c7197
 
 M5 has an explicit acceptance boundary: repository CI can prove code, migration, restart, cut-over, DR, ambiguity semantics, and static/security quality gates, while the external checklist proves enterprise OIDC/Odoo/Keycloak credentials and network behavior. The isolated real-staging checklist, final exact-head CI, squash merge, and post-merge main CI now pass on the supported Kernel revision `fe4b3f4bf2e376bd7105caf7d15d77e2483c7197`; M5 is **complete for the recorded scope**.
 
-M6 is the upstream **Trusted Perception & Admission** milestone. Its first
-slice establishes the Administrative Intake Plane contract: authenticated
-provider delivery, immutable source/evidence/interpretation lineage,
-candidate-only modeling, explicit assessment, and human-confirmed promotion
-into the existing M5 request/case path. M6 is **in progress**; see
+M6 is the upstream **Trusted Perception & Admission** milestone. Its initial
+slices establish the Administrative Intake Plane contract and durable core:
+authenticated provider delivery, immutable source/evidence/interpretation
+lineage, candidate-only modeling, explicit assessment, and human-confirmed
+promotion into the existing M5 request/case path. M6 is **in progress**; see
 `docs/milestones/M6.md` and ADR 0003 for the current boundary. No model output,
 provider delivery, or external sender can mint Administrative authority or
 Agent Kernel Work.
@@ -191,6 +191,7 @@ src/administrative_orchestrator/
     completion.py            domain completion contract
     messaging.py             transactional outbox / retry / dead-letter
     workflows/               DBOS durability boundary
+    intake/                  M6 durable source, evidence, interpretation, candidate, and assessment core
 operations-console/          OIDC human exception UI (TypeScript)
 docs/
     architecture.md
