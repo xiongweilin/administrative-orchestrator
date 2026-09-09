@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from types import SimpleNamespace
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from administrative_orchestrator.domain import (
     AuthorityClass,
@@ -61,29 +61,31 @@ class CountingLegacyProvider:
 
 
 class FakeKernelRepository:
-    def __init__(self, projection, intent) -> None:
-        self.projection = projection
-        self.intent = intent
+    def __init__(self, projections, intents) -> None:
+        self.projections = {item.obligation_id: item for item in projections}
+        self.intents = {item.intent_id: item for item in intents}
 
-    def get_projection_for_obligation(self, obligation_id):
-        if self.projection is None or self.projection.obligation_id != obligation_id:
-            return None
-        return self.projection
+    def get_projection_for_obligation(self, obligation_id: UUID):
+        return self.projections.get(obligation_id)
 
-    def get_intent(self, intent_id):
-        if self.intent is None or self.intent.intent_id != intent_id:
-            return None
-        return self.intent
+    def get_intent(self, intent_id: UUID):
+        return self.intents.get(intent_id)
 
 
 class FakeKernelBridge:
     cutover = True
 
-    def __init__(self, projection, intent) -> None:
-        self.repository = FakeKernelRepository(projection, intent)
+    def __init__(self, projections=(), intents=()) -> None:
+        self.repository = FakeKernelRepository(projections, intents)
 
 
-def _effect(*, target: str, operation: str, obligation_id=None) -> EffectRecord:
+def _effect(
+    *,
+    target: str,
+    operation: str,
+    obligation_id: UUID | None = None,
+    authority_class: AuthorityClass = AuthorityClass.EMPLOYMENT,
+) -> EffectRecord:
     return EffectRecord(
         effect_id=uuid4(),
         case_id=uuid4(),
@@ -96,18 +98,17 @@ def _effect(*, target: str, operation: str, obligation_id=None) -> EffectRecord:
         operation=operation,
         subject_ref="employee:new",
         reversibility=EffectReversibility.CORRECTABLE,
-        authority_class=AuthorityClass.EMPLOYMENT,
+        authority_class=authority_class,
         created_at=NOW,
         updated_at=NOW,
     )
 
 
-def test_hris_cutover_never_calls_legacy_execute_or_observe_but_iam_still_delegates() -> None:
-    obligation_id = uuid4()
+def _completed_projection(*, obligation_id: UUID, target: str, operation: str):
     intent_id = uuid4()
     expected = {
-        "target_system": "hris",
-        "operation": "employee.create",
+        "target_system": target,
+        "operation": operation,
         "subject_ref": "employee:new",
         "active": True,
         "payload": {
@@ -120,53 +121,97 @@ def test_hris_cutover_never_calls_legacy_execute_or_observe_but_iam_still_delega
         intent_id=intent_id,
         status=KernelProjectionStatus.CUTOVER,
         kernel_execution_status=KernelExecutionStatus.COMPLETED,
-        kernel_execution_ref="execution:hris:1",
-        kernel_provider_id="provider:hris:kernel",
+        kernel_execution_ref=f"execution:{target}:1",
+        kernel_provider_id=f"provider:{target}:kernel",
         kernel_execution_processed_at=NOW,
-        kernel_evidence_ref="evidence:hris:kernel:1",
+        kernel_evidence_ref=f"evidence:{target}:kernel:1",
     )
     intent = SimpleNamespace(intent_id=intent_id, expected_postcondition=expected)
-    legacy = CountingLegacyProvider()
-    provider = KernelCutoverEffectProvider(legacy, FakeKernelBridge(projection, intent))
+    return projection, intent, expected
 
-    hris = _effect(
+
+def test_hris_and_iam_cutover_never_call_legacy_execute_or_observe() -> None:
+    hris_obligation_id = uuid4()
+    iam_obligation_id = uuid4()
+    hris_projection, hris_intent, hris_expected = _completed_projection(
+        obligation_id=hris_obligation_id,
         target="hris",
         operation="employee.create",
-        obligation_id=obligation_id,
     )
-    result = provider.execute(hris, expected["payload"])
-    observation = provider.observe(hris)
-    verification = verify_onboarding_observation(
-        hris,
-        observation,
-        expected["payload"],
-        expected_postcondition=expected,
+    iam_projection, iam_intent, iam_expected = _completed_projection(
+        obligation_id=iam_obligation_id,
+        target="iam",
+        operation="identity.create",
+    )
+    legacy = CountingLegacyProvider()
+    provider = KernelCutoverEffectProvider(
+        legacy,
+        FakeKernelBridge(
+            projections=(hris_projection, iam_projection),
+            intents=(hris_intent, iam_intent),
+        ),
     )
 
-    assert result.status is ProviderExecutionStatus.SUCCEEDED
-    assert result.provider_ref == "agent-kernel:provider:hris:kernel:execution:hris:1"
-    assert verification.disposition is VerificationDisposition.VERIFIED
+    cases = (
+        (
+            _effect(
+                target="hris",
+                operation="employee.create",
+                obligation_id=hris_obligation_id,
+            ),
+            hris_expected,
+            "agent-kernel:provider:hris:kernel:execution:hris:1",
+        ),
+        (
+            _effect(
+                target="iam",
+                operation="identity.create",
+                obligation_id=iam_obligation_id,
+                authority_class=AuthorityClass.PRIVILEGED_ACCESS,
+            ),
+            iam_expected,
+            "agent-kernel:provider:iam:kernel:execution:iam:1",
+        ),
+    )
+
+    for effect, expected, provider_ref in cases:
+        result = provider.execute(effect, expected["payload"])
+        observation = provider.observe(effect)
+        verification = verify_onboarding_observation(
+            effect,
+            observation,
+            expected["payload"],
+            expected_postcondition=expected,
+        )
+
+        assert result.status is ProviderExecutionStatus.SUCCEEDED
+        assert result.provider_ref == provider_ref
+        assert verification.disposition is VerificationDisposition.VERIFIED
+
     assert legacy.execute_calls == []
     assert legacy.observe_calls == []
 
-    iam = _effect(target="iam", operation="identity.create")
-    assert provider.execute(iam, {}).status is ProviderExecutionStatus.SUCCEEDED
-    assert provider.observe(iam).provider_ref == "legacy:iam"
-    assert legacy.execute_calls == ["iam.identity.create"]
-    assert legacy.observe_calls == ["iam.identity.create"]
 
-
-def test_missing_kernel_receipt_fails_closed_without_local_fallback() -> None:
+def test_missing_kernel_receipt_fails_closed_for_both_cutover_capabilities() -> None:
     legacy = CountingLegacyProvider()
-    provider = KernelCutoverEffectProvider(legacy, FakeKernelBridge(None, None))
-    hris = _effect(target="hris", operation="employee.create")
+    provider = KernelCutoverEffectProvider(legacy, FakeKernelBridge())
 
-    result = provider.execute(hris, {"employee_ref": "employee:new"})
-    observation = provider.observe(hris)
+    effects = (
+        _effect(target="hris", operation="employee.create"),
+        _effect(
+            target="iam",
+            operation="identity.create",
+            authority_class=AuthorityClass.PRIVILEGED_ACCESS,
+        ),
+    )
+    for effect in effects:
+        result = provider.execute(effect, {"employee_ref": "employee:new"})
+        observation = provider.observe(effect)
 
-    assert result.status is ProviderExecutionStatus.OUTCOME_UNKNOWN
-    assert result.retryable is False
-    assert "local fallback forbidden" in (result.error or "")
-    assert observation.availability is ObservationAvailability.UNKNOWN
+        assert result.status is ProviderExecutionStatus.OUTCOME_UNKNOWN
+        assert result.retryable is False
+        assert "local fallback forbidden" in (result.error or "")
+        assert observation.availability is ObservationAvailability.UNKNOWN
+
     assert legacy.execute_calls == []
     assert legacy.observe_calls == []

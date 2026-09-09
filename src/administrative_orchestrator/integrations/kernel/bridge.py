@@ -11,9 +11,15 @@ from .mapper import capability_for, derive_effect_intent, derive_execution_grant
 from .models import KernelProjectionStatus, KernelShadowProjection
 from .repository import KernelBridgeRepository
 
-# First physical cutover is deliberately capability-scoped. A second capability
-# must prove this runtime seam is generic before this set is expanded.
-KERNEL_CUTOVER_CAPABILITIES = frozenset({"administrative.hris.employee.create.v1"})
+# Physical execution ownership is capability-scoped. HRIS proved the first
+# cutover; IAM is the second capability proving the same Kernel runtime seam is
+# generic rather than HRIS-specific.
+KERNEL_CUTOVER_CAPABILITIES = frozenset(
+    {
+        "administrative.hris.employee.create.v1",
+        "administrative.iam.identity.create.v1",
+    }
+)
 
 
 class KernelExecutionBridge:

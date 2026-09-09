@@ -7,7 +7,7 @@ from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 DEFAULT_KERNEL_RESPONSIBILITY_ADMISSION_POLICY_REF = (
-    "responsibility-admission:administrative-public@1"
+    "responsibility-admission:administrative-public@2"
 )
 
 
@@ -39,7 +39,7 @@ class Settings(BaseSettings):
     kernel_contract_timeout_seconds: float = 3.0
     # This value is only an optimistic compatibility guard sent to Kernel. It
     # never selects policy or capacity remotely. Kernel must be configured
-    # server-side with the matching administrative-public profile.
+    # server-side with the matching administrative-public profile revision.
     kernel_responsibility_admission_policy_ref: str = (
         DEFAULT_KERNEL_RESPONSIBILITY_ADMISSION_POLICY_REF
     )

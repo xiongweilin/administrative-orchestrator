@@ -12,8 +12,10 @@ from portable_runtime.core.capabilities import (
     ProviderDescriptor,
     ProviderHealth,
 )
+from portable_runtime.core.capability_contract import CapabilityContract, CapabilityContractRegistry
 from portable_runtime.core.provider_semantics import ProviderSemanticContract
 from portable_runtime.core.registry import ProviderRegistry
+from portable_runtime.core.reliability import ReliabilityControls
 from portable_runtime.core.runtime import Runtime
 from portable_runtime.public_contracts.domain_effect import (
     BoundedDomainEffectExecutionProfile,
@@ -24,38 +26,48 @@ from portable_runtime.responsibility.domain_effect_authorization import (
     ADMINISTRATIVE_HRIS_EMPLOYEE_CREATE,
 )
 from portable_runtime.responsibility.domain_effect_verified_outcome import (
-    DOMAIN_EFFECT_VERIFICATION_CAPABILITY,
+    domain_effect_verification_capability,
 )
 from portable_runtime.stores.invocation_specification import (
     InvocationSpecificationInMemoryStateStore,
 )
 
 SANDBOX_BASE_URL = os.getenv("ADMIN_SANDBOX_BASE_URL", "http://127.0.0.1:8010").rstrip("/")
-EFFECT_PROVIDER_ID = "provider:admin-e2e:hris"
-VERIFIER_PROVIDER_ID = "provider:admin-e2e:hris-readback"
+IAM_CAPABILITY = "administrative.iam.identity.create.v1"
 
 
 def sandbox_effect_id(capability: str, subject_ref: str) -> UUID:
     return uuid5(NAMESPACE_URL, f"administrative-kernel-e2e:{capability}:{subject_ref}")
 
 
-class SandboxHrisProvider:
-    def __init__(self, base_url: str = SANDBOX_BASE_URL) -> None:
+class SandboxAdministrativeProvider:
+    def __init__(
+        self,
+        *,
+        provider_id: str,
+        capability: str,
+        target_system: str,
+        operation: str,
+        base_url: str = SANDBOX_BASE_URL,
+    ) -> None:
         self.base_url = base_url.rstrip("/")
+        self.capability = capability
+        self.target_system = target_system
+        self.operation = operation
         self._request_effect_ids: dict[str, UUID] = {}
         self._descriptor = ProviderDescriptor(
-            id=EFFECT_PROVIDER_ID,
-            name="Administrative sandbox HRIS provider",
+            id=provider_id,
+            name=f"Administrative sandbox {target_system} provider",
             version="2026.09",
-            capabilities=[ADMINISTRATIVE_HRIS_EMPLOYEE_CREATE],
+            capabilities=[capability],
             effect_semantics="reconcilable",
             side_effect_class="reconcilable",
             reversibility="compensatable",
             provider_family="administrative-sandbox",
             operator="cross-repo-ci",
-            execution_domain="administrative-sandbox:hris",
+            execution_domain=f"administrative-sandbox:{target_system}",
             credential_domain="cross-repo-ci:none",
-            data_source_domain="administrative-sandbox:hris-state",
+            data_source_domain=f"administrative-sandbox:{target_system}-state",
             network_domain="localhost",
             trust_boundary="cross-repo-ci",
         )
@@ -85,7 +97,7 @@ class SandboxHrisProvider:
         del context
         subject_ref = request.parameters.get("employee_ref")
         if not isinstance(subject_ref, str) or not subject_ref:
-            raise ValueError("HRIS execution requires employee_ref")
+            raise ValueError(f"{self.target_system} execution requires employee_ref")
         effect_id = sandbox_effect_id(request.capability, subject_ref)
         self._request_effect_ids[request.id] = effect_id
         try:
@@ -93,8 +105,8 @@ class SandboxHrisProvider:
                 response = await client.put(
                     f"{self.base_url}/v1/effects/{effect_id}",
                     json={
-                        "target_system": "hris",
-                        "operation": "employee.create",
+                        "target_system": self.target_system,
+                        "operation": self.operation,
                         "subject_ref": subject_ref,
                         "payload": dict(request.parameters),
                     },
@@ -146,14 +158,23 @@ class SandboxHrisProvider:
         )
 
 
-class SandboxHrisReadbackVerifier:
-    def __init__(self, base_url: str = SANDBOX_BASE_URL) -> None:
+class SandboxAdministrativeReadbackVerifier:
+    def __init__(
+        self,
+        *,
+        provider_id: str,
+        effect_capability: str,
+        target_system: str,
+        base_url: str = SANDBOX_BASE_URL,
+    ) -> None:
         self.base_url = base_url.rstrip("/")
+        self.effect_capability = effect_capability
+        self.target_system = target_system
         self._descriptor = ProviderDescriptor(
-            id=VERIFIER_PROVIDER_ID,
-            name="Administrative sandbox HRIS readback verifier",
+            id=provider_id,
+            name=f"Administrative sandbox {target_system} readback verifier",
             version="2026.09",
-            capabilities=[DOMAIN_EFFECT_VERIFICATION_CAPABILITY],
+            capabilities=[domain_effect_verification_capability(effect_capability)],
             effect_semantics="pure",
             side_effect_class="pure",
             reversibility="unknown",
@@ -161,7 +182,7 @@ class SandboxHrisReadbackVerifier:
             operator="cross-repo-ci",
             execution_domain="verification",
             credential_domain="cross-repo-ci:none",
-            data_source_domain="administrative-sandbox:hris-state",
+            data_source_domain=f"administrative-sandbox:{target_system}-state",
             evaluation_domain="objective-postcondition",
             network_domain="localhost",
             trust_boundary="cross-repo-ci",
@@ -196,11 +217,13 @@ class SandboxHrisReadbackVerifier:
         capability = scope.get("effect_capability")
         subject_ref = scope.get("subject_ref")
         expected = scope.get("expected_postcondition")
-        if not isinstance(capability, str) or not isinstance(subject_ref, str):
-            raise ValueError("verification scope lacks effect identity")
+        if capability != self.effect_capability:
+            raise ValueError("verification scope capability rebound")
+        if not isinstance(subject_ref, str):
+            raise ValueError("verification scope lacks subject_ref")
         if not isinstance(expected, dict):
             raise ValueError("verification scope lacks expected postcondition")
-        effect_id = sandbox_effect_id(capability, subject_ref)
+        effect_id = sandbox_effect_id(self.effect_capability, subject_ref)
         observed: dict[str, Any]
         try:
             async with httpx.AsyncClient(timeout=5.0) as client:
@@ -227,7 +250,7 @@ class SandboxHrisReadbackVerifier:
             metadata={"observed_postcondition": observed},
             verification_result=ClosedVerificationResult(
                 result=result,
-                message="independent Administrative sandbox HRIS readback",
+                message=f"independent Administrative sandbox {self.target_system} readback",
             ),
         )
 
@@ -239,43 +262,101 @@ class SandboxHrisReadbackVerifier:
         return None
 
 
+def _iam_contract() -> CapabilityContract:
+    return CapabilityContract(
+        capability=IAM_CAPABILITY,
+        minimum_impact_class="write-remote",
+        effect_semantics="reconcilable",
+        reversibility="compensatable",
+        authorization_requirement="required",
+        minimum_procedure_profile="standard",
+        resource_required=True,
+        subject_version_required=True,
+        default_independence_requirements=[],
+        blast_radius=1,
+        exposure=1,
+    )
+
+
 def build() -> tuple[Runtime, BoundedDomainEffectExecutionService]:
     store = InvocationSpecificationInMemoryStateStore()
     registry = ProviderRegistry()
+    # The generic Runtime default is a personal/local safety profile with a
+    # five-second global side-effect cooldown. This deployment represents one
+    # server-owned Administrative execution lane, where independently admitted
+    # HRIS and IAM obligations must be able to discharge back-to-back. Keep all
+    # rate, parallelism, blast-radius, exposure and side-effect budgets active;
+    # only the personal interactive cooldown is explicitly disabled.
+    reliability = ReliabilityControls(cooldown_seconds=0)
     runtime = Runtime(
         store=store,
         registry=registry,
+        contract_registry=CapabilityContractRegistry(contracts=[_iam_contract()]),
+        reliability=reliability,
         runtime_id="runtime:administrative-cross-repo-e2e",
     )
-    effect_provider = SandboxHrisProvider()
-    verifier = SandboxHrisReadbackVerifier()
-    registry.register(
-        effect_provider,
-        configured_execution_identity="configured:administrative-sandbox:hris",
-        authoritative_configuration_ref="config:administrative-sandbox:hris:v1",
+
+    hris_provider = SandboxAdministrativeProvider(
+        provider_id="provider:admin-e2e:hris",
+        capability=ADMINISTRATIVE_HRIS_EMPLOYEE_CREATE,
+        target_system="hris",
+        operation="employee.create",
     )
-    registry.register(
-        verifier,
-        configured_execution_identity="configured:administrative-sandbox:hris-readback",
-        authoritative_configuration_ref="config:administrative-sandbox:hris-readback:v1",
+    iam_provider = SandboxAdministrativeProvider(
+        provider_id="provider:admin-e2e:iam",
+        capability=IAM_CAPABILITY,
+        target_system="iam",
+        operation="identity.create",
     )
-    service = BoundedDomainEffectExecutionService(
-        runtime,
-        [
-            BoundedDomainEffectExecutionProfile(
-                capability=ADMINISTRATIVE_HRIS_EMPLOYEE_CREATE,
-                provider_id=effect_provider.descriptor.id,
-                verifier_provider_id=verifier.descriptor.id,
-                semantic_contract=ProviderSemanticContract(
-                    id="semantic:administrative-sandbox:hris-employee-create",
-                    version="1",
-                    provider_id=effect_provider.descriptor.id,
-                ),
-                lease_owner="kernel:administrative-cross-repo-e2e",
-            )
-        ],
+    hris_verifier = SandboxAdministrativeReadbackVerifier(
+        provider_id="provider:admin-e2e:hris-readback",
+        effect_capability=ADMINISTRATIVE_HRIS_EMPLOYEE_CREATE,
+        target_system="hris",
     )
-    return runtime, service
+    iam_verifier = SandboxAdministrativeReadbackVerifier(
+        provider_id="provider:admin-e2e:iam-readback",
+        effect_capability=IAM_CAPABILITY,
+        target_system="iam",
+    )
+
+    registrations = (
+        (hris_provider, "hris"),
+        (iam_provider, "iam"),
+        (hris_verifier, "hris-readback"),
+        (iam_verifier, "iam-readback"),
+    )
+    for provider, configured_name in registrations:
+        registry.register(
+            provider,
+            configured_execution_identity=f"configured:administrative-sandbox:{configured_name}",
+            authoritative_configuration_ref=f"config:administrative-sandbox:{configured_name}:v1",
+        )
+
+    profiles = (
+        BoundedDomainEffectExecutionProfile(
+            capability=ADMINISTRATIVE_HRIS_EMPLOYEE_CREATE,
+            provider_id=hris_provider.descriptor.id,
+            verifier_provider_id=hris_verifier.descriptor.id,
+            semantic_contract=ProviderSemanticContract(
+                id="semantic:administrative-sandbox:hris-employee-create",
+                version="1",
+                provider_id=hris_provider.descriptor.id,
+            ),
+            lease_owner="kernel:administrative-cross-repo-e2e",
+        ),
+        BoundedDomainEffectExecutionProfile(
+            capability=IAM_CAPABILITY,
+            provider_id=iam_provider.descriptor.id,
+            verifier_provider_id=iam_verifier.descriptor.id,
+            semantic_contract=ProviderSemanticContract(
+                id="semantic:administrative-sandbox:iam-identity-create",
+                version="1",
+                provider_id=iam_provider.descriptor.id,
+            ),
+            lease_owner="kernel:administrative-cross-repo-e2e",
+        ),
+    )
+    return runtime, BoundedDomainEffectExecutionService(runtime, profiles)
 
 
-__all__ = ["build", "sandbox_effect_id"]
+__all__ = ["IAM_CAPABILITY", "build", "sandbox_effect_id"]
