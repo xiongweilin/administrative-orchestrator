@@ -23,7 +23,6 @@ from portable_runtime.stores.invocation_specification import (
     InvocationSpecificationSQLiteStateStore,
 )
 
-
 EFFECT_PROVIDERS = {
     "provider:admin-e2e:hris": (
         ADMINISTRATIVE_HRIS_EMPLOYEE_CREATE,
