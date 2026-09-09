@@ -118,7 +118,7 @@ def validate_kernel_catalog(
         != EXPECTED_RESPONSIBILITY_WORK_ADMISSION
     ):
         mismatches.append(
-            "responsibility_work_admission is required for admission/cutover mode: "
+            "responsibility_work_admission is required for admission mode or cutover mode: "
             f"expected {EXPECTED_RESPONSIBILITY_WORK_ADMISSION!r}"
         )
     if (
