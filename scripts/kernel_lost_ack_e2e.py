@@ -9,6 +9,7 @@ from typing import Any
 from uuid import UUID
 
 import httpx
+from kernel_cutover_stack import sandbox_effect_id
 
 from administrative_orchestrator.config import Settings
 from administrative_orchestrator.domain import (
@@ -41,7 +42,6 @@ from administrative_orchestrator.verification import (
     VerificationDisposition,
     verify_onboarding_observation,
 )
-from kernel_cutover_stack import sandbox_effect_id
 
 FIXED_TIME = datetime(2026, 9, 9, 6, 15, tzinfo=UTC)
 CASE_ID = UUID("4e8ba42e-75ab-58ae-8e53-11abecce7001")
