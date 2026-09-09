@@ -15,6 +15,9 @@ from portable_runtime.core.capabilities import (
 )
 from portable_runtime.core.capability_contract import CapabilityContract, CapabilityContractRegistry
 from portable_runtime.core.provider_semantics import ProviderSemanticContract
+from portable_runtime.core.reconciliation_repeatability import (
+    ReconciliationRepeatabilityConfiguration,
+)
 from portable_runtime.core.registry import ProviderRegistry
 from portable_runtime.core.reliability import ReliabilityControls
 from portable_runtime.core.runtime import Runtime
@@ -56,7 +59,6 @@ class SandboxAdministrativeProvider:
         self.capability = capability
         self.target_system = target_system
         self.operation = operation
-        self._request_effect_ids: dict[str, UUID] = {}
         self._descriptor = ProviderDescriptor(
             id=provider_id,
             name=f"Administrative sandbox {target_system} provider",
@@ -101,7 +103,6 @@ class SandboxAdministrativeProvider:
         if not isinstance(subject_ref, str) or not subject_ref:
             raise ValueError(f"{self.target_system} execution requires employee_ref")
         effect_id = sandbox_effect_id(request.capability, subject_ref)
-        self._request_effect_ids[request.id] = effect_id
         try:
             async with httpx.AsyncClient(timeout=5.0) as client:
                 response = await client.put(
@@ -111,6 +112,7 @@ class SandboxAdministrativeProvider:
                         "operation": self.operation,
                         "subject_ref": subject_ref,
                         "payload": dict(request.parameters),
+                        "request_ref": request.id,
                     },
                 )
                 response.raise_for_status()
@@ -135,15 +137,15 @@ class SandboxAdministrativeProvider:
         del request_id
 
     async def reconcile(self, request_id: str) -> CapabilityResult | None:
-        effect_id = self._request_effect_ids.get(request_id)
-        if effect_id is None:
-            return None
         try:
             async with httpx.AsyncClient(timeout=5.0) as client:
-                response = await client.get(f"{self.base_url}/v1/effects/{effect_id}")
+                response = await client.get(
+                    f"{self.base_url}/v1/reconciliation/effects/{request_id}"
+                )
                 if response.status_code == 404:
                     return None
                 response.raise_for_status()
+                payload = response.json()
         except httpx.HTTPError as exc:
             return CapabilityResult(
                 request_id=request_id,
@@ -151,12 +153,13 @@ class SandboxAdministrativeProvider:
                 status="unknown",
                 error={"code": type(exc).__name__, "message": str(exc)},
             )
+        provider_ref = payload.get("provider_ref") if isinstance(payload, dict) else None
         return CapabilityResult(
             request_id=request_id,
             provider_id=self.descriptor.id,
             status="succeeded",
             reconciled=True,
-            external_operation_ref=f"sandbox:{effect_id}",
+            external_operation_ref=(provider_ref if isinstance(provider_ref, str) else None),
         )
 
 
@@ -299,6 +302,15 @@ def _iam_contract() -> CapabilityContract:
     )
 
 
+def _repeat_safe_reconciliation() -> ReconciliationRepeatabilityConfiguration:
+    return ReconciliationRepeatabilityConfiguration(
+        reconciliation_protocol_identity="administrative-sandbox-request-readback",
+        reconciliation_protocol_version="1",
+        repeatability_mode="repeat-safe",
+        contract_version="1",
+    )
+
+
 def build() -> tuple[Runtime, BoundedDomainEffectExecutionService]:
     state_path = os.getenv("PORTABLE_RUNTIME_ADMIN_E2E_STATE_PATH")
     store = (
@@ -346,16 +358,17 @@ def build() -> tuple[Runtime, BoundedDomainEffectExecutionService]:
     )
 
     registrations = (
-        (hris_provider, "hris"),
-        (iam_provider, "iam"),
-        (hris_verifier, "hris-readback"),
-        (iam_verifier, "iam-readback"),
+        (hris_provider, "hris", _repeat_safe_reconciliation()),
+        (iam_provider, "iam", _repeat_safe_reconciliation()),
+        (hris_verifier, "hris-readback", None),
+        (iam_verifier, "iam-readback", None),
     )
-    for provider, configured_name in registrations:
+    for provider, configured_name, repeatability in registrations:
         registry.register(
             provider,
             configured_execution_identity=f"configured:administrative-sandbox:{configured_name}",
             authoritative_configuration_ref=f"config:administrative-sandbox:{configured_name}:v1",
+            reconciliation_repeatability=repeatability,
         )
 
     profiles = (
@@ -385,4 +398,9 @@ def build() -> tuple[Runtime, BoundedDomainEffectExecutionService]:
     return runtime, PreReceiptCrashBoundedDomainEffectExecutionService(runtime, list(profiles))
 
 
-__all__ = ["IAM_CAPABILITY", "build", "sandbox_effect_id"]
+__all__ = [
+    "IAM_CAPABILITY",
+    "SandboxAdministrativeProvider",
+    "build",
+    "sandbox_effect_id",
+]
