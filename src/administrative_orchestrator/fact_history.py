@@ -7,7 +7,7 @@ from uuid import UUID
 from sqlalchemy import JSON, DateTime, ForeignKey, Integer, String, Uuid, select
 from sqlalchemy.orm import Mapped, Session, mapped_column
 
-from .domain import AdministrativeCase, FactSnapshot
+from .domain import AdministrativeCase, FactAssertion, FactAuthority, FactSnapshot
 from .persistence import Base, SqlStore, utcnow
 
 
@@ -22,9 +22,13 @@ class FactSnapshotHistoryRow(Base):
     authority_epoch: Mapped[int] = mapped_column(Integer, nullable=False)
     source: Mapped[str] = mapped_column(String(255), nullable=False)
     owner: Mapped[str] = mapped_column(String(255), nullable=False)
+    authority: Mapped[str] = mapped_column(String(32), nullable=False, default=FactAuthority.CLAIM.value)
+    source_ref: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    source_version: Mapped[str | None] = mapped_column(String(512), nullable=True)
     observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     digest: Mapped[str | None] = mapped_column(String(128), nullable=True)
     facts_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    assertions_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     recorded_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=utcnow
     )
@@ -48,9 +52,16 @@ def persist_fact_snapshot(db: Session, case: AdministrativeCase) -> None:
             authority_epoch=case.authority_epoch,
             source=snapshot.source,
             owner=snapshot.owner,
+            authority=snapshot.authority.value,
+            source_ref=snapshot.source_ref,
+            source_version=snapshot.source_version,
             observed_at=snapshot.observed_at,
             digest=snapshot.digest,
             facts_json=dict(snapshot.facts),
+            assertions_json={
+                key: assertion.model_dump(mode="json")
+                for key, assertion in snapshot.assertions.items()
+            },
             recorded_at=utcnow(),
         )
     )
@@ -75,12 +86,19 @@ def list_fact_snapshots(store: SqlStore, case_id: UUID) -> list[FactSnapshot]:
 
 
 def _snapshot_from_row(row: FactSnapshotHistoryRow) -> FactSnapshot:
+    raw_assertions = dict(row.assertions_json or {})
     return FactSnapshot(
         snapshot_id=row.snapshot_id,
         source=row.source,
         owner=row.owner,
+        authority=FactAuthority(row.authority),
+        source_ref=row.source_ref,
+        source_version=row.source_version,
         observed_at=row.observed_at,
         facts=dict(row.facts_json),
+        assertions={
+            key: FactAssertion.model_validate(value) for key, value in raw_assertions.items()
+        },
         digest=row.digest,
     )
 

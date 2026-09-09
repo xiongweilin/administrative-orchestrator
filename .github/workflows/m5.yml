@@ -1,0 +1,165 @@
+name: M5 Production Trust
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  production-trust-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: uv sync --extra dev
+      - name: M5 production trust invariants
+        run: >-
+          uv run pytest -q
+          tests/test_oidc.py
+          tests/test_m5_production_trust.py
+          tests/test_m5_production_connectors.py
+          tests/test_m5_production_readiness.py
+          tests/test_m5_observability.py
+          tests/test_m5_dr.py
+          tests/test_m5_kernel_state_dr.py
+
+  operations-console:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: operations-console
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: operations-console/package.json
+      - name: Install pinned Console dependencies
+        run: npm install --ignore-scripts --no-audit --no-fund
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Production build
+        run: npm run build
+
+  postgres-dr:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: uv sync --extra dev
+      - name: Migrate and seed durable authority state
+        env:
+          ADMIN_DATABASE_URL: postgresql+psycopg://postgres:postgres@127.0.0.1:5432/postgres
+        run: |
+          uv run alembic upgrade head
+          uv run python scripts/postgres_dr_fixture.py seed
+      - name: Backup PostgreSQL
+        run: |
+          mkdir -p .dr
+          docker run --rm --network host \
+            -e PGPASSWORD=postgres \
+            -v "$PWD/.dr:/backup" \
+            postgres:17-alpine \
+            pg_dump -h 127.0.0.1 -U postgres -d postgres -Fc -f /backup/administrative.dump
+          test -s .dr/administrative.dump
+      - name: Destroy current schema
+        run: >-
+          docker run --rm --network host
+          -e PGPASSWORD=postgres
+          postgres:17-alpine
+          psql -h 127.0.0.1 -U postgres -d postgres
+          -v ON_ERROR_STOP=1
+          -c 'DROP SCHEMA public CASCADE; CREATE SCHEMA public;'
+      - name: Restore PostgreSQL
+        run: >-
+          docker run --rm --network host
+          -e PGPASSWORD=postgres
+          -v "$PWD/.dr:/backup"
+          postgres:17-alpine
+          pg_restore -h 127.0.0.1 -U postgres -d postgres
+          --exit-on-error /backup/administrative.dump
+      - name: Verify semantic state after restore
+        env:
+          ADMIN_DATABASE_URL: postgresql+psycopg://postgres:postgres@127.0.0.1:5432/postgres
+        run: uv run python scripts/postgres_dr_fixture.py verify
+
+  kernel-pinned-cutover:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Administrative Orchestrator
+        uses: actions/checkout@v4
+      - name: Checkout supported Agent Kernel revision
+        uses: actions/checkout@v4
+        with:
+          repository: xiongweilin/agent-kernel
+          ref: fe4b3f4bf2e376bd7105caf7d15d77e2483c7197
+          path: .integration/agent-kernel
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+      - name: Install both repositories
+        run: |
+          uv sync --extra dev
+          uv pip install --python .venv/bin/python -e .integration/agent-kernel
+      - name: Start sandbox and supported Kernel
+        env:
+          ADMIN_SANDBOX_DATABASE_URL: sqlite+pysqlite:///./m5-pinned-sandbox.db
+          ADMIN_SANDBOX_BASE_URL: http://127.0.0.1:8010
+          PORTABLE_RUNTIME_RESPONSIBILITY_ADMISSION_PROFILE: administrative-public-v2
+          PORTABLE_RUNTIME_BOUNDED_DOMAIN_EFFECT_FACTORY: scripts.kernel_cutover_stack:build
+          PORTABLE_RUNTIME_ADMIN_E2E_STATE_PATH: ./m5-pinned-kernel.db
+        run: |
+          rm -f m5-pinned-sandbox.db m5-pinned-kernel.db m5-pinned-kernel.db-wal m5-pinned-kernel.db-shm
+          uv run uvicorn administrative_orchestrator.sandbox:app --host 127.0.0.1 --port 8010 >m5-pinned-sandbox.log 2>&1 &
+          echo $! > m5-pinned-sandbox.pid
+          for i in {1..40}; do
+            if curl --fail --silent http://127.0.0.1:8010/healthz >/dev/null; then break; fi
+            sleep 0.5
+          done
+          curl --fail --silent http://127.0.0.1:8010/healthz >/dev/null
+          uv run uvicorn portable_runtime.public_contracts.http:create_configured_public_app --factory --host 127.0.0.1 --port 8020 >m5-pinned-kernel.log 2>&1 &
+          echo $! > m5-pinned-kernel.pid
+          for i in {1..40}; do
+            if curl --fail --silent http://127.0.0.1:8020/v1/contracts >/dev/null; then break; fi
+            sleep 0.5
+          done
+          curl --fail --silent http://127.0.0.1:8020/v1/contracts >/dev/null
+      - name: Prove physical cutover against supported revision
+        env:
+          ADMIN_KERNEL_BASE_URL: http://127.0.0.1:8020
+          ADMIN_SANDBOX_BASE_URL: http://127.0.0.1:8010
+        run: uv run python scripts/kernel_cutover_e2e.py
+      - name: Logs
+        if: failure()
+        run: |
+          cat m5-pinned-sandbox.log || true
+          cat m5-pinned-kernel.log || true
+      - name: Stop services
+        if: always()
+        run: |
+          test ! -f m5-pinned-kernel.pid || kill "$(cat m5-pinned-kernel.pid)" 2>/dev/null || true
+          test ! -f m5-pinned-sandbox.pid || kill "$(cat m5-pinned-sandbox.pid)" 2>/dev/null || true

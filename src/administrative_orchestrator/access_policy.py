@@ -10,11 +10,14 @@ class AdministrativePermission(StrEnum):
     CASE_READ = "case.read"
     FACTS_READ = "case.facts.read"
     FACTS_ATTEST = "case.facts.attest"
+    FACTS_REFRESH_AUTHORITATIVE = "case.facts.refresh_authoritative"
     DECISION_SUBMIT = "decision.submit"
     CASE_REASSESS = "case.reassess"
     POLICY_READ = "policy.read"
     POLICY_MANAGE = "policy.manage"
     AUDIT_READ = "audit.read"
+    OPERATIONS_READ = "operations.read"
+    IDENTITY_MANAGE = "identity.manage"
     DEAD_LETTER_READ = "dead_letter.read"
     DEAD_LETTER_REPLAY = "dead_letter.replay"
 
@@ -46,15 +49,22 @@ _AUDIT_READ_ROLES = {
     "administrative_auditor",
     "administrative_admin",
 }
+_OPERATIONS_READ_ROLES = {
+    "administrative_operator",
+    "administrative_auditor",
+    "platform_operator",
+    "administrative_admin",
+}
+_IDENTITY_MANAGE_ROLES = {"administrative_admin"}
 _PLATFORM_OPS_ROLES = {"platform_operator", "administrative_admin"}
 
 
 class AdministrativeAccessPolicy:
     """Fail-closed resource authorization over current organizational roles.
 
-    Authentication proves who the caller is.  This policy separately proves
+    Authentication proves who the caller is. This policy separately proves
     whether that principal may inspect or mutate a particular administrative
-    resource.  Platform-operations authority is intentionally distinct from
+    resource. Platform-operations authority is intentionally distinct from
     business approval authority.
     """
 
@@ -95,12 +105,12 @@ class AdministrativeAccessPolicy:
             return bool(case and case.requester_principal_id == principal_id) or bool(
                 roles.intersection(_CASE_READER_ROLES)
             )
-        if permission == AdministrativePermission.FACTS_ATTEST:
+        if permission in {
+            AdministrativePermission.FACTS_ATTEST,
+            AdministrativePermission.FACTS_REFRESH_AUTHORITATIVE,
+        }:
             return bool(roles.intersection(_FACT_ATTEST_ROLES))
         if permission == AdministrativePermission.DECISION_SUBMIT:
-            # The exact required role is resolved by the policy-specific
-            # decision eligibility check.  This gate only rejects principals
-            # that have no scoped organizational role at all.
             return bool(roles)
         if permission == AdministrativePermission.CASE_REASSESS:
             return bool(roles.intersection(_REASSESS_ROLES))
@@ -110,6 +120,10 @@ class AdministrativeAccessPolicy:
             return bool(roles.intersection(_POLICY_MANAGE_ROLES))
         if permission == AdministrativePermission.AUDIT_READ:
             return bool(roles.intersection(_AUDIT_READ_ROLES))
+        if permission == AdministrativePermission.OPERATIONS_READ:
+            return bool(roles.intersection(_OPERATIONS_READ_ROLES))
+        if permission == AdministrativePermission.IDENTITY_MANAGE:
+            return bool(roles.intersection(_IDENTITY_MANAGE_ROLES))
         if permission in {
             AdministrativePermission.DEAD_LETTER_READ,
             AdministrativePermission.DEAD_LETTER_REPLAY,
