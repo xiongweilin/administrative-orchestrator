@@ -53,6 +53,24 @@ class ForbiddenFallbackProvider:
         raise AssertionError("legacy Administrative observe fallback was invoked")
 
 
+def _install_kernel_http_error_diagnostics(kernel_base_url: str) -> None:
+    """Expose trusted local Kernel problem details when this CI harness fails."""
+
+    original_post = httpx.post
+
+    def diagnostic_post(url, *args, **kwargs):
+        response = original_post(url, *args, **kwargs)
+        if response.status_code >= 400 and str(url).startswith(kernel_base_url):
+            print(
+                "kernel_http_error "
+                f"status={response.status_code} url={url} body={response.text}",
+                flush=True,
+            )
+        return response
+
+    httpx.post = diagnostic_post
+
+
 def _inputs(
     now: datetime,
 ) -> tuple[AdministrativeCase, GovernanceBasis, tuple[AdministrativeObligation, ...]]:
@@ -170,6 +188,7 @@ def _assert_kernel_lineage(projection, *, capability: str) -> None:
 def main() -> None:
     kernel_base_url = os.getenv("ADMIN_KERNEL_BASE_URL", "http://127.0.0.1:8020").rstrip("/")
     sandbox_base_url = os.getenv("ADMIN_SANDBOX_BASE_URL", "http://127.0.0.1:8010").rstrip("/")
+    _install_kernel_http_error_diagnostics(kernel_base_url)
     now = datetime.now(UTC)
     case, governance, obligations = _inputs(now)
 
