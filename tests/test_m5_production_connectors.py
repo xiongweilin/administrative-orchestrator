@@ -138,18 +138,21 @@ async def test_keycloak_verifier_reports_observed_reality_instead_of_expected_st
     monkeypatch.setattr(
         connector,
         "_find_by_attribute",
+        AsyncMock(return_value=[{"id": "user-42"}]),
+    )
+    monkeypatch.setattr(
+        connector,
+        "_get_user",
         AsyncMock(
-            return_value=[
-                {
-                    "id": "user-42",
-                    "enabled": True,
-                    "attributes": {
-                        "administrative_subject_ref": ["employee:42"],
-                        "administrative_employee_ref": ["employee:42"],
-                        "administrative_department_ref": ["department:actual"],
-                    },
-                }
-            ]
+            return_value={
+                "id": "user-42",
+                "enabled": True,
+                "attributes": {
+                    "administrative_subject_ref": ["employee:42"],
+                    "administrative_employee_ref": ["employee:42"],
+                    "administrative_department_ref": ["department:actual"],
+                },
+            }
         ),
     )
     expected = {
