@@ -36,6 +36,9 @@ authenticated person / service / system event
                         typed effect
                              |
                              v
+                       Agent Kernel
+                 physical RealityBoundary
+                             |
                   external system reality
                              |
                  semantic read-back / reconcile
@@ -58,14 +61,17 @@ Historical role assignment != current authority
 Recommendation != Decision
 One Decision != multi-party approval satisfaction
 ApprovalSatisfaction != ExecutionAuthorization
+Administrative obligation != Kernel Work
+Kernel evidence != Administrative ConfirmedOutcome
 Effect dispatch != realized effect
 Provider success != ConfirmedOutcome
+execution-unknown != retry permission
 Object existence != semantic postcondition satisfaction
 Workflow completed != responsibility discharged
 Exception != permission to improvise
 ```
 
-`agent-kernel` remains the generic semantic/runtime authority for open cognition, Work/Run, verification/revision, reopen, and persistent responsibility. This repository owns administrative-domain facts, organization/identity/policy interpretation, deterministic administrative workflows, business connectors, administrative effect profiles, completion contracts, and domain-specific reconciliation.
+`agent-kernel` remains the generic semantic/runtime authority for Work/Run, verification/revision, reopen, persistent responsibility, and physical cut-over recovery semantics. This repository owns administrative-domain facts, organization/identity/policy interpretation, deterministic administrative workflows, business connector contracts, administrative effect profiles, completion contracts, and domain-specific reconciliation.
 
 DBOS is deliberately confined to the durable orchestration boundary. `AdministrativeCase` remains the business state machine and source of current administrative workflow truth.
 
@@ -86,42 +92,53 @@ Planned vertical slices:
 
 The first executable slice is **employee onboarding** because it forces multi-actor coordination, long-lived state, identity, policy, approvals, multiple external systems, semantic verification, and bounded completion.
 
-## Current milestone: M2 organizational authority and policy
+## Current milestone: M5 Production Trust & Reality Integration
 
-M0 semantic foundation is complete. M1 durable governed execution is implemented for the onboarding reference slice. The repository is now in M2, where organizational identity, authority, approval satisfaction, and persisted policy become first-class runtime facts.
+M0–M4 established the semantic foundation, durable governed execution, organizational authority/policy, and Agent Kernel convergence/cut-over invariants. M5 makes that reference architecture production-shaped without collapsing those ownership boundaries.
 
-The current onboarding reference slice includes:
+The M5 implementation now includes:
 
-- PostgreSQL persistence with Alembic migrations;
-- transactional case/policy/decision transitions and durable outbox wake-up;
-- DBOS durable wait/replay and worker restart recovery;
-- deterministic effect and authorization identifiers for replay safety;
-- authoritative HTTP sandbox with provider-side effect idempotency;
-- `outcome_unknown` reconciliation without blind retry;
-- semantic postcondition verification rather than identity-only read-back;
-- explicit completion assessment before case closure;
-- immutable `FactSnapshot` history while the case points to current facts;
-- durable ingress receipts keyed by `source_event_id`;
-- authenticated principals, external identity bindings, roles, scoped delegation, and time validity;
-- policy-declared required decision roles and separation-of-duties constraints;
-- persisted multi-party `ApprovalSatisfaction` as the authority basis for governed execution;
-- persisted, versioned Policy Plane records compiled into deterministic onboarding evaluation;
-- audit, decision, authorization, effect, realization, outcome, completion, fact-history, and dead-letter inspection surfaces;
-- full Docker Compose HTTP E2E for standard and privileged onboarding;
-- CI coverage for lint/tests, migration round trips, PostgreSQL/DBOS restart recovery, and full Compose E2E.
+- production OIDC discovery/JWKS asymmetric verification with HTTPS issuer and `RS256`/`ES256` fail-closed constraints;
+- durable external identity binding history, explicit revocation/rebind/deactivation lifecycle, and separation of IdP identity from Administrative authority;
+- field-level `FactAssertion` authority/provenance so authoritative HRIS observations cannot promote request-only claims;
+- typed Odoo HRIS and Keycloak identity authoritative readers;
+- live authoritative HRIS revalidation before governed reality transitions, with `GOVERNANCE_STALE` reopen on changed/stale truth;
+- Odoo/Keycloak production writer and durable request-identity reconciliation contracts;
+- independent verifier identities and semantic readback rather than provider-success completion;
+- authority-safe Operations API and OIDC Operations Console with no force-complete, mark-success, evidence override, Kernel authorization, or provider-retry shortcuts;
+- low-cardinality Prometheus metrics, structured correlation IDs, and observed API wrappers;
+- production configuration preflight that rejects non-cutover, SQLite Administrative/DBOS stores, schema auto-create, unpinned Kernel revisions, insecure provider endpoints, and shared writer/verifier identities;
+- a production Agent Kernel factory using the supported bounded-domain-effect recovery store and separate writer/verifier credentials;
+- online Agent Kernel SQLite backup/verify/restore using SQLite backup semantics, integrity checks, atomic publication, and SHA-256 manifests;
+- PostgreSQL `pg_dump -> destroy -> pg_restore -> semantic verification` DR CI;
+- Operations Console TypeScript typecheck and production build gate;
+- a pinned Agent Kernel production-baseline cutover lane plus the existing `agent-kernel/main` recovery canary.
 
-The reference deployment uses development authentication only to make the full-stack E2E reproducible. The default runtime authentication mode is fail-closed JWT; production identity integration must bind external subjects to current organizational principals rather than accept caller-supplied principal identity.
+The supported Agent Kernel revision is currently:
+
+```text
+6b154f54a140da9fa97d6556720ae5744e95ffce
+```
+
+M5 has an explicit acceptance boundary: repository CI can prove code, migration, restart, cut-over, DR, and ambiguity semantics, but it cannot truthfully prove enterprise OIDC/Odoo/Keycloak credentials or network policy without real staging systems. The correct milestone status is therefore **implementation/CI complete when all PR gates are green; real-staging acceptance pending until the external checklist is executed**.
+
+See:
+
+- `docs/milestones/M5.md` for milestone acceptance and SLO targets;
+- `docs/production-operations.md` for deployment, observability, backup/restore, incident, and staging procedures.
 
 ## Development principles
 
 - AI may interpret, extract, compare, investigate, draft, and propose. It does not mint organizational authority by itself.
 - Deterministic policy handles already-closed rules; AI is not used to reopen routine cases without evidence.
 - Authentication answers who is calling; authority answers what that principal may decide now.
+- IdP roles/groups are authentication/directory inputs, not automatic Administrative authority.
 - Every authority-sensitive decision is bound to the current case version, authority epoch, policy version, role, and organization scope.
 - Multi-party policy requirements are satisfied by an explicit durable approval object, not by selecting one convenient Decision.
 - Every material persisted fact has an owner and provenance; current facts never erase historical fact snapshots.
-- External effects cross typed capability boundaries.
-- `outcome_unknown` is reconciled, not blindly retried.
+- Authoritative external facts are revalidated before governed reality transitions.
+- External effects cross typed capability boundaries through Agent Kernel when physically cut over.
+- `outcome_unknown` / execution-unknown is reconciled, not blindly retried.
 - Verification proves declared postconditions against fresh external reality; HTTP success is not business completion.
 - A case closes only against an explicit completion contract and confirmed outcomes.
 - Repeated exceptions may become policy candidates, but one successful episode never becomes universal policy automatically.
@@ -131,27 +148,42 @@ The reference deployment uses development authentication only to make the full-s
 
 ```text
 src/administrative_orchestrator/
-    api.py                  authenticated HTTP ingress / inspection surfaces
-    auth.py                 authentication boundary
-    authority.py            principals, roles, delegation, approval satisfaction
-    policy.py               deterministic administrative policy evaluator
-    policy_plane.py         persisted policy versions / current-policy resolution
-    domain.py               canonical administrative records
-    service.py              pure case / authorization transitions
-    unit_of_work.py         atomic persistence + outbox boundary
-    onboarding_execution.py recoverable onboarding execution state machine
-    verification.py         domain semantic postcondition verification
-    completion.py           domain completion contract
-    fact_history.py         immutable fact lineage
-    ingress.py              durable source-event idempotency
-    messaging.py            transactional outbox / retry / dead-letter
-    workflows/              DBOS durability boundary
-
+    api.py                   authenticated HTTP ingress / inspection surfaces
+    api_observed.py          production-observed API wrapper
+    auth.py                  authentication boundary
+    oidc.py                  OIDC discovery/JWKS verification
+    authority.py             principals, roles, delegation, approval satisfaction
+    authority_lifecycle.py   bind/revoke/rebind/deactivate audit history
+    policy.py                deterministic administrative policy evaluator
+    policy_plane.py          persisted policy versions / current-policy resolution
+    domain.py                canonical administrative records
+    fact_acquisition.py      authoritative readers / live revalidation
+    fact_history.py          immutable fact lineage
+    production_readiness.py  production fail-closed deployment constraints
+    observability.py         correlation + low-cardinality Prometheus metrics
+    kernel_state_dr.py       Kernel SQLite online backup/verify/restore primitives
+    operations_api.py        human exception operations surface
+    operations_app.py        observed Operations API wrapper
+    service.py               pure case / authorization transitions
+    unit_of_work.py          atomic persistence + outbox boundary
+    onboarding_execution.py  recoverable onboarding execution state machine
+    verification.py          domain semantic postcondition verification
+    completion.py            domain completion contract
+    messaging.py             transactional outbox / retry / dead-letter
+    workflows/               DBOS durability boundary
+operations-console/          OIDC human exception UI
 docs/
     architecture.md
+    production-operations.md
     contracts/
     milestones/M0.md
     milestones/M2.md
+    milestones/M5.md
+scripts/
+    production_preflight.py
+    production_kernel_stack.py
+    kernel_state_backup.py
+    postgres_dr_fixture.py
 tests/
 ```
 
@@ -163,7 +195,7 @@ uv run ruff check .
 uv run pytest -q
 ```
 
-For the complete reference topology:
+For the complete development/reference topology:
 
 ```bash
 docker compose up -d --build
@@ -173,8 +205,35 @@ docker compose down -v --remove-orphans
 
 Python 3.12+ is required.
 
+The development Compose topology is intentionally not a production manifest. It uses reproducible local authentication and sandbox providers. Production deployment requirements are in `docs/production-operations.md`.
+
+## Production preflight
+
+A production deployment must run migrations explicitly, provide PostgreSQL durability, configure OIDC/Odoo/Keycloak credentials, use Kernel cutover mode, and provide a durable absolute Kernel state path.
+
+After supplying the production environment:
+
+```bash
+uv run python scripts/production_preflight.py
+```
+
+Do not start physical cut-over workers when this gate fails.
+
+## CI model
+
+The normal CI lane proves full repository behavior, including PostgreSQL/DBOS restart recovery, Compose E2E, and the current `agent-kernel/main` recovery canary.
+
+The M5 workflow separately proves:
+
+- production trust/OIDC/connector/readiness/observability/DR invariants;
+- Operations Console typecheck + build;
+- PostgreSQL destructive backup/restore semantics;
+- physical cut-over against the supported pinned Agent Kernel revision.
+
+Keeping pinned-baseline and main-canary lanes separate prevents an upstream Kernel change from silently redefining the production contract.
+
 ## Near-term direction
 
-The immediate objective is not to multiply domain orchestrators. It is to make this administrative reference system trustworthy enough to carry real organizational responsibility. The next work should deepen real identity/organization integration, production Policy Plane operations, real HRIS/IAM/communication connectors, exception operations, and additional administrative slices while preserving the existing authority/reality distinctions.
+After real-staging M5 acceptance, the next work should be driven by measured operating needs rather than by adding authority shortcuts. Likely directions are additional administrative slices, richer Policy Plane operations, production dashboard/alert calibration, and—only if availability/concurrency measurements justify it—an Agent Kernel store-port implementation for a multi-writer-capable durable backend.
 
-Natural-language and Agent-based intake should sit above this governed execution core. They may improve interpretation and investigation, but they must consume rather than bypass the same fact, policy, authority, effect, verification, and completion contracts.
+Natural-language and Agent-based intake should remain above this governed execution core. They may improve interpretation and investigation, but they must consume rather than bypass the same fact, policy, authority, effect, verification, reconciliation, and completion contracts.
