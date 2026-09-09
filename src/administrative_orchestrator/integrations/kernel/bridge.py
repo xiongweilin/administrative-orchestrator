@@ -82,7 +82,7 @@ class KernelExecutionBridge:
             )
         if self.cutover and self._compatibility.bounded_domain_effect_execution_contract is None:
             raise KernelCompatibilityError(
-                "kernel cutover requires bounded-domain-effect-execution-v1"
+                "kernel cutover is fail-closed without bounded-domain-effect-execution-v1"
             )
         return self._compatibility
 
