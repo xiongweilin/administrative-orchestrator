@@ -3,6 +3,7 @@ from __future__ import annotations
 from uuid import UUID
 
 from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from .domain import (
     ConfirmedOutcome,
@@ -12,6 +13,7 @@ from .domain import (
     EffectStatus,
     ExecutionAuthorization,
 )
+from .obligations import EffectObligationLinkRow
 from .persistence import (
     AuthorizationRow,
     DecisionRow,
@@ -102,7 +104,9 @@ class ExecutionRepository:
         with self.store.sessions.begin() as db:
             row = db.get(EffectRow, effect.effect_id)
             if row is not None:
-                restored = self._effect_from_row(row)
+                restored = self._effect_from_row(
+                    row, self._effect_lineage(db, row.effect_id)
+                )
                 if self._effect_identity(restored) != self._effect_identity(effect):
                     raise ExecutionConflict("effect id already exists with different semantics")
                 return restored
@@ -141,7 +145,11 @@ class ExecutionRepository:
     def get_effect(self, effect_id: UUID) -> EffectRecord | None:
         with self.store.sessions() as db:
             row = db.get(EffectRow, effect_id)
-            return None if row is None else self._effect_from_row(row)
+            return (
+                None
+                if row is None
+                else self._effect_from_row(row, self._effect_lineage(db, row.effect_id))
+            )
 
     def list_effects(self, case_id: UUID, authority_epoch: int) -> list[EffectRecord]:
         with self.store.sessions() as db:
@@ -157,7 +165,10 @@ class ExecutionRepository:
                 .scalars()
                 .all()
             )
-            return [self._effect_from_row(row) for row in rows]
+            return [
+                self._effect_from_row(row, self._effect_lineage(db, row.effect_id))
+                for row in rows
+            ]
 
     def set_effect_status(
         self,
@@ -171,7 +182,7 @@ class ExecutionRepository:
             if row is None:
                 raise KeyError(f"effect {effect_id} not found")
             if row.status == status.value and (provider_ref is None or row.provider_ref == provider_ref):
-                return self._effect_from_row(row)
+                return self._effect_from_row(row, self._effect_lineage(db, row.effect_id))
             row.status = status.value
             if provider_ref is not None:
                 row.provider_ref = provider_ref
@@ -187,7 +198,9 @@ class ExecutionRepository:
                 },
             )
             db.flush()
-            return self._effect_from_row(row)
+            return self._effect_from_row(
+                row, self._effect_lineage(db, row.effect_id)
+            )
 
     def put_realization(
         self,
@@ -325,7 +338,16 @@ class ExecutionRepository:
         )
 
     @staticmethod
-    def _effect_from_row(row: EffectRow) -> EffectRecord:
+    def _effect_lineage(
+        db: Session, effect_id: UUID
+    ) -> EffectObligationLinkRow | None:
+        return db.get(EffectObligationLinkRow, effect_id)
+
+    @staticmethod
+    def _effect_from_row(
+        row: EffectRow,
+        lineage: EffectObligationLinkRow | None = None,
+    ) -> EffectRecord:
         return EffectRecord.model_validate(
             {
                 "effect_id": row.effect_id,
@@ -333,6 +355,12 @@ class ExecutionRepository:
                 "case_version": row.case_version,
                 "authority_epoch": row.authority_epoch,
                 "authorization_id": row.authorization_id,
+                "obligation_id": (
+                    lineage.obligation_id if lineage is not None else None
+                ),
+                "governance_basis_id": (
+                    lineage.governance_basis_id if lineage is not None else None
+                ),
                 "target_system": row.target_system,
                 "operation": row.operation,
                 "subject_ref": row.subject_ref,
