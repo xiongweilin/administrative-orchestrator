@@ -8,15 +8,15 @@ This record is an evidence boundary, not a production-readiness claim. Repositor
 
 | Item | Observed value / result |
 | --- | --- |
-| Acceptance observation time | 2026-09-09T18:56:47+08:00 |
+| Acceptance observation time | 2026-09-09T19:01:26+08:00 |
 | Administrative branch | `codex/m5-production-trust-reality-integration` |
-| Administrative commit | `26531bd152d39004e64e59e49ebea959ee269714` |
+| Administrative commit | `847dc8fed918873b4c09178a9be29e5049b8c5da` |
 | Administrative base | `main` at `cddb5bc5f34ece1a6dffa683f089310e670fcd0d` |
 | Supported Agent Kernel revision | `6b154f54a140da9fa97d6556720ae5744e95ffce` |
 | Local Agent Kernel checkout | `main` at the supported revision; clean |
 | PR #19 | open, Draft, mergeable state `clean`, no reviews or inline review comments observed |
-| Repository CI | PASS — run `#283` |
-| M5 Production Trust workflow | PASS — run `#49` |
+| Repository CI | PASS — run `#284` |
+| M5 Production Trust workflow | PASS — run `#50` |
 | Production Compose rendering with non-secret example configuration | PASS |
 | Actual staging deployment | BLOCKED — no Administrative/OIDC/Kernel/Odoo/Keycloak staging topology is configured or running here |
 | Actual staging environment file | ABSENT; only `.env.production.example` is present |
