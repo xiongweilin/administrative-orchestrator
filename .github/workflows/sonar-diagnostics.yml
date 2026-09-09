@@ -28,6 +28,8 @@ jobs:
       - name: Print Quality Gate conditions
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_PROJECT_KEY: metratio_administrative-orchestrator
+          SONAR_PULL_REQUEST: ${{ github.event.pull_request.number }}
         run: |
           set -euo pipefail
           ce_task_url="$(sed -n 's/^ceTaskUrl=//p' .scannerwork/report-task.txt)"
@@ -80,5 +82,51 @@ jobs:
                   f"actual={condition.get('actualValue')} "
                   f"operator={condition.get('comparator')} "
                   f"threshold={condition.get('errorThreshold')}"
+              )
+          PY
+
+          curl --fail --silent --user "$SONAR_TOKEN:" --get \
+            --data-urlencode "componentKeys=$SONAR_PROJECT_KEY" \
+            --data-urlencode "pullRequest=$SONAR_PULL_REQUEST" \
+            --data-urlencode "resolved=false" \
+            --data-urlencode "types=VULNERABILITY" \
+            --data-urlencode "ps=100" \
+            "https://sonarcloud.io/api/issues/search" > sonar-vulnerabilities.json
+          python - <<'PY'
+          import json
+          payload = json.load(open('sonar-vulnerabilities.json'))
+          print(f"vulnerabilities={payload.get('total', 0)}")
+          for issue in payload.get('issues', []):
+              print(
+                  'vulnerability '
+                  f"rule={issue.get('rule')} severity={issue.get('severity')} "
+                  f"component={issue.get('component')} line={issue.get('line')} "
+                  f"message={issue.get('message')}"
+              )
+          PY
+
+          curl --fail --silent --user "$SONAR_TOKEN:" --get \
+            --data-urlencode "component=$SONAR_PROJECT_KEY" \
+            --data-urlencode "pullRequest=$SONAR_PULL_REQUEST" \
+            --data-urlencode "metricKeys=new_coverage,new_lines_to_cover,new_uncovered_lines" \
+            --data-urlencode "qualifiers=FIL" \
+            --data-urlencode "ps=500" \
+            "https://sonarcloud.io/api/measures/component_tree" > sonar-new-coverage.json
+          python - <<'PY'
+          import json
+          payload = json.load(open('sonar-new-coverage.json'))
+          rows = []
+          for component in payload.get('components', []):
+              measures = {item['metric']: item.get('value') for item in component.get('measures', [])}
+              total = float(measures.get('new_lines_to_cover') or 0)
+              if total <= 0:
+                  continue
+              uncovered = float(measures.get('new_uncovered_lines') or 0)
+              coverage = float(measures.get('new_coverage') or 0)
+              rows.append((coverage, -total, component.get('path'), int(total), int(uncovered)))
+          for coverage, _, path, total, uncovered in sorted(rows):
+              print(
+                  f"newCoverage path={path} coverage={coverage:.1f} "
+                  f"lines={total} uncovered={uncovered}"
               )
           PY
