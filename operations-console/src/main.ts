@@ -44,7 +44,7 @@ const config = {
   oidcScope: import.meta.env.VITE_OIDC_SCOPE || "openid profile email",
 };
 
-const root = document.querySelector<HTMLDivElement>("#app");
+const root = document.querySelector<HTMLDivElement>("#app")!;
 if (!root) throw new Error("#app is required");
 
 const userManager =
