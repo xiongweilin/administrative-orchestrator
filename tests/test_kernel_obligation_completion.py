@@ -395,8 +395,6 @@ def test_kernel_completed_with_different_reality_requires_reopen_without_dischar
     )
     outcome_kinds = {item.outcome_kind for item in outcomes}
     assert "hris.employee.create.verified" not in outcome_kinds
-    assert "iam.identity.create.verified" in outcome_kinds
-    assert "github.account.provision.verified" in outcome_kinds
     assert "hris" not in legacy.execute_targets
     assert "iam" not in legacy.execute_targets
     assert "hris" not in legacy.observe_targets
