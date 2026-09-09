@@ -145,7 +145,7 @@ class MutableKernelRepository:
         self.case_id = case_id
         self.authority_epoch = authority_epoch
         self.completed_targets = {"hris"}
-        self.kernel_expected_overrides: dict[str, dict[str, object]] = {}
+        self.kernel_observed_overrides: dict[str, dict[str, object]] = {}
 
     def _obligation_set(self):
         return ObligationRepository(self.store).get_current(
@@ -166,8 +166,8 @@ class MutableKernelRepository:
     def _intent_id(obligation_id: UUID) -> UUID:
         return uuid5(NAMESPACE_URL, f"kernel-completion:intent:{obligation_id}")
 
-    def _kernel_expected(self, obligation) -> dict[str, object]:
-        override = self.kernel_expected_overrides.get(obligation.target_system)
+    def _observed(self, obligation) -> dict[str, object]:
+        override = self.kernel_observed_overrides.get(obligation.target_system)
         if override is not None:
             return dict(override)
         return dict(obligation.expected_postcondition)
@@ -211,7 +211,7 @@ class MutableKernelRepository:
             if self._intent_id(obligation.obligation_id) == intent_id:
                 return SimpleNamespace(
                     intent_id=intent_id,
-                    expected_postcondition=self._kernel_expected(obligation),
+                    expected_postcondition=dict(obligation.expected_postcondition),
                 )
         return None
 
@@ -226,15 +226,16 @@ class MutableKernelRepository:
             refs = self._refs(target)
             if refs["evidence"] != evidence_ref:
                 continue
-            expected = self._kernel_expected(obligation)
+            expected = dict(obligation.expected_postcondition)
+            observed = self._observed(obligation)
             return KernelEvidenceView(
                 evidence_ref=evidence_ref,
                 action_ref=refs["action"],
                 work_ref=refs["work"],
                 run_ref=refs["run"],
                 objective_result="pass",
-                observed_postcondition=dict(expected),
-                expected_postcondition=dict(expected),
+                observed_postcondition=observed,
+                expected_postcondition=expected,
                 verification_request_ref=f"verification-request:{target}:completed",
                 verification_attempt_ref=f"verification-attempt:{target}:completed",
                 verifier_provider_id=f"verifier:{target}:readback",
@@ -361,23 +362,31 @@ def test_kernel_completed_with_different_reality_cannot_discharge_admin_obligati
     store.init_schema()
     authorized = _authorized_case(store)
     kernel_repository, legacy, provider = _provider(store, authorized)
-    kernel_repository.completed_targets.add("iam")
+    engine = OnboardingExecutionEngine(store, provider)
+
+    # First drive materializes the governed obligation/effect set while Kernel
+    # reports no completed execution. This gives us the frozen Administrative
+    # postcondition before introducing a different independent reality readback.
+    kernel_repository.completed_targets.clear()
+    partial = engine.run(authorized.case_id)
+    assert partial.status is CaseStatus.RECONCILING
 
     obligation_set = ObligationRepository(store).get_current(
-        authorized.case_id,
-        authorized.authority_epoch,
+        partial.case_id,
+        partial.authority_epoch,
     )
     assert obligation_set is not None
     hris_obligation = next(
         item for item in obligation_set.obligations if item.target_system == "hris"
     )
-    kernel_expected = dict(hris_obligation.expected_postcondition)
-    payload = dict(kernel_expected["payload"])
+    observed = dict(hris_obligation.expected_postcondition)
+    payload = dict(observed["payload"])
     payload["department_ref"] = "department:finance"
-    kernel_expected["payload"] = payload
-    kernel_repository.kernel_expected_overrides["hris"] = kernel_expected
+    observed["payload"] = payload
+    kernel_repository.kernel_observed_overrides["hris"] = observed
+    kernel_repository.completed_targets.update({"hris", "iam"})
 
-    result = OnboardingExecutionEngine(store, provider).run(authorized.case_id)
+    result = engine.run(authorized.case_id)
 
     assert result.status is CaseStatus.RECONCILING
     outcomes = ExecutionRepository(store).list_outcomes(
