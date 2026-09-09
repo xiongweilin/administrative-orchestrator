@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import urlparse
 from uuid import uuid4
 
 import httpx
@@ -22,6 +23,15 @@ class OdooConnection:
     username: str
     reader_credential: CredentialRef
     timeout_seconds: float = 10.0
+    allow_insecure_http: bool = False
+
+    def __post_init__(self) -> None:
+        parsed = urlparse(self.base_url)
+        allowed = {"https"} if not self.allow_insecure_http else {"http", "https"}
+        if parsed.scheme not in allowed or not parsed.hostname:
+            raise ValueError("Odoo base_url is not permitted")
+        if not self.database.strip() or not self.username.strip():
+            raise ValueError("Odoo database and reader username are required")
 
 
 class OdooHRFactSource:
@@ -48,7 +58,17 @@ class OdooHRFactSource:
             "hr.employee",
             "read",
             [[employee_id]],
-            {"fields": ["id", "name", "department_id", "parent_id", "work_email", "active", "write_date"]},
+            {
+                "fields": [
+                    "id",
+                    "name",
+                    "department_id",
+                    "parent_id",
+                    "work_email",
+                    "active",
+                    "write_date",
+                ]
+            },
         )
         if not rows:
             return self._absent("hr.employee", employee_id)
@@ -70,7 +90,7 @@ class OdooHRFactSource:
             "work_email": row.get("work_email") or None,
             "active": bool(row.get("active", True)),
             "employment_state": contract.get("state") if contract else None,
-            "employment_type": contract.get("contract_type_id") if contract else None,
+            "employment_type": _many2one_name(contract.get("contract_type_id")) if contract else None,
             "start_date": contract.get("date_start") if contract else None,
         }
         version = str(row.get("write_date") or "unknown")
@@ -160,12 +180,11 @@ class OdooHRFactSource:
         kwargs: dict[str, Any] | None = None,
     ) -> Any:
         secret = self.credentials.resolve(self.connection.reader_credential)
-        uid = self._rpc("common", "authenticate", [
-            self.connection.database,
-            self.connection.username,
-            secret,
-            {},
-        ])
+        uid = self._rpc(
+            "common",
+            "authenticate",
+            [self.connection.database, self.connection.username, secret, {}],
+        )
         if not isinstance(uid, int) or uid <= 0:
             raise OdooSourceError("Odoo reader authentication failed")
         return self._rpc(
@@ -220,6 +239,14 @@ def _many2one_id(value: Any) -> int | None:
     if isinstance(value, (list, tuple)) and value and isinstance(value[0], int):
         return value[0]
     if isinstance(value, int):
+        return value
+    return None
+
+
+def _many2one_name(value: Any) -> str | None:
+    if isinstance(value, (list, tuple)) and len(value) >= 2 and isinstance(value[1], str):
+        return value[1]
+    if isinstance(value, str):
         return value
     return None
 
