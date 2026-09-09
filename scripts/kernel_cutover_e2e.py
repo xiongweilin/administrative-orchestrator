@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import httpx
+from kernel_cutover_stack import sandbox_effect_id
 
 from administrative_orchestrator.config import Settings
 from administrative_orchestrator.domain import (
@@ -33,7 +34,6 @@ from administrative_orchestrator.verification import (
     VerificationDisposition,
     verify_onboarding_observation,
 )
-from kernel_cutover_stack import sandbox_effect_id
 
 
 class ForbiddenFallbackProvider:
