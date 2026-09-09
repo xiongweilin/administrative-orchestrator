@@ -12,7 +12,7 @@ from .auth import AuthenticatedPrincipal, Authenticator
 from .authority import AuthorityError, AuthorityRepository, IdentityBinding
 from .authority_lifecycle import AuthorityLifecycleEvent, AuthorityLifecycleRepository
 from .config import get_settings
-from .domain import AdministrativeCase, CaseStatus
+from .domain import AdministrativeCase, CaseStatus, utcnow
 from .execution_repository import ExecutionRepository
 from .fact_acquisition import (
     FactAcquisitionError,
@@ -88,7 +88,12 @@ def _require(
     case: AdministrativeCase | None = None,
 ) -> None:
     try:
-        _access.require(actor.principal_id, permission, case=case, organization_scope="*" if case is None else None)
+        _access.require(
+            actor.principal_id,
+            permission,
+            case=case,
+            organization_scope="*" if case is None else None,
+        )
     except AccessDenied as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
 
@@ -145,6 +150,9 @@ def case_detail(case_id: UUID, request: Request) -> dict:
     if case is None:
         raise HTTPException(status_code=404, detail="case not found")
     _require(actor, AdministrativePermission.OPERATIONS_READ)
+    audit = None
+    if _access.allows(actor.principal_id, AdministrativePermission.AUDIT_READ, case=case):
+        audit = _store.list_audit_events(case.case_id)
     return {
         "case": case.model_dump(mode="json"),
         "policy": (
@@ -172,7 +180,7 @@ def case_detail(case_id: UUID, request: Request) -> dict:
             item.model_dump(mode="json")
             for item in _execution.list_outcomes(case.case_id, case.authority_epoch)
         ],
-        "audit": _store.list_audit_events(case.case_id),
+        "audit": audit,
     }
 
 
@@ -194,7 +202,7 @@ def refresh_authoritative_facts(case_id: UUID, request: Request) -> RefreshFacts
     try:
         record = source.read_employee(case.subject_ref)
         if not record.is_fresh_at(
-            datetime.now(record.observed_at.tzinfo),
+            utcnow(),
             max_age_seconds=_settings.authoritative_fact_max_age_seconds,
         ):
             raise FactAcquisitionError("authoritative HRIS observation is stale")
@@ -207,7 +215,13 @@ def refresh_authoritative_facts(case_id: UUID, request: Request) -> RefreshFacts
         evaluation = policy.evaluate(facts)
         updated = apply_policy_evaluation(ready, evaluation)
         _uow.replace_facts_and_apply_policy(case, updated, evaluation)
-    except (FactAcquisitionError, PolicyPlaneError, TransitionError, ConcurrencyConflict, ValueError) as exc:
+    except (
+        FactAcquisitionError,
+        PolicyPlaneError,
+        TransitionError,
+        ConcurrencyConflict,
+        ValueError,
+    ) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return RefreshFactsResponse(
         case=updated,
@@ -222,7 +236,7 @@ def refresh_authoritative_facts(case_id: UUID, request: Request) -> RefreshFacts
 def bind_identity(payload: BindIdentityBody, request: Request) -> AuthorityLifecycleEvent:
     actor = _actor(request)
     _require(actor, AdministrativePermission.IDENTITY_MANAGE)
-    valid_from = payload.valid_from or datetime.now().astimezone()
+    valid_from = payload.valid_from or utcnow()
     try:
         binding = IdentityBinding(
             provider=payload.provider.rstrip("/"),
