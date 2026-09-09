@@ -14,6 +14,7 @@ from ...effect_provider import (
     RealityObservation,
 )
 from .bridge import KERNEL_CUTOVER_CAPABILITIES, KernelExecutionBridge
+from .evidence import KernelEvidenceError
 from .models import KernelExecutionStatus, KernelProjectionStatus, KernelShadowProjection
 
 
@@ -27,9 +28,10 @@ class KernelCutoverEffectProvider:
     """Capability router that makes Kernel ownership physically exclusive.
 
     For a cut-over capability this adapter never calls the fallback provider,
-    including reconciliation/read-back. It consumes only the durable Kernel
-    execution projection. Missing or unresolved Kernel state fails closed.
-    Non-cut-over capabilities remain byte-for-byte on the legacy provider path.
+    including reconciliation/read-back. It consumes durable Kernel execution
+    lineage and the canonical non-authoritative verification evidence view.
+    Missing, rebound, or unresolved Kernel evidence fails closed. Non-cut-over
+    capabilities remain byte-for-byte on the legacy provider path.
     """
 
     def __init__(
@@ -94,55 +96,98 @@ class KernelCutoverEffectProvider:
             else effect.updated_at
         )
 
-        if status is KernelExecutionStatus.COMPLETED:
-            intent = (
-                self.bridge.repository.get_intent(projection.intent_id)
-                if projection is not None
-                else None
+        if status not in {
+            KernelExecutionStatus.COMPLETED,
+            KernelExecutionStatus.VERIFIED_FAIL,
+        }:
+            return self._unknown_observation(
+                effect,
+                provider_ref,
+                observed_at,
+                "kernel_execution_not_verified",
             )
-            if intent is None:
+        if projection is None or not projection.kernel_evidence_ref:
+            return self._unknown_observation(
+                effect,
+                provider_ref,
+                observed_at,
+                "kernel_evidence_ref_unavailable",
+            )
+
+        try:
+            evidence = self.bridge.evidence_client().inspect(projection.kernel_evidence_ref)
+        except KernelEvidenceError:
+            return self._unknown_observation(
+                effect,
+                provider_ref,
+                observed_at,
+                "kernel_evidence_read_error",
+            )
+        if evidence is None:
+            return self._unknown_observation(
+                effect,
+                provider_ref,
+                observed_at,
+                "kernel_evidence_unavailable",
+            )
+
+        intent = self.bridge.repository.get_intent(projection.intent_id)
+        if intent is None:
+            return self._unknown_observation(
+                effect,
+                provider_ref,
+                evidence.captured_at,
+                "kernel_intent_unavailable",
+            )
+        if evidence.expected_postcondition != dict(intent.expected_postcondition):
+            return self._unknown_observation(
+                effect,
+                provider_ref,
+                evidence.captured_at,
+                "kernel_evidence_expected_postcondition_rebound",
+            )
+
+        lineage = {
+            "work": (evidence.work_ref, getattr(projection, "kernel_work_ref", None)),
+            "run": (evidence.run_ref, getattr(projection, "kernel_run_ref", None)),
+            "action": (evidence.action_ref, getattr(projection, "kernel_action_ref", None)),
+        }
+        for name, (actual, expected) in lineage.items():
+            if not expected or actual != expected:
                 return self._unknown_observation(
                     effect,
                     provider_ref,
-                    observed_at,
-                    "kernel_intent_unavailable",
+                    evidence.captured_at,
+                    f"kernel_evidence_{name}_identity_rebound",
                 )
-            return RealityObservation(
-                availability=ObservationAvailability.AVAILABLE,
-                presence=ObservationPresence.PRESENT,
-                freshness=ObservationFreshness.CURRENT,
-                target_system=effect.target_system,
-                operation=effect.operation,
-                subject_ref=effect.subject_ref,
-                provider_ref=provider_ref,
-                state=dict(intent.expected_postcondition),
-                digest=projection.kernel_evidence_ref,
-                observed_at=observed_at,
+
+        expected_objective_result = (
+            "pass" if status is KernelExecutionStatus.COMPLETED else "fail"
+        )
+        if evidence.objective_result != expected_objective_result:
+            return self._unknown_observation(
+                effect,
+                provider_ref,
+                evidence.captured_at,
+                "kernel_evidence_objective_result_mismatch",
             )
 
-        if status is KernelExecutionStatus.VERIFIED_FAIL:
-            # Kernel already performed the authoritative independent read-back.
-            # Preserve its negative judgment without fabricating a successful
-            # local observation; the Admin verifier deterministically treats
-            # this sentinel state as a frozen-postcondition mismatch.
-            return RealityObservation(
-                availability=ObservationAvailability.AVAILABLE,
-                presence=ObservationPresence.PRESENT,
-                freshness=ObservationFreshness.CURRENT,
-                target_system=effect.target_system,
-                operation=effect.operation,
-                subject_ref=effect.subject_ref,
-                provider_ref=provider_ref,
-                state={"kernel_verified_fail": True},
-                digest=(projection.kernel_evidence_ref if projection is not None else None),
-                observed_at=observed_at,
-            )
-
-        return self._unknown_observation(
-            effect,
-            provider_ref,
-            observed_at,
-            "kernel_execution_not_verified",
+        evidence_provider_ref = (
+            "agent-kernel-verifier:"
+            f"{evidence.verifier_provider_id}:"
+            f"{evidence.verifier_provider_execution_binding_ref}"
+        )
+        return RealityObservation(
+            availability=ObservationAvailability.AVAILABLE,
+            presence=ObservationPresence.PRESENT,
+            freshness=ObservationFreshness.CURRENT,
+            target_system=effect.target_system,
+            operation=effect.operation,
+            subject_ref=effect.subject_ref,
+            provider_ref=evidence_provider_ref,
+            state=dict(evidence.observed_postcondition),
+            digest=evidence.evidence_ref,
+            observed_at=evidence.captured_at,
         )
 
     def _kernel_owned(self, effect: EffectRecord) -> bool:
