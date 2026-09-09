@@ -232,6 +232,15 @@ def test_kernel_hris_completion_cannot_discharge_case_before_iam_is_confirmed() 
     hris_obligation = next(
         item for item in obligation_set.obligations if item.target_system == "hris"
     )
+    iam_effect = next(item for item in effects if item.target_system == "iam")
+    iam_obligation = next(
+        item for item in obligation_set.obligations if item.target_system == "iam"
+    )
+    assert hris_effect.obligation_id == hris_obligation.obligation_id
+    assert hris_effect.governance_basis_id == hris_obligation.governance_basis_id
+    assert iam_effect.obligation_id == iam_obligation.obligation_id
+    assert iam_effect.governance_basis_id == iam_obligation.governance_basis_id
+
     hris_observation = provider.observe(hris_effect)
     hris_verification = verify_onboarding_observation(
         hris_effect,
