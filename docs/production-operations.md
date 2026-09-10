@@ -181,10 +181,11 @@ Before enabling worker traffic:
 
 For M6 intake staging, also verify:
 
-- Feishu URL verification and authenticated callback behavior against the
-  actual staging provider, including a negative token/signature case;
-- one accepted callback produces one receipt and one metadata-only outbox
-  event, while a duplicate is idempotent;
+- the configured Feishu official SDK long connection is active and the
+  metadata-only gateway handoff is authenticated against the actual staging
+  provider, including a negative token case;
+- one accepted long-connection metadata handoff produces one receipt and one
+  metadata-only outbox event, while a duplicate is idempotent;
 - the asynchronous worker can fetch the canonical message, verify provider
   tenant/message/sender/thread identity, persist the artifact/evidence digest,
   and resolve the current Administrative identity binding;
@@ -334,10 +335,10 @@ When recovery points differ, prefer conservative reopen/reconcile over inventing
 - Do not reroute physical writes through the Administrative sandbox/provider path.
 - Restore/restart Kernel and resume from durable Attempt state.
 
-### Feishu callback rejected or canonical fetch unavailable
+### Feishu provider handoff rejected or canonical fetch unavailable
 
-- Return the authenticated-boundary error for an invalid callback; do not
-  enqueue unverified metadata.
+- Return the authenticated-boundary error for an invalid long-connection
+  metadata handoff; do not enqueue unverified metadata.
 - Treat a canonical fetch failure as an intake processing failure. Preserve the
   verified receipt and source lineage, and do not fabricate a candidate or
   admission.
@@ -408,7 +409,9 @@ For M6, also record only non-sensitive evidence references for:
 - the actual provider-to-M5 run, if performed, with external evidence
   references rather than provider payloads or credentials.
 
-Do not fill the record with invented provider, Odoo, Keycloak, Kernel, or
-model-provider results. Until the real-staging record exists with fresh
-evidence, M6 remains incomplete even if repository implementation and CI are
-green.
+For the current Feishu reference topology, URL-verification callbacks and
+signed HTTP callback headers are `N/A`; record them as applicable only when a
+separate callback transport is actually enabled. Do not fill the record with
+invented provider, Odoo, Keycloak, Kernel, or model-provider results. Until the
+real-staging record exists with fresh evidence, M6 remains incomplete even if
+repository implementation and CI are green.

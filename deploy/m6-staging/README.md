@@ -28,14 +28,14 @@ From PowerShell:
 ```powershell
 Set-Location D:\infrastructure\compose\administrative-orchestrator\deploy\m6-staging
 Copy-Item .env.example .env.m6-staging
-docker compose --env-file .env.m6-staging config --quiet
-docker compose --env-file .env.m6-staging build admin-postgres migrate odoo-bootstrap odoo keycloak agent-kernel api operations-api worker operations-console
-docker compose --env-file .env.m6-staging up -d admin-postgres odoo-postgres keycloak
-docker compose --env-file .env.m6-staging run --rm odoo-bootstrap
-docker compose --env-file .env.m6-staging up -d odoo
-docker compose --env-file .env.m6-staging run --rm migrate
-docker compose --env-file .env.m6-staging --profile bootstrap run --rm foundation-bootstrap
-docker compose --env-file .env.m6-staging up -d agent-kernel api operations-api worker operations-console
+docker compose --env-file .env.example config --quiet
+docker compose --env-file .env.example build admin-postgres migrate odoo-bootstrap odoo keycloak agent-kernel api operations-api worker operations-console
+docker compose --env-file .env.example up -d admin-postgres odoo-postgres keycloak
+docker compose --env-file .env.example run --rm odoo-bootstrap
+docker compose --env-file .env.example up -d odoo
+docker compose --env-file .env.example run --rm migrate
+docker compose --env-file .env.example --profile bootstrap run --rm foundation-bootstrap
+docker compose --env-file .env.example up -d agent-kernel api operations-api worker operations-console
 ```
 
 The verification token is intentionally not in `.env.example`. Materialize it
@@ -54,7 +54,7 @@ read in-process from the existing external `feishu_secrets` volume.
 ## Runtime checks
 
 ```powershell
-docker compose --env-file .env.m6-staging ps
+docker compose --env-file .env.example ps
 Invoke-WebRequest http://127.0.0.1:18086/readyz
 Invoke-WebRequest http://127.0.0.1:18087/readyz
 Invoke-WebRequest http://127.0.0.1:18088/
