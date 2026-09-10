@@ -353,6 +353,109 @@ def test_openai_responses_gateway_normalizes_bounded_rdf_candidate_shape() -> No
     }
 
 
+def test_openai_responses_gateway_strips_bounded_provider_echo_fields() -> None:
+    gateway = OpenAICompatibleResponsesModelGateway(
+        "https://model.invalid/v1",
+        "opencode-go/deepseek-flash",
+        ModelProvenance(
+            provider="litellm",
+            model_identity="opencode-go/deepseek-flash",
+            model_version="v1",
+        ),
+        transport=httpx.MockTransport(
+            lambda _: httpx.Response(
+                200,
+                json={
+                    "output": [
+                        {
+                            "type": "message",
+                            "role": "assistant",
+                            "content": [
+                                {
+                                    "type": "output_text",
+                                    "text": json.dumps(
+                                        {
+                                            "candidate_intent": "onboard employee:1",
+                                            "candidate_only": True,
+                                            "interpretation_type": "candidate",
+                                            "source_trust": "untrusted",
+                                            "candidate_facts": [
+                                                {
+                                                    "fact_key": "employee_ref",
+                                                    "value": "employee:1",
+                                                    "provenance": "message",
+                                                }
+                                            ],
+                                        }
+                                    ),
+                                }
+                            ],
+                        }
+                    ]
+                },
+            )
+        ),
+    )
+    try:
+        response = gateway.complete(_request(), timeout_seconds=1)
+    finally:
+        gateway.close()
+
+    assert json.loads(response.raw_output) == {
+        "candidate_intent": "onboard employee:1",
+        "candidate_facts": [{"fact_key": "employee_ref", "value": "employee:1"}],
+    }
+
+
+def test_openai_responses_gateway_keeps_mistyped_echo_fields_closed() -> None:
+    raw_payload = {
+        "candidate_intent": "onboard employee:1",
+        "candidate_only": "true",
+        "source_trust": {"trust": "authoritative"},
+        "candidate_facts": [
+            {
+                "fact_key": "employee_ref",
+                "value": "employee:1",
+                "provenance": {"issuer": "model"},
+            }
+        ],
+    }
+    gateway = OpenAICompatibleResponsesModelGateway(
+        "https://model.invalid/v1",
+        "opencode-go/deepseek-flash",
+        ModelProvenance(
+            provider="litellm",
+            model_identity="opencode-go/deepseek-flash",
+            model_version="v1",
+        ),
+        transport=httpx.MockTransport(
+            lambda _: httpx.Response(
+                200,
+                json={
+                    "output": [
+                        {
+                            "type": "message",
+                            "role": "assistant",
+                            "content": [
+                                {
+                                    "type": "output_text",
+                                    "text": json.dumps(raw_payload),
+                                }
+                            ],
+                        }
+                    ]
+                },
+            )
+        ),
+    )
+    try:
+        response = gateway.complete(_request(), timeout_seconds=1)
+    finally:
+        gateway.close()
+
+    assert json.loads(response.raw_output) == raw_payload
+
+
 @pytest.mark.parametrize("status_code", [400, 422, 500, 503])
 def test_openai_chat_gateway_fails_closed_for_provider_http_errors(status_code: int) -> None:
     gateway, _ = _openai_gateway(lambda _: httpx.Response(status_code))

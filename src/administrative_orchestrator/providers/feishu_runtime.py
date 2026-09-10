@@ -114,6 +114,17 @@ class HttpJsonModelGateway(_HttpModelGatewayBase):
         return ModelResponse(raw_output=raw_output, provenance=self.provenance)
 
 
+_TOP_LEVEL_PROVIDER_ECHOES: dict[str, type] = {
+    "candidate_only": bool,
+    "interpretation_type": str,
+    "source_trust": str,
+}
+
+_FACT_PROVIDER_ECHOES: dict[str, type] = {
+    "provenance": str,
+}
+
+
 class OpenAICompatibleChatModelGateway(_HttpModelGatewayBase):
     """Candidate-only adapter for an OpenAI-compatible chat completion route."""
 
@@ -164,9 +175,11 @@ class OpenAICompatibleChatModelGateway(_HttpModelGatewayBase):
                     "role": "system",
                     "content": (
                         f"{request.profile.instruction}\n\n"
-                        "Return one JSON object that conforms exactly to the candidate "
-                        "interpretation schema. Produce candidate intent and candidate "
-                        "facts only. Do not call tools or perform any action."
+                        "Return one JSON object with exactly the keys candidate_intent "
+                        "and candidate_facts; each fact must contain only fact_key and "
+                        "value. Do not add provenance, trust, interpretation-type, or "
+                        "any other fields. Produce candidate intent and candidate facts "
+                        "only. Do not call tools or perform any action."
                     ),
                 },
                 {
@@ -234,6 +247,11 @@ class OpenAICompatibleChatModelGateway(_HttpModelGatewayBase):
                 normalized[target] = normalized.pop(source)
                 changed = True
 
+        for echo_key, echo_type in _TOP_LEVEL_PROVIDER_ECHOES.items():
+            if echo_key in normalized and isinstance(normalized[echo_key], echo_type):
+                normalized.pop(echo_key)
+                changed = True
+
         intent = normalized.get("candidate_intent")
         if isinstance(intent, dict):
             normalized["candidate_intent"] = json.dumps(
@@ -278,6 +296,11 @@ class OpenAICompatibleChatModelGateway(_HttpModelGatewayBase):
                         },
                     }
                     changed = True
+                if isinstance(fact, dict):
+                    for echo_key, echo_type in _FACT_PROVIDER_ECHOES.items():
+                        if echo_key in fact and isinstance(fact[echo_key], echo_type):
+                            fact = {key: value for key, value in fact.items() if key != echo_key}
+                            changed = True
                 normalized_facts.append(fact)
             if changed:
                 normalized["candidate_facts"] = normalized_facts
@@ -332,9 +355,11 @@ class OpenAICompatibleResponsesModelGateway(_HttpModelGatewayBase):
                     "role": "system",
                     "content": (
                         f"{request.profile.instruction}\n\n"
-                        "Return one JSON object that conforms exactly to the candidate "
-                        "interpretation schema. Produce candidate intent and candidate "
-                        "facts only. Do not call tools or perform any action."
+                        "Return one JSON object with exactly the keys candidate_intent "
+                        "and candidate_facts; each fact must contain only fact_key and "
+                        "value. Do not add provenance, trust, interpretation-type, or "
+                        "any other fields. Produce candidate intent and candidate facts "
+                        "only. Do not call tools or perform any action."
                     ),
                 },
                 {
