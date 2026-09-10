@@ -95,6 +95,13 @@ human-confirmed PromotionRecord
 existing IngressReceipt -> existing M5 AdministrativeRequest / Case path
 ```
 
+Inbox conversations are keyed by provider, tenant, and provider thread.
+Provider-native sender identity is resolved through the current Administrative
+`IdentityBinding`; displayed sender text remains untrusted source evidence.
+Before admission, a later candidate may explicitly supersede an earlier
+candidate. After admission, a later message becomes a reviewable
+`CandidateCaseUpdate` on the existing case rather than a second case.
+
 The intake plane is not an authority plane. Source authenticity is not
 content truth, interpretation is not an authoritative fact, candidate state
 is not an AdministrativeRequest, and model confidence is not admission

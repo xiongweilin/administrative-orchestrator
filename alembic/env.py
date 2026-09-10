@@ -5,11 +5,13 @@ from logging.config import fileConfig
 from sqlalchemy import engine_from_config, pool
 
 from administrative_orchestrator.config import get_settings
+from administrative_orchestrator.conversation import ConversationMessageRow, ConversationRow
 from administrative_orchestrator.messaging import OutboxEventRow
 from administrative_orchestrator.persistence import Base
 from alembic import context
 
 _OUTBOX_MODEL = OutboxEventRow
+_CONVERSATION_MODELS = (ConversationRow, ConversationMessageRow)
 
 config = context.config
 if config.config_file_name is not None:
