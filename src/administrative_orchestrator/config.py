@@ -62,7 +62,12 @@ class Settings(BaseSettings):
     intake_model_schema_ref: str = "candidate-interpretation-v1"
     intake_model_instruction: str = (
         "Extract a candidate administrative intent and candidate facts only. "
-        "Never authorize, execute, or communicate on behalf of the system."
+        "Never authorize, execute, or communicate on behalf of the system. "
+        "For employee-onboarding requests, use only these candidate fact keys: "
+        "employee_ref, department_ref, manager_principal_id, start_date, "
+        "employment_type, requested_systems, requires_privileged_access. "
+        "Put every requested account or system into requested_systems. "
+        "Do not invent other fact keys."
     )
 
     runtime_profile: Literal["test", "development", "governed", "staging", "production"] = "development"
