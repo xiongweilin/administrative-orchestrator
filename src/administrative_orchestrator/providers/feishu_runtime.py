@@ -32,15 +32,7 @@ from .feishu import (
 )
 
 
-class HttpJsonModelGateway:
-    """Small transport adapter for a configured candidate-only model gateway.
-
-    The endpoint contract is intentionally narrow: it receives the artifact
-    reference, versioned interpretation profile, and source text; it returns
-    either a JSON object containing ``raw_output`` or the candidate JSON
-    object itself. The gateway never receives authority or execution APIs.
-    """
-
+class _HttpModelGatewayBase:
     def __init__(
         self,
         endpoint: str,
@@ -60,15 +52,10 @@ class HttpJsonModelGateway:
     def provenance(self) -> ModelProvenance:
         return self._provenance
 
-    def complete(self, request: ModelRequest, *, timeout_seconds: float) -> ModelResponse:
+    def _post(self, payload: dict[str, Any], *, timeout_seconds: float) -> httpx.Response:
         headers = {"Accept": "application/json", "Content-Type": "application/json"}
         if self._api_key is not None:
             headers["Authorization"] = f"Bearer {self._api_key}"
-        payload = {
-            "artifact_ref": str(request.artifact_ref),
-            "profile": request.profile.model_dump(mode="json"),
-            "source_text": request.source_text,
-        }
         try:
             response = self._client.post(
                 self.endpoint,
@@ -80,11 +67,42 @@ class HttpJsonModelGateway:
             raise ModelTimeoutError("model gateway timed out") from exc
         except httpx.RequestError as exc:
             raise ModelProviderUnavailable("model gateway is unavailable") from exc
-
         if response.status_code in {408, 504}:
             raise ModelTimeoutError("model gateway timed out")
         if response.status_code >= 400:
             raise ModelProviderUnavailable("model gateway rejected the request")
+        return response
+
+    def close(self) -> None:
+        self._client.close()
+
+
+class HttpJsonModelGateway(_HttpModelGatewayBase):
+    """Small transport adapter for a configured candidate-only model gateway.
+
+    The endpoint contract is intentionally narrow: it receives the artifact
+    reference, versioned interpretation profile, and source text; it returns
+    either a JSON object containing ``raw_output`` or the candidate JSON
+    object itself. The gateway never receives authority or execution APIs.
+    """
+
+    def __init__(
+        self,
+        endpoint: str,
+        provenance: ModelProvenance,
+        *,
+        api_key: str | None = None,
+        transport: httpx.BaseTransport | None = None,
+    ) -> None:
+        super().__init__(endpoint, provenance, api_key=api_key, transport=transport)
+
+    def complete(self, request: ModelRequest, *, timeout_seconds: float) -> ModelResponse:
+        payload = {
+            "artifact_ref": str(request.artifact_ref),
+            "profile": request.profile.model_dump(mode="json"),
+            "source_text": request.source_text,
+        }
+        response = self._post(payload, timeout_seconds=timeout_seconds)
         try:
             decoded = response.json()
         except ValueError:
@@ -95,11 +113,8 @@ class HttpJsonModelGateway:
             raise ModelGatewayError("model gateway returned an empty response")
         return ModelResponse(raw_output=raw_output, provenance=self.provenance)
 
-    def close(self) -> None:
-        self._client.close()
 
-
-class OpenAICompatibleChatModelGateway:
+class OpenAICompatibleChatModelGateway(_HttpModelGatewayBase):
     """Candidate-only adapter for an OpenAI-compatible chat completion route."""
 
     _REJECTED_MESSAGE_KEYS = {
@@ -122,32 +137,26 @@ class OpenAICompatibleChatModelGateway:
         max_tokens: int = 2400,
         transport: httpx.BaseTransport | None = None,
     ) -> None:
-        if not endpoint.strip():
-            raise ValueError("model gateway endpoint must not be blank")
         if not model.strip():
             raise ValueError("model gateway model must not be blank")
         if max_tokens <= 0:
             raise ValueError("max_tokens must be positive")
         endpoint = endpoint.rstrip("/")
-        self.endpoint = (
+        completion_endpoint = (
             endpoint
             if endpoint.endswith("/chat/completions")
             else f"{endpoint}/chat/completions"
         )
         self.model = model
-        self._provenance = provenance
-        self._api_key = api_key.strip() if api_key and api_key.strip() else None
         self._max_tokens = max_tokens
-        self._client = httpx.Client(timeout=httpx.Timeout(30.0), transport=transport)
-
-    @property
-    def provenance(self) -> ModelProvenance:
-        return self._provenance
+        super().__init__(
+            completion_endpoint,
+            provenance,
+            api_key=api_key,
+            transport=transport,
+        )
 
     def complete(self, request: ModelRequest, *, timeout_seconds: float) -> ModelResponse:
-        headers = {"Accept": "application/json", "Content-Type": "application/json"}
-        if self._api_key is not None:
-            headers["Authorization"] = f"Bearer {self._api_key}"
         payload = {
             "model": self.model,
             "messages": [
@@ -174,22 +183,7 @@ class OpenAICompatibleChatModelGateway:
             "response_format": {"type": "json_object"},
             "stream": False,
         }
-        try:
-            response = self._client.post(
-                self.endpoint,
-                headers=headers,
-                json=payload,
-                timeout=httpx.Timeout(timeout_seconds),
-            )
-        except httpx.TimeoutException as exc:
-            raise ModelTimeoutError("model gateway timed out") from exc
-        except httpx.RequestError as exc:
-            raise ModelProviderUnavailable("model gateway is unavailable") from exc
-
-        if response.status_code in {408, 504}:
-            raise ModelTimeoutError("model gateway timed out")
-        if response.status_code >= 400:
-            raise ModelProviderUnavailable("model gateway rejected the request")
+        response = self._post(payload, timeout_seconds=timeout_seconds)
         try:
             decoded = response.json()
         except ValueError as exc:
@@ -215,10 +209,6 @@ class OpenAICompatibleChatModelGateway:
         if not isinstance(content, str) or not content.strip():
             raise ModelGatewayError("model gateway returned empty assistant content")
         return content
-
-    def close(self) -> None:
-        self._client.close()
-
 
 @dataclass(slots=True)
 class FeishuRuntime:
