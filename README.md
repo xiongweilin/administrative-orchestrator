@@ -128,14 +128,22 @@ fe4b3f4bf2e376bd7105caf7d15d77e2483c7197
 
 M5 has an explicit acceptance boundary: repository CI can prove code, migration, restart, cut-over, DR, ambiguity semantics, and static/security quality gates, while the external checklist proves enterprise OIDC/Odoo/Keycloak credentials and network behavior. The isolated real-staging checklist, final exact-head CI, squash merge, and post-merge main CI now pass on the supported Kernel revision `fe4b3f4bf2e376bd7105caf7d15d77e2483c7197`; M5 is **complete for the recorded scope**.
 
-M6 is the upstream **Trusted Perception & Admission** milestone. Its initial
-slices establish the Administrative Intake Plane contract and durable core:
-authenticated provider delivery, immutable source/evidence/interpretation
-lineage, candidate-only modeling, explicit assessment, and human-confirmed
-promotion into the existing M5 request/case path. M6 is **in progress**; see
-`docs/milestones/M6.md` and ADR 0003 for the current boundary. No model output,
-provider delivery, or external sender can mint Administrative authority or
-Agent Kernel Work.
+M6 is the upstream **Trusted Perception & Admission** milestone. The current
+implementation includes the Administrative Intake Plane contract and durable
+core, the Feishu metadata-only durable ingress and asynchronous pipeline, the
+Operations review surface with the explicit human-confirmed
+`bridge_to_m5` onboarding path, and the content-addressed `ArtifactStore`
+foundation. The bridge preserves admitted intake facts as `CLAIM`; it does not
+turn a candidate or a human confirmation into `AUTHORITATIVE` truth. The
+authoritative refresh/revalidation path remains owned by the existing M5 HRIS
+reader and governance checks.
+
+M6 is **in progress and is not complete until real staging evidence exists**.
+Repository tests and local fixtures do not constitute real Feishu, Odoo,
+Keycloak, Agent Kernel, or production model-provider results. No such external
+run is claimed by this README. See `docs/milestones/M6.md`, ADR 0003,
+`docs/production-operations.md`, and the evidence template at
+`docs/acceptance/M6-staging-acceptance-template.md` for the remaining boundary.
 
 See:
 
@@ -146,6 +154,7 @@ See:
 - `docs/milestones/M6.md` for the Trusted Perception & Admission delivery plan and gates;
 - `docs/adr/0003-trusted-perception-and-admission.md` for the intake, candidate, and admission boundary;
 - `docs/production-operations.md` for deployment, observability, backup/restore, incident, and staging procedures.
+- `docs/acceptance/M6-staging-acceptance-template.md` for the no-secrets/no-body staging evidence record.
 
 ## Development principles
 

@@ -95,6 +95,26 @@ human-confirmed PromotionRecord
 existing IngressReceipt -> existing M5 AdministrativeRequest / Case path
 ```
 
+The current Feishu reference slice makes the first handoff durable before any
+provider content is read:
+
+```text
+Feishu callback
+  -> token/signature/time verification
+  -> IntakeReceipt + intake.feishu.received outbox event (one transaction)
+  -> asynchronous canonical message fetch
+  -> ArtifactStore + SourceArtifact + EvidenceSpan
+  -> current IdentityBinding resolution
+  -> InterpretationRecord -> candidate/conversation records
+```
+
+The receipt and outbox payload carry delivery metadata only; they do not carry
+the message body or extracted content. The configured runtime builds the
+callback boundary and worker pipeline from deployment settings, and the relay
+fails closed when processing dependencies are absent. This repository
+therefore documents the durable ingress and runtime boundary, not a claim that
+a real Feishu deployment has already been exercised.
+
 Inbox conversations are keyed by provider, tenant, and provider thread.
 Provider-native sender identity is resolved through the current Administrative
 `IdentityBinding`; displayed sender text remains untrusted source evidence.
@@ -106,6 +126,18 @@ The intake plane is not an authority plane. Source authenticity is not
 content truth, interpretation is not an authoritative fact, candidate state
 is not an AdministrativeRequest, and model confidence is not admission
 authority. The complete contract is recorded in ADR 0003.
+
+Human confirmation is also not an authoritative-source refresh. The Operations
+review path may finalize an `IntakeAssessment(ADMIT)` and explicitly request
+`bridge_to_m5` for the supported `employee-onboarding` case with a selected
+`subject_ref`. The admission service then creates the normal promotion and M5
+request/case lineage, evaluates the existing onboarding policy, and preserves
+all bridged candidate facts as `FactAuthority.CLAIM`. It does not create Kernel
+Work or bypass M5 authority, obligation, external-effect, verification, or
+completion gates. Current authoritative fields are obtained separately from
+the approved HRIS reader through the existing refresh/revalidation path;
+request-only fields remain claims, and stale or changed authoritative
+dependencies are handled by the existing `GOVERNANCE_STALE` reopen boundary.
 
 ## 2. Ownership boundaries
 
@@ -120,6 +152,9 @@ authority. The complete contract is recorded in ADR 0003.
 - administrative business execution grants/effect intents;
 - authoritative domain-read ports and product-specific connector contracts;
 - administrative semantic verification, completion, audit, review, exception, and reassessment surfaces.
+- the M6 Intake Plane's receipts, source/evidence lineage, interpretations,
+  candidate records, assessments, promotion lineage, and the
+  content-addressed `ArtifactStore` port/adapter contract.
 
 ### agent-kernel owns
 
@@ -168,6 +203,15 @@ CaseStatus.COMPLETED != universal responsibility discharge
 ```
 
 `authority_epoch` invalidates case-local authority when case facts/evidence/policy/reassessment change. `GovernanceBasis` separately records the exact external governance dependencies relied on by an approval world: fact snapshot, policy definition, scope, selected principal qualifications, and any delegation basis. Execution, verification, and completion revalidate those dependencies even when the case itself has not changed.
+
+For M6, `CandidateFactAssertion.authority` is restricted to `CLAIM` or
+`ATTESTED_CANDIDATE`; `AUTHORITATIVE` is not a candidate value. A human
+reviewer authorizes admission of a request/case candidate, not the truth of
+the candidate's facts. The existing authoritative refresh endpoint reads the
+current HRIS record, overlays only approved authoritative fields, preserves
+request-only claims, and re-evaluates the onboarding policy. A successful
+candidate bridge is therefore not evidence that Odoo, Keycloak, or any other
+system of record was reached.
 
 ## 4. Business obligations before effects
 
@@ -282,6 +326,15 @@ production   -> OIDC, PostgreSQL durability, explicit migrations, Kernel cutover
 
 The development Docker Compose stack runs governed application semantics with reproducible local identity/provider conveniences. `compose.production.yaml` is the production-shaped reference topology and still requires real environment-specific staging/production credentials, network policy, backup policy, and acceptance evidence.
 
+The M6 document foundation stores raw source representations outside
+PostgreSQL through `ArtifactStore`. The current filesystem adapter uses
+content-addressed SHA-256 objects, atomic publication, and read/verify digest
+checks; PostgreSQL retains metadata, provenance, storage references, spans,
+and lineage. This is an attachment/document foundation only. It does not
+claim a real provider attachment integration, OCR/document interpretation, or
+document-to-Work behavior. Missing, corrupted, or unavailable artifacts fail
+closed without fabricating an interpretation or admission.
+
 Service/process boundaries do not imply repository boundaries. The Administrative API, Operations API, DBOS worker, product-specific integrations, migrations, deployment assets, and TypeScript Operations Console remain one repository because they share one Administrative semantic/versioning and acceptance lifecycle. See ADR 0002.
 
 ## 9. Milestones
@@ -292,9 +345,13 @@ Service/process boundaries do not imply repository boundaries. The Administrativ
 - **M3 — administrative correctness:** resource authorization, dependency-scoped GovernanceBasis, obligation-backed completion, reality epistemics, fact-authority distinction, explicit policy lifecycle.
 - **M4 — kernel convergence:** compatibility gate, persistent responsibility/Work admission, administrative business-grant/effect-intent split, HRIS/IAM physical cut-over, unique Kernel RealityBoundary, and canonical ambiguous-result recovery.
 - **M5 — production trust and reality integration:** OIDC/JWKS, field-level authoritative provenance, Odoo/Keycloak read/write/verification contracts, Operations Console, observability, production preflight, DR gates, pinned Kernel baseline plus `agent-kernel/main` recovery canary. **Repository implementation/CI, isolated real-staging Gates A–F, squash merge, and post-merge main CI are complete for the recorded scope.**
-- **M6 — trusted perception and admission:** authenticated non-structured source intake, evidence/provenance, candidate interpretation, identity/conversation semantics, explicit human-confirmed admission, and one real provider vertical slice. Broader Administrative domain expansion remains deferred.
+- **M6 — trusted perception and admission:** authenticated non-structured source intake, evidence/provenance, candidate interpretation, identity/conversation semantics, explicit human-confirmed admission, the Feishu durable-ingress reference slice, M5 onboarding bridge, and document attachment foundation. The real staging provider-to-M5 vertical slice and final evidence remain pending; broader Administrative domain expansion remains deferred.
 
-M5 staging acceptance is intentionally external to repository CI. The checklist and evidence requirements are in `docs/milestones/M5.md` and `docs/production-operations.md`.
+M5 staging acceptance is intentionally external to repository CI. M6 adds the
+same evidence boundary for provider intake and the human-confirmed bridge; the
+no-secrets/no-body record template is
+`docs/acceptance/M6-staging-acceptance-template.md`. Until that record is
+filled with fresh real-staging evidence, M6 remains incomplete.
 
 ## 10. Repository and deployment topology
 

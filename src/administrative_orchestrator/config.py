@@ -3,7 +3,7 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import model_validator
+from pydantic import SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 DEFAULT_KERNEL_RESPONSIBILITY_ADMISSION_POLICY_REF = (
@@ -28,6 +28,25 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     external_effects_enabled: bool = False
     auto_create_schema: bool = True
+
+    # Optional M6 Feishu runtime. Secret values are held as SecretStr and are
+    # never returned by readiness endpoints or written to intake records.
+    feishu_base_url: str = "https://open.feishu.cn"
+    feishu_verification_token: SecretStr | None = None
+    feishu_encrypt_key: SecretStr | None = None
+    feishu_access_token: SecretStr | None = None
+    feishu_artifact_root: str = "./data/intake-artifacts"
+    intake_model_url: str = ""
+    intake_model_api_key: SecretStr | None = None
+    intake_model_provider: str = "configured-model-gateway"
+    intake_model_identity: str = "configured-model"
+    intake_model_version: str = "configured"
+    intake_model_profile_ref: str = "feishu-onboarding-v1"
+    intake_model_schema_ref: str = "candidate-interpretation-v1"
+    intake_model_instruction: str = (
+        "Extract a candidate administrative intent and candidate facts only. "
+        "Never authorize, execute, or communicate on behalf of the system."
+    )
 
     runtime_profile: Literal["test", "development", "governed", "production"] = "development"
 

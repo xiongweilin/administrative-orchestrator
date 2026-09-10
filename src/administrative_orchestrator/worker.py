@@ -14,6 +14,7 @@ from .messaging import (
     recover_expired_leases,
 )
 from .persistence import SqlStore
+from .providers.feishu_runtime import build_feishu_runtime
 
 _stop = False
 
@@ -84,7 +85,17 @@ def main() -> int:
         return 1
 
     try:
-        run_forever(store)
+        feishu_runtime = build_feishu_runtime(store, settings)
+        try:
+            run_forever(
+                store,
+                feishu_processor=(
+                    feishu_runtime.process_event if feishu_runtime is not None else None
+                ),
+            )
+        finally:
+            if feishu_runtime is not None:
+                feishu_runtime.close()
     finally:
         try:
             from dbos import DBOS
