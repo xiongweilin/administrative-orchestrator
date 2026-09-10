@@ -191,6 +191,7 @@ src/administrative_orchestrator/
     completion.py            domain completion contract
     messaging.py             transactional outbox / retry / dead-letter
     workflows/               DBOS durability boundary
+    providers/               provider authenticity and canonical-read adapters
     intake/                  M6 durable source, evidence, interpretation, candidate, and assessment core
 operations-console/          OIDC human exception UI (TypeScript)
 docs/

@@ -1,8 +1,13 @@
 from uuid import uuid4
 
 from administrative_orchestrator.messaging import OutboxEvent
+from administrative_orchestrator.providers.feishu import FEISHU_INTAKE_EVENT_TYPE
 from administrative_orchestrator.workflows.protocol import CASE_CHANGED_TOPIC
-from administrative_orchestrator.workflows.relay import plan_outbox_action
+from administrative_orchestrator.workflows.relay import (
+    dispatch_outbox_event,
+    plan_feishu_inbox_action,
+    plan_outbox_action,
+)
 
 
 def test_case_changed_maps_to_deterministic_start_and_wake() -> None:
@@ -46,3 +51,50 @@ def test_unknown_outbox_event_fails_closed() -> None:
         assert "no DBOS relay action" in str(exc)
     else:
         raise AssertionError("unknown outbox event must fail closed")
+
+
+def test_feishu_intake_event_maps_to_injected_async_processor() -> None:
+    event_id = uuid4()
+    event = OutboxEvent(
+        event_id=event_id,
+        event_type=FEISHU_INTAKE_EVENT_TYPE,
+        aggregate_id=str(event_id),
+        payload={
+            "provider": "feishu",
+            "event_id": "provider-event-1",
+            "tenant_ref": "tenant-1",
+            "message_id": "message-1",
+            "thread_ref": "message-1",
+            "sender_external_subject": "ou-1",
+            "occurred_at": "2026-09-10T00:00:00Z",
+            "sequence": 1,
+            "delivery_digest": "a" * 64,
+        },
+        attempts=0,
+    )
+    action = plan_feishu_inbox_action(event)
+    assert action.receipt_id == str(event_id)
+    received: list[dict[str, object]] = []
+    dispatch_outbox_event(event, feishu_processor=received.append)
+    assert received == [event.payload]
+
+
+def test_feishu_intake_event_requires_explicit_processor() -> None:
+    event = OutboxEvent(
+        event_id=uuid4(),
+        event_type=FEISHU_INTAKE_EVENT_TYPE,
+        aggregate_id="aggregate",
+        payload={
+            "event_id": "provider-event-1",
+            "tenant_ref": "tenant-1",
+            "message_id": "message-1",
+            "sender_external_subject": "ou-1",
+        },
+        attempts=0,
+    )
+    try:
+        dispatch_outbox_event(event)
+    except ValueError as exc:
+        assert "processor is not configured" in str(exc)
+    else:
+        raise AssertionError("provider intake must fail closed without a configured processor")

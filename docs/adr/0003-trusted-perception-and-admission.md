@@ -228,14 +228,16 @@ call Kernel or physical providers directly.
 
 ### 10. Provider and cross-repository boundary
 
-M6 PR1 does not choose or implement a provider. Provider v1 selection is a
-separate slice based on current local evidence. If Feishu is selected, the
-existing gateway may only own transport, event authenticity, delivery
-identity, and explicitly signed forwarding. It must not persist message bodies,
-interpret business intent, create candidates/requests/cases, or own admission
-or completion. A gateway change, if necessary, is a separate compatibility
-PR; `agent-kernel`, `meta-controller`, and unrelated repositories are not
-modified for M6 convenience.
+M6 PR1 did not choose or implement a provider. PR9 selects Feishu as the
+reference provider based on current local evidence. The existing gateway may
+only own transport, event authenticity, delivery identity, and explicitly
+signed forwarding. The Administrative adapter performs canonical fetch,
+source/artifact lineage, identity resolution, interpretation, and candidate
+projection after durable acceptance; neither component may persist business
+authority, create Administrative cases, or own admission or completion. A
+gateway change, if necessary, is a separate compatibility PR;
+`agent-kernel`, `meta-controller`, and unrelated repositories are not modified
+for M6 convenience.
 
 ### 11. M5 compatibility and replay matrix
 

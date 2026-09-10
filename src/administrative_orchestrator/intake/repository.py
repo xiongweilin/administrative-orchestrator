@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 from uuid import UUID
@@ -20,6 +21,7 @@ from sqlalchemy import (
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Mapped, mapped_column
 
+from ..messaging import OutboxEventRow, emit_outbox
 from ..persistence import Base, SqlStore
 from .models import (
     CandidateAdministrativeRequest,
@@ -49,6 +51,23 @@ class PromotionConflict(RuntimeError):
 
 class AssessmentConflict(RuntimeError):
     """A candidate already has a different final intake assessment."""
+
+
+class InterpretationConflict(RuntimeError):
+    """An interpretation identity was reused with different semantics."""
+
+
+class CandidateConflict(RuntimeError):
+    """A candidate identity was reused with different semantics."""
+
+
+@dataclass(frozen=True, slots=True)
+class IntakeDeliveryAcceptance:
+    """The durable receipt and async handoff created for one provider event."""
+
+    receipt: IntakeReceipt
+    outbox_event_id: UUID
+    created: bool
 
 
 class SourceArtifactRow(Base):
@@ -438,6 +457,93 @@ class IntakeRepository:
                 raise IntakeReceiptConflict("delivery identity was concurrently inserted") from exc
             return receipt
 
+    def persist_verified_receipt_and_enqueue(
+        self,
+        receipt: IntakeReceipt,
+        *,
+        event_type: str,
+        aggregate_id: str,
+        payload: dict[str, Any],
+    ) -> IntakeDeliveryAcceptance:
+        """Atomically persist a verified receipt and its async processing handoff.
+
+        The outbox event deliberately uses the receipt identity as its own
+        event id. A redelivery therefore cannot create a second worker job,
+        while a process crash after commit still leaves the event available to
+        the existing bounded outbox relay.
+        """
+        if receipt.verification_status.value != "verified":
+            raise ValueError("only verified intake receipts may be enqueued")
+        with self.store.sessions.begin() as db:
+            existing = db.execute(
+                select(IntakeReceiptRow).where(
+                    IntakeReceiptRow.source_system == receipt.source_system,
+                    IntakeReceiptRow.tenant_ref == receipt.tenant_ref,
+                    IntakeReceiptRow.source_event_id == receipt.source_event_id,
+                )
+            ).scalar_one_or_none()
+            if existing is not None:
+                if existing.delivery_digest != receipt.delivery_digest:
+                    raise IntakeReceiptConflict(
+                        "delivery identity was redelivered with a different digest"
+                    )
+                restored = _receipt_from_row(existing)
+                outbox = db.get(OutboxEventRow, existing.receipt_id)
+                if outbox is None:
+                    emit_outbox(
+                        db,
+                        event_type=event_type,
+                        aggregate_id=aggregate_id,
+                        payload=payload,
+                        event_id=existing.receipt_id,
+                    )
+                return IntakeDeliveryAcceptance(
+                    receipt=restored,
+                    outbox_event_id=existing.receipt_id,
+                    created=False,
+                )
+
+            db.add(
+                IntakeReceiptRow(
+                    receipt_id=receipt.receipt_id,
+                    source_system=receipt.source_system,
+                    tenant_ref=receipt.tenant_ref,
+                    source_event_id=receipt.source_event_id,
+                    received_at=receipt.received_at,
+                    verification_status=receipt.verification_status.value,
+                    artifact_ref=receipt.artifact_ref,
+                    delivery_digest=receipt.delivery_digest,
+                )
+            )
+            emit_outbox(
+                db,
+                event_type=event_type,
+                aggregate_id=aggregate_id,
+                payload=payload,
+                event_id=receipt.receipt_id,
+            )
+            try:
+                db.flush()
+            except IntegrityError as exc:
+                raise IntakeReceiptConflict("delivery identity was concurrently inserted") from exc
+            return IntakeDeliveryAcceptance(
+                receipt=receipt,
+                outbox_event_id=receipt.receipt_id,
+                created=True,
+            )
+
+    def attach_artifact_to_receipt(self, receipt_id: UUID, artifact_id: UUID) -> IntakeReceipt:
+        """Attach the immutable canonical artifact exactly once to a receipt."""
+        with self.store.sessions.begin() as db:
+            row = db.get(IntakeReceiptRow, receipt_id)
+            if row is None:
+                raise IntakeReceiptConflict("intake receipt does not exist")
+            if row.artifact_ref is not None and row.artifact_ref != artifact_id:
+                raise IntakeReceiptConflict("intake receipt is already linked to another artifact")
+            row.artifact_ref = artifact_id
+            db.flush()
+            return _receipt_from_row(row)
+
     def get_intake_receipt(
         self, *, source_system: str, tenant_ref: str, source_event_id: str
     ) -> IntakeReceipt | None:
@@ -523,6 +629,14 @@ class IntakeRepository:
 
     def append_interpretation(self, interpretation: InterpretationRecord) -> InterpretationRecord:
         with self.store.sessions.begin() as db:
+            existing = db.get(InterpretationRecordRow, interpretation.interpretation_id)
+            if existing is not None:
+                restored = _interpretation_from_row(existing)
+                if restored != interpretation:
+                    raise InterpretationConflict(
+                        "interpretation identity was reused with different semantics"
+                    )
+                return restored
             db.add(
                 InterpretationRecordRow(
                     interpretation_id=interpretation.interpretation_id,
@@ -555,6 +669,12 @@ class IntakeRepository:
 
     def append_candidate_fact(self, fact: CandidateFactAssertion) -> CandidateFactAssertion:
         with self.store.sessions.begin() as db:
+            existing = db.get(CandidateFactAssertionRow, fact.candidate_fact_id)
+            if existing is not None:
+                restored = _fact_from_row(existing)
+                if restored != fact:
+                    raise CandidateConflict("candidate fact identity was reused with different semantics")
+                return restored
             db.add(
                 CandidateFactAssertionRow(
                     candidate_fact_id=fact.candidate_fact_id,
@@ -576,6 +696,12 @@ class IntakeRepository:
         self, candidate: CandidateAdministrativeRequest
     ) -> CandidateAdministrativeRequest:
         with self.store.sessions.begin() as db:
+            existing = db.get(CandidateAdministrativeRequestRow, candidate.candidate_id)
+            if existing is not None:
+                restored = _candidate_from_row(existing)
+                if restored != candidate:
+                    raise CandidateConflict("candidate identity was reused with different semantics")
+                return restored
             db.add(
                 CandidateAdministrativeRequestRow(
                     candidate_id=candidate.candidate_id,
@@ -725,14 +851,17 @@ class IntakeRepository:
 
 __all__ = [
     "CandidateAdministrativeRequestRow",
+    "CandidateConflict",
     "CandidateCaseUpdateRow",
     "CandidateFactAssertionRow",
     "EvidenceSpanRow",
     "AssessmentConflict",
+    "IntakeDeliveryAcceptance",
     "IntakeAssessmentRow",
     "IntakeReceiptConflict",
     "IntakeReceiptRow",
     "IntakeRepository",
+    "InterpretationConflict",
     "InterpretationRecordRow",
     "PromotionConflict",
     "PromotionRecordRow",
