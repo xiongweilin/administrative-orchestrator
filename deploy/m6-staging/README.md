@@ -86,6 +86,8 @@ The model route is the already-running host LiteLLM process at
 `opencode-go/deepseek-flash` route. Do not stop or restart LiteLLM during this
 staging run. The container reaches it through `host.docker.internal:4100`.
 
+The recorded acceptance run for this stack is
+`docs/acceptance/M6-staging-acceptance.md`.
 The Operations Console OIDC client (`administrative-operations-console`) must
 carry the standard Keycloak `basic` client scope so access tokens include the
 OIDC `sub` claim. `infra/keycloak/m6-realm.json` declares that scope and adds

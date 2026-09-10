@@ -142,12 +142,13 @@ owned by the existing M5 HRIS reader and governance checks. This implementation
 wiring is not real-provider staging evidence and does not claim OCR,
 document-to-Work behavior, or a completed provider-to-M5 run.
 
-M6 is **in progress and is not complete until real staging evidence exists**.
-Repository tests and local fixtures do not constitute real Feishu, Odoo,
-Keycloak, Agent Kernel, or production model-provider results. No such external
-run is claimed by this README. See `docs/milestones/M6.md`, ADR 0003,
-`docs/production-operations.md`, and the evidence template at
-`docs/acceptance/M6-staging-acceptance-template.md` for the remaining boundary.
+M6 is **complete for the recorded staging scope**: the real Feishu
+long-connection intake path, human-confirmed admission, authoritative HRIS
+refresh, Agent Kernel execution, and the Odoo/Keycloak onboarding effects were
+exercised on merged revisions and recorded in
+`docs/acceptance/M6-staging-acceptance.md`. Repository tests and local fixtures
+alone still do not constitute real provider results; see that record for the
+exact staging evidence and residual risks.
 
 See:
 
@@ -158,7 +159,8 @@ See:
 - `docs/milestones/M6.md` for the Trusted Perception & Admission delivery plan and gates;
 - `docs/adr/0003-trusted-perception-and-admission.md` for the intake, candidate, and admission boundary;
 - `docs/production-operations.md` for deployment, observability, backup/restore, incident, and staging procedures.
-- `docs/acceptance/M6-staging-acceptance-template.md` for the no-secrets/no-body staging evidence record.
+- `docs/acceptance/M6-staging-acceptance.md` for the recorded real-staging evidence.
+- `docs/acceptance/M6-staging-acceptance-template.md` for the no-secrets/no-body template.
 
 ## Development principles
 
