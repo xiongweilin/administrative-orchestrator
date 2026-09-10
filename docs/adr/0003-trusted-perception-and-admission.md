@@ -237,14 +237,17 @@ assessments, and promotion lineage—not raw binary content. Missing objects,
 digest mismatch, corruption, and storage unavailability fail closed without
 fabricating an interpretation or admission.
 
-The current document/attachment work is a foundation rather than a completed
-provider attachment vertical. `FilesystemArtifactStore` is the local/staging
-adapter: it stores bytes as SHA-256 content-addressed objects outside
-PostgreSQL, publishes new objects atomically, and verifies the digest on read.
-`SourceArtifact` retains MIME/size/digest/storage-reference metadata and
-`EvidenceSpan` retains immutable representation locators. No raw document body
-belongs in `IntakeReceipt` or an outbox payload, and no attachment is
-authoritative merely because it was stored or interpreted.
+The current implementation wires the Feishu canonical file/image fetch into
+the provider-neutral attachment processor. `FilesystemArtifactStore` stores
+bytes as SHA-256 content-addressed objects outside PostgreSQL, publishes new
+objects atomically, and verifies the digest on read; the production worker
+mounts a durable named artifact volume. `SourceArtifact` retains MIME/size/
+digest/storage-reference metadata and `EvidenceSpan` retains immutable
+representation locators. No raw document body belongs in `IntakeReceipt` or
+an outbox payload, and no attachment is authoritative merely because it was
+stored or interpreted. A real provider attachment run, OCR/document
+interpretation, or document-to-Work behavior remains unproven until staging
+evidence records it.
 
 ### 9. Workflow authority map
 

@@ -330,10 +330,13 @@ The M6 document foundation stores raw source representations outside
 PostgreSQL through `ArtifactStore`. The current filesystem adapter uses
 content-addressed SHA-256 objects, atomic publication, and read/verify digest
 checks; PostgreSQL retains metadata, provenance, storage references, spans,
-and lineage. This is an attachment/document foundation only. It does not
-claim a real provider attachment integration, OCR/document interpretation, or
-document-to-Work behavior. Missing, corrupted, or unavailable artifacts fail
-closed without fabricating an interpretation or admission.
+and lineage. The Feishu adapter now fetches canonical file/image resources and
+passes them through the same attachment processor, while the production worker
+mounts a named durable artifact volume. This is implementation wiring, not a
+claim that a real provider attachment run, OCR/document interpretation, or
+document-to-Work behavior has been exercised. Missing, corrupted, or
+unavailable artifacts fail closed without fabricating an interpretation or
+admission.
 
 Service/process boundaries do not imply repository boundaries. The Administrative API, Operations API, DBOS worker, product-specific integrations, migrations, deployment assets, and TypeScript Operations Console remain one repository because they share one Administrative semantic/versioning and acceptance lifecycle. See ADR 0002.
 
