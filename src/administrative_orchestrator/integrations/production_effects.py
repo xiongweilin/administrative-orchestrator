@@ -95,6 +95,22 @@ class OdooEmployeeEffectConnector:
                     reconciled=True,
                 )
 
+            by_subject = await self._lookup(self.connection.subject_ref_field, subject_ref)
+            if len(by_subject) > 1:
+                return ConnectorResult(
+                    ConnectorStatus.FAILED,
+                    error_code="DuplicateExternalSubjectIdentity",
+                    error_message="multiple Odoo employees share the same subject_ref",
+                )
+            if by_subject:
+                # An earlier attempt or run already created the employee for
+                # this subject; reconcile instead of creating a duplicate.
+                return ConnectorResult(
+                    ConnectorStatus.SUCCEEDED,
+                    external_operation_ref=f"odoo:hr.employee:{by_subject[0]['id']}",
+                    reconciled=True,
+                )
+
             values: dict[str, Any] = {
                 self.connection.request_ref_field: request_ref,
                 self.connection.subject_ref_field: subject_ref,

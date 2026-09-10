@@ -80,6 +80,48 @@ async def test_odoo_reconciliation_rejects_duplicate_external_request_identity(m
 
 
 @pytest.mark.asyncio
+async def test_odoo_invoke_reconciles_employee_created_for_the_same_subject(monkeypatch):
+    connector = _odoo_connector()
+    monkeypatch.setattr(
+        connector,
+        "_lookup",
+        AsyncMock(side_effect=[[], [{"id": 77}]]),
+    )
+    execute = AsyncMock()
+    monkeypatch.setattr(connector, "_execute_kw", execute)
+
+    result = await connector.invoke(
+        request_ref="req-new",
+        subject_ref="employee:42",
+        parameters={"employee_ref": "employee:42"},
+    )
+
+    assert result.status is ConnectorStatus.SUCCEEDED
+    assert result.reconciled is True
+    assert result.external_operation_ref == "odoo:hr.employee:77"
+    execute.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_odoo_invoke_rejects_duplicate_subject_identity(monkeypatch):
+    connector = _odoo_connector()
+    monkeypatch.setattr(
+        connector,
+        "_lookup",
+        AsyncMock(side_effect=[[], [{"id": 1}, {"id": 2}]]),
+    )
+
+    result = await connector.invoke(
+        request_ref="req-dup",
+        subject_ref="employee:42",
+        parameters={},
+    )
+
+    assert result.status is ConnectorStatus.FAILED
+    assert result.error_code == "DuplicateExternalSubjectIdentity"
+
+
+@pytest.mark.asyncio
 async def test_keycloak_server_5xx_is_unknown_not_definitive_failure(monkeypatch):
     connector = _keycloak_connector()
     monkeypatch.setattr(connector, "_find_by_attribute", AsyncMock(return_value=[]))
