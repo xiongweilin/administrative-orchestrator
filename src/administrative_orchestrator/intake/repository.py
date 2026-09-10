@@ -21,7 +21,6 @@ from sqlalchemy import (
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Mapped, mapped_column
 
-from ..messaging import OutboxEventRow, emit_outbox
 from ..persistence import Base, SqlStore
 from .models import (
     CandidateAdministrativeRequest,
@@ -472,6 +471,10 @@ class IntakeRepository:
         while a process crash after commit still leaves the event available to
         the existing bounded outbox relay.
         """
+        # Import lazily because persistence.py registers this repository while
+        # messaging.py is importing the shared SQLAlchemy Base.
+        from ..messaging import OutboxEventRow, emit_outbox
+
         if receipt.verification_status.value != "verified":
             raise ValueError("only verified intake receipts may be enqueued")
         with self.store.sessions.begin() as db:
