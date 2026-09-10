@@ -9,7 +9,11 @@ from .authority import AuthorityRepository, IdentityBinding
 from .config import get_settings
 from .domain import Delegation, Principal, PrincipalKind, RoleAssignment
 from .persistence import SqlStore
-from .policy_plane import PolicyRepository, default_onboarding_policy_version
+from .policy_plane import (
+    PolicyRepository,
+    default_offboarding_policy_version,
+    default_onboarding_policy_version,
+)
 
 _BASELINE = datetime(2026, 1, 1, tzinfo=UTC)
 
@@ -22,6 +26,7 @@ def bootstrap_foundation(store: SqlStore, payload: dict[str, Any] | None = None)
     authority = AuthorityRepository(store)
     policies = PolicyRepository(store)
     policies.put_version(default_onboarding_policy_version())
+    policies.put_version(default_offboarding_policy_version())
 
     payload = payload or {}
     for item in payload.get("principals", []):
