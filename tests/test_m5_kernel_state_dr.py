@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+import administrative_orchestrator.kernel_state_dr as kernel_state_dr
 from administrative_orchestrator.kernel_state_dr import (
     KernelStateRecoveryError,
     backup_kernel_state,
@@ -66,3 +67,19 @@ def test_kernel_state_manifest_detects_tampering(tmp_path: Path):
 
     with pytest.raises(KernelStateRecoveryError, match="digest does not match"):
         verify_kernel_state_backup(backup)
+
+
+def test_kernel_state_restore_reraises_atomic_replace_permission_for_new_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "kernel.db"
+    backup = tmp_path / "backup.db"
+    _create_state(source)
+    backup_kernel_state(source, backup)
+
+    def fail_replace(_source: Path, _destination: Path) -> None:
+        raise PermissionError("locked")
+
+    monkeypatch.setattr(kernel_state_dr.os, "replace", fail_replace)
+    with pytest.raises(PermissionError, match="locked"):
+        restore_kernel_state(backup, tmp_path / "new.db", force=True)

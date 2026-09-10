@@ -72,6 +72,13 @@ The production control plane must satisfy all of these before startup:
 - durable external request-identity fields/attributes are configured;
 - `PORTABLE_RUNTIME_ADMIN_PRODUCTION_STATE_PATH` is an absolute path on durable single-writer storage.
 
+The isolated M6 staging topology is separate from this production contract. It
+uses `ADMIN_RUNTIME_PROFILE=staging`, still requires OIDC and authority
+enforcement, and may set `ADMIN_OIDC_ALLOW_INSECURE_HTTP=true` only for the
+local HTTP-only Keycloak/Odoo services declared by its staging Compose file.
+That flag is rejected by the production profile and must never be copied into a
+production environment.
+
 When M6 intake is enabled, the deployment must additionally provide
 configuration references for the Feishu long-connection token boundary, the
 worker's app credentials for dynamic tenant-token canonical reads, the

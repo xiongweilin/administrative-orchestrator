@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from uuid import uuid4
 
 import httpx
@@ -23,6 +24,7 @@ from administrative_orchestrator.persistence import SqlStore
 from administrative_orchestrator.providers.feishu_runtime import (
     HttpJsonModelGateway,
     OpenAICompatibleChatModelGateway,
+    _read_secret_file,
     build_feishu_runtime,
 )
 
@@ -279,3 +281,46 @@ def test_feishu_runtime_fails_closed_until_processing_dependencies_exist() -> No
     assert configured.boundary is not None
     assert configured.pipeline is not None
     configured.close()
+
+
+def test_feishu_runtime_loads_file_backed_app_credentials(tmp_path: Path) -> None:
+    app_id_file = tmp_path / "feishu_app_id"
+    app_secret_file = tmp_path / "feishu_app_secret"
+    app_id_file.write_text("cli_staging", encoding="utf-8")
+    app_secret_file.write_text("secret_staging", encoding="utf-8")
+
+    store = SqlStore("sqlite+pysqlite:///:memory:")
+    store.init_schema()
+    runtime = build_feishu_runtime(
+        store,
+        Settings(
+            database_url="sqlite+pysqlite:///:memory:",
+            feishu_base_url="https://open.feishu.invalid",
+            feishu_app_id_file=str(app_id_file),
+            feishu_app_secret_file=str(app_secret_file),
+            feishu_verification_token=SecretStr("verification-token"),
+            intake_model_url="https://model.invalid/v1/interpret",
+        ),
+    )
+    assert runtime is not None
+    assert runtime.pipeline is not None
+    runtime.close()
+
+
+def test_feishu_secret_file_reader_fails_closed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    assert _read_secret_file("") == ""
+
+    missing = tmp_path / "missing"
+    with pytest.raises(RuntimeError, match="unavailable"):
+        _read_secret_file(str(missing))
+
+    empty = tmp_path / "empty"
+    empty.write_text("", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="empty"):
+        _read_secret_file(str(empty))
+
+    readable = tmp_path / "readable"
+    readable.write_text("value", encoding="utf-8")
+    monkeypatch.setattr(Path, "read_text", lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("denied")))
+    with pytest.raises(RuntimeError, match="unavailable"):
+        _read_secret_file(str(readable))

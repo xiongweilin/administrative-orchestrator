@@ -1,0 +1,107 @@
+{
+  "realm": "m6",
+  "enabled": true,
+  "sslRequired": "NONE",
+  "registrationAllowed": false,
+  "loginWithEmailAllowed": true,
+  "clients": [
+    {
+      "clientId": "administrative-operations-console",
+      "name": "Administrative M6 Operations Console",
+      "enabled": true,
+      "publicClient": true,
+      "protocol": "openid-connect",
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": true,
+      "redirectUris": [
+        "http://localhost:18088/*",
+        "http://127.0.0.1:18088/*",
+        "http://host.docker.internal:18088/*"
+      ],
+      "webOrigins": [
+        "http://localhost:18088",
+        "http://127.0.0.1:18088",
+        "http://host.docker.internal:18088"
+      ],
+      "defaultClientScopes": [
+        "openid",
+        "profile",
+        "email",
+        "administrative-audience"
+      ]
+    },
+    {
+      "clientId": "administrative-reader",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "m6-keycloak-reader-secret"
+    },
+    {
+      "clientId": "administrative-kernel-writer",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "m6-keycloak-writer-secret"
+    },
+    {
+      "clientId": "administrative-kernel-verifier",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "m6-keycloak-verifier-secret"
+    }
+  ],
+  "clientScopes": [
+    {
+      "name": "administrative-audience",
+      "description": "Audience used by the isolated Administrative staging API",
+      "protocol": "openid-connect",
+      "attributes": {
+        "include.in.token.scope": "false",
+        "display.on.consent.screen": "false"
+      },
+      "protocolMappers": [
+        {
+          "name": "administrative-operations-console-audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": {
+            "included.client.audience": "administrative-operations-console",
+            "id.token.claim": "false",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "false"
+          }
+        }
+      ]
+    }
+  ],
+  "users": [
+    {
+      "id": "m6-reviewer",
+      "username": "m6-reviewer",
+      "enabled": true,
+      "email": "m6-reviewer@staging.invalid",
+      "emailVerified": true,
+      "credentials": [
+        {
+          "type": "password",
+          "value": "m6-reviewer-password",
+          "temporary": false
+        }
+      ]
+    }
+  ]
+}
