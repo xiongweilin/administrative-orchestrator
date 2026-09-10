@@ -71,6 +71,11 @@ def merge_authoritative_onboarding_facts(
         if key not in record.value:
             continue
         value = record.value[key]
+        if value is None:
+            # An authoritative source that reports no value for a field must
+            # not erase a human-admitted claim for that field. The claim stays
+            # the effective value until an authoritative value exists.
+            continue
         facts[key] = value
         assertions[key] = FactAssertion(
             value=value,
