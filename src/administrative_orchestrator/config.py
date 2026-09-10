@@ -111,6 +111,10 @@ class Settings(BaseSettings):
     odoo_verifier_username: str = ""
     odoo_verifier_secret_env: str = "ADMIN_ODOO_VERIFIER_SECRET"
     odoo_request_ref_field: str = "x_administrative_request_ref"
+    odoo_termination_status_field: str = "x_administrative_termination_status"
+    odoo_termination_effective_at_field: str = (
+        "x_administrative_termination_effective_at"
+    )
 
     iam_source_kind: Literal["disabled", "keycloak"] = "disabled"
     keycloak_base_url: str = ""

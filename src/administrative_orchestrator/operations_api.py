@@ -26,6 +26,7 @@ from .execution_repository import ExecutionRepository
 from .fact_acquisition import (
     FactAcquisitionError,
     build_hris_source,
+    merge_authoritative_offboarding_facts,
     merge_authoritative_onboarding_facts,
 )
 from .fact_transitions import replace_facts_for_reevaluation
@@ -45,8 +46,13 @@ from .onboarding_admission import (
     OnboardingAdmissionError,
 )
 from .persistence import CaseRow, ConcurrencyConflict, SqlStore
-from .policy import OnboardingFacts, PolicyEvaluation
-from .policy_plane import PolicyPlaneError, PolicyRepository, compile_onboarding_policy
+from .policy import OffboardingFacts, OnboardingFacts, PolicyEvaluation
+from .policy_plane import (
+    PolicyPlaneError,
+    PolicyRepository,
+    compile_offboarding_policy,
+    compile_onboarding_policy,
+)
 from .service import TransitionError, apply_policy_evaluation, start_policy_evaluation
 from .unit_of_work import AdministrativeUnitOfWork
 
@@ -403,6 +409,35 @@ def promote_intake_candidate(
     )
 
 
+def _apply_authoritative_refresh(
+    case: AdministrativeCase,
+    record: object,
+) -> AdministrativeCase:
+    """Merge authoritative HR facts and re-evaluate the case-kind policy."""
+    if case.case_kind == "employee-onboarding":
+        snapshot = merge_authoritative_onboarding_facts(case, record)  # type: ignore[arg-type]
+        policy_id = "employee-onboarding"
+        facts_model = OnboardingFacts
+        compile_policy = compile_onboarding_policy
+    elif case.case_kind == "employee-offboarding":
+        snapshot = merge_authoritative_offboarding_facts(case, record)  # type: ignore[arg-type]
+        policy_id = "employee-offboarding"
+        facts_model = OffboardingFacts
+        compile_policy = compile_offboarding_policy
+    else:
+        raise FactAcquisitionError(
+            f"authoritative refresh does not support case kind {case.case_kind!r}"
+        )
+    changed = replace_facts_for_reevaluation(case, snapshot)
+    ready = start_policy_evaluation(changed)
+    policy_record = _policies.resolve_current(policy_id)
+    facts = facts_model.model_validate(snapshot.facts)
+    evaluation = compile_policy(policy_record).evaluate(facts)
+    updated = apply_policy_evaluation(ready, evaluation)
+    _uow.replace_facts_and_apply_policy(case, updated, evaluation)
+    return updated
+
+
 @app.post(
     "/v1/operations/cases/{case_id}/authoritative-facts/refresh",
     response_model=RefreshFactsResponse,
@@ -413,8 +448,10 @@ def refresh_authoritative_facts(case_id: UUID, request: Request) -> RefreshFacts
     if case is None:
         raise HTTPException(status_code=404, detail="case not found")
     _require(actor, AdministrativePermission.FACTS_REFRESH_AUTHORITATIVE, case=case)
-    if case.case_kind != "employee-onboarding":
-        raise HTTPException(status_code=409, detail="authoritative refresh currently supports onboarding")
+    if case.case_kind not in {"employee-onboarding", "employee-offboarding"}:
+        raise HTTPException(
+            status_code=409, detail="authoritative refresh does not support this case kind"
+        )
     source = build_hris_source(_settings)
     if source is None:
         raise HTTPException(status_code=503, detail="authoritative HRIS source is not configured")
@@ -425,15 +462,7 @@ def refresh_authoritative_facts(case_id: UUID, request: Request) -> RefreshFacts
             max_age_seconds=_settings.authoritative_fact_max_age_seconds,
         ):
             raise FactAcquisitionError("authoritative HRIS observation is stale")
-        snapshot = merge_authoritative_onboarding_facts(case, record)
-        changed = replace_facts_for_reevaluation(case, snapshot)
-        ready = start_policy_evaluation(changed)
-        policy_record = _policies.resolve_current("employee-onboarding")
-        policy = compile_onboarding_policy(policy_record)
-        facts = OnboardingFacts.model_validate(snapshot.facts)
-        evaluation = policy.evaluate(facts)
-        updated = apply_policy_evaluation(ready, evaluation)
-        _uow.replace_facts_and_apply_policy(case, updated, evaluation)
+        updated = _apply_authoritative_refresh(case, record)
     except (
         FactAcquisitionError,
         PolicyPlaneError,
