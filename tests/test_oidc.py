@@ -197,3 +197,16 @@ def test_staging_profile_requires_oidc_and_allows_explicit_local_http() -> None:
             oidc_issuer="http://keycloak:8080/realms/m6",
             oidc_audience=AUDIENCE,
         )
+
+    with pytest.raises(ValueError, match="requires ADMIN_AUTH_MODE=oidc"):
+        Settings(runtime_profile="staging", auth_mode="jwt")
+    with pytest.raises(ValueError, match="issuer and audience are required"):
+        Settings(runtime_profile="staging", auth_mode="oidc", oidc_issuer="")
+    with pytest.raises(ValueError, match="cannot allow insecure HTTP"):
+        Settings(
+            runtime_profile="production",
+            auth_mode="oidc",
+            oidc_issuer=ISSUER,
+            oidc_audience=AUDIENCE,
+            oidc_allow_insecure_http=True,
+        )
