@@ -204,6 +204,8 @@ def test_odoo_authoritative_reader_maps_employee_department_and_manager(monkeypa
 
     def execute(model, method, args, kwargs=None):
         del method, args, kwargs
+        if model == "ir.model":
+            return 1
         if model == "hr.employee":
             return [
                 {
@@ -258,6 +260,38 @@ def test_odoo_authoritative_reader_maps_employee_department_and_manager(monkeypa
         "manager_ref": "odoo:hr.employee:5",
         "present": True,
     }
+
+
+def test_odoo_authoritative_reader_tolerates_absent_contract_model(monkeypatch) -> None:
+    source = _odoo_source()
+
+    def execute(model, method, args, kwargs=None):
+        del method, args, kwargs
+        if model == "ir.model":
+            return 0
+        if model == "hr.employee":
+            return [
+                {
+                    "id": 42,
+                    "name": "Alice",
+                    "department_id": [7, "Engineering"],
+                    "parent_id": None,
+                    "work_email": "alice@example.test",
+                    "active": True,
+                    "write_date": "2026-09-09 09:00:00",
+                }
+            ]
+        raise AssertionError(model)
+
+    monkeypatch.setattr(source, "_execute_kw", execute)
+
+    employee = source.read_employee("odoo:hr.employee:42")
+    assert employee.value["present"] is True
+    assert employee.value["department_ref"] == "odoo:hr.department:7"
+    assert employee.value["employment_state"] is None
+    assert employee.value["employment_type"] is None
+    assert employee.value["start_date"] is None
+    assert "contract:" not in employee.source_version
 
 
 def test_odoo_authoritative_reader_absence_validation_and_jsonrpc(monkeypatch) -> None:
