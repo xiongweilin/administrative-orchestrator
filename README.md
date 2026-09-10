@@ -97,9 +97,9 @@ Planned vertical slices:
 
 The first executable slice is **employee onboarding** because it forces multi-actor coordination, long-lived state, identity, policy, approvals, multiple external systems, semantic verification, and bounded completion.
 
-## Current milestone: M6 Trusted Perception & Admission
+# Current state: M6 accepted — next milestone M7 not started
 
-M0–M4 established the semantic foundation, durable governed execution, organizational authority/policy, administrative correctness, and Agent Kernel convergence/cut-over invariants. M5 makes that reference architecture production-shaped without collapsing those ownership boundaries.
+M0–M4 established the semantic foundation, durable governed execution, organizational authority/policy, administrative correctness, and Agent Kernel convergence/cut-over invariants. M5 makes that reference architecture production-shaped without collapsing those ownership boundaries. M6 added trusted perception and admission and is accepted for the recorded staging scope (`docs/acceptance/M6-staging-acceptance.md`); M7 has not started.
 
 The M5 implementation now includes:
 
@@ -138,9 +138,10 @@ Compose worker now mounts the named artifact volume and receives the optional
 Feishu/model runtime references. The bridge preserves admitted intake facts as
 `CLAIM`; it does not turn a candidate or a human confirmation into
 `AUTHORITATIVE` truth. The authoritative refresh/revalidation path remains
-owned by the existing M5 HRIS reader and governance checks. This implementation
-wiring is not real-provider staging evidence and does not claim OCR,
-document-to-Work behavior, or a completed provider-to-M5 run.
+owned by the existing M5 HRIS reader and governance checks. OCR,
+document-to-Work behavior, and document interpretation remain out of scope for
+this slice; the real Feishu provider-to-M5 run is recorded in
+`docs/acceptance/M6-staging-acceptance.md`.
 
 M6 is **complete for the recorded staging scope**: the real Feishu
 long-connection intake path, human-confirmed admission, authoritative HRIS
@@ -278,6 +279,6 @@ Keeping pinned-baseline and main-canary lanes separate prevents an upstream Kern
 
 ## Near-term direction
 
-After real-staging M5 acceptance, the next work should be driven by measured operating needs rather than by adding authority shortcuts. Likely directions are additional administrative slices, richer Policy Plane operations, production dashboard/alert calibration, and—only if availability/concurrency measurements justify it—an Agent Kernel store-port implementation for a multi-writer-capable durable backend.
+M6 established trusted perception and admission, so natural-language intake already exists upstream of the governed execution core. The next work should expand Administrative responsibility depth rather than add another intake authority: additional administrative slices, richer Policy Plane operations, production dashboard/alert calibration, and—only if availability/concurrency measurements justify it—an Agent Kernel store-port implementation for a multi-writer-capable durable backend.
 
-Natural-language and Agent-based intake should remain above this governed execution core. They may improve interpretation and investigation, but they must consume rather than bypass the same fact, policy, authority, effect, verification, reconciliation, and completion contracts.
+Natural-language and Agent-based intake remain above this governed execution core. They may improve interpretation and investigation, but they consume rather than bypass the same fact, policy, authority, effect, verification, reconciliation, and completion contracts.
