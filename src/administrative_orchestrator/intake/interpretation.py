@@ -5,7 +5,7 @@ import json
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -151,6 +151,8 @@ class InterpretationClient:
         source_text: str,
         profile: InterpretationProfile,
         evidence_spans: Sequence[EvidenceSpan] = (),
+        *,
+        interpretation_id: UUID | None = None,
     ) -> InterpretationRecord:
         request = ModelRequest(
             artifact_ref=artifact.artifact_id,
@@ -160,19 +162,28 @@ class InterpretationClient:
         try:
             response = self.gateway.complete(request, timeout_seconds=self.timeout_seconds)
         except ModelTimeoutError:
-            return self._persist_failure(artifact, profile, "model_timeout")
+            return self._persist_failure(
+                artifact, profile, "model_timeout", interpretation_id=interpretation_id
+            )
         except ModelProviderUnavailable:
-            return self._persist_failure(artifact, profile, "provider_unavailable")
+            return self._persist_failure(
+                artifact, profile, "provider_unavailable", interpretation_id=interpretation_id
+            )
         except ModelGatewayError:
-            return self._persist_failure(artifact, profile, "provider_error")
+            return self._persist_failure(
+                artifact, profile, "provider_error", interpretation_id=interpretation_id
+            )
 
         try:
             payload = self._parse_payload(response.raw_output)
             bound_evidence = self._bind_evidence(payload, artifact, evidence_spans)
         except (InterpretationValidationError, TypeError, ValueError):
-            return self._persist_invalid(artifact, profile, response)
+            return self._persist_invalid(
+                artifact, profile, response, interpretation_id=interpretation_id
+            )
 
         record = InterpretationRecord(
+            interpretation_id=interpretation_id or uuid4(),
             artifact_refs=(artifact.artifact_id,),
             interpretation_profile_ref=profile.profile_ref,
             model_provider=response.provenance.provider,
@@ -226,8 +237,11 @@ class InterpretationClient:
         artifact: SourceArtifact,
         profile: InterpretationProfile,
         response: ModelResponse,
+        *,
+        interpretation_id: UUID | None = None,
     ) -> InterpretationRecord:
         record = InterpretationRecord(
+            interpretation_id=interpretation_id or uuid4(),
             artifact_refs=(artifact.artifact_id,),
             interpretation_profile_ref=profile.profile_ref,
             model_provider=response.provenance.provider,
@@ -246,9 +260,12 @@ class InterpretationClient:
         artifact: SourceArtifact,
         profile: InterpretationProfile,
         failure_code: str,
+        *,
+        interpretation_id: UUID | None = None,
     ) -> InterpretationRecord:
         provenance = self.gateway.provenance
         record = InterpretationRecord(
+            interpretation_id=interpretation_id or uuid4(),
             artifact_refs=(artifact.artifact_id,),
             interpretation_profile_ref=profile.profile_ref,
             model_provider=provenance.provider,
