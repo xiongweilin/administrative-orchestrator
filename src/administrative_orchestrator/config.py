@@ -118,6 +118,7 @@ class Settings(BaseSettings):
     odoo_termination_effective_at_field: str = (
         "x_administrative_termination_effective_at"
     )
+    odoo_employment_episode_field: str = "x_administrative_employment_episode_ref"
 
     iam_source_kind: Literal["disabled", "keycloak"] = "disabled"
     keycloak_base_url: str = ""

@@ -582,9 +582,18 @@ def derive_offboarding_obligations(
         )
 
     obligations: list[AdministrativeObligation] = []
+    effect_order = {
+        ("iam", "identity.disable"): 0,
+        ("iam", "sessions.revoke"): 1,
+        ("hris", "employee.deactivate"): 2,
+    }
     for template in sorted(
         evaluation.allowed_effects,
-        key=lambda item: (item.target_system, item.operation, item.authority_class.value),
+        key=lambda item: (
+            effect_order.get((item.target_system, item.operation), 99),
+            item.target_system,
+            item.operation,
+        ),
     ):
         effect_state = {
             "employee.deactivate": {"active": False},

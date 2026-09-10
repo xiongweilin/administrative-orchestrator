@@ -186,6 +186,26 @@ def test_expire_operations_require_a_reason() -> None:
         )
 
 
+def test_principal_deactivation_is_replay_stable_at_effective_time() -> None:
+    _, authority, lifecycle, _, _ = _setup()
+    effective_at = _BASELINE + timedelta(days=8)
+    first = lifecycle.deactivate_principal(
+        "person:departing",
+        actor_principal_id="service:administrative-orchestrator",
+        reason="offboarding effective time reached",
+        at=effective_at,
+    )
+    second = lifecycle.deactivate_principal(
+        "person:departing",
+        actor_principal_id="service:administrative-orchestrator",
+        reason="offboarding effective time reached",
+        at=effective_at,
+    )
+    assert second == first
+    assert authority.get_principal("person:departing") is None
+    assert len([item for item in lifecycle.list_events() if item.event_id == first.event_id]) == 1
+
+
 def test_expire_endpoints_record_events_and_fail_closed(monkeypatch) -> None:
     from types import SimpleNamespace
 

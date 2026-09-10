@@ -70,6 +70,7 @@ def test_policy_and_decision_commit_workflow_wake_events() -> None:
     assert events[0].event_type == "workflow.case_changed"
     assert events[0].aggregate_id == str(awaiting.case_id)
     assert events[0].payload["cause"] == "policy_evaluated"
+    assert events[0].payload["case_kind"] == "employee-onboarding"
     mark_dispatched(store, events[0].event_id)
 
     decision = Decision(

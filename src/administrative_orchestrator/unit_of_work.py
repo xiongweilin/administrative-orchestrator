@@ -124,6 +124,7 @@ class AdministrativeUnitOfWork:
                 aggregate_id=str(after.case_id),
                 payload={
                     "case_id": str(after.case_id),
+                    "case_kind": after.case_kind,
                     "case_version": after.version,
                     "authority_epoch": after.authority_epoch,
                     "status": after.status.value,
@@ -194,6 +195,7 @@ class AdministrativeUnitOfWork:
                 aggregate_id=str(after.case_id),
                 payload={
                     "case_id": str(after.case_id),
+                    "case_kind": after.case_kind,
                     "case_version": after.version,
                     "authority_epoch": after.authority_epoch,
                     "status": after.status.value,
@@ -321,6 +323,7 @@ class AdministrativeUnitOfWork:
                 aggregate_id=str(after.case_id),
                 payload={
                     "case_id": str(after.case_id),
+                    "case_kind": after.case_kind,
                     "case_version": after.version,
                     "authority_epoch": after.authority_epoch,
                     "status": after.status.value,

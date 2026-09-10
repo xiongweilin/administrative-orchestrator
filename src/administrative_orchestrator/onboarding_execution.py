@@ -150,37 +150,11 @@ class OnboardingExecutionEngine:
                     raise TransitionError("governed completion requires an obligation set")
                 completion = assess_onboarding_completion(effects, outcomes)
             else:
-                completion = assess_onboarding_completion(
-                    obligation_set,
-                    effects,
-                    outcomes,
-                    links=links,
+                completion = self._assess_completion(
+                    obligation_set, effects, outcomes, links
                 )
             if not completion.satisfied:
-                reconciling = begin_reconciliation(case)
-                self._persist_case_transition(
-                    case,
-                    reconciling,
-                    "case.completion_blocked",
-                    {
-                        "requirement_id": completion.requirement_id,
-                        "blocking_reasons": list(completion.blocking_reasons),
-                        "missing_effect_ids": [str(item) for item in completion.missing_effect_ids],
-                        "missing_outcome_kinds": list(completion.missing_outcome_kinds),
-                        "missing_obligation_ids": [
-                            str(item) for item in completion.missing_obligation_ids
-                        ],
-                        "uncovered_obligation_ids": [
-                            str(item) for item in completion.uncovered_obligation_ids
-                        ],
-                        "governance_basis_id": (
-                            str(completion.governance_basis_id)
-                            if completion.governance_basis_id
-                            else None
-                        ),
-                    },
-                )
-                return reconciling
+                return self._handle_completion_blocked(case, completion)
 
             completed = complete_verified_case(
                 case,
@@ -518,6 +492,48 @@ class OnboardingExecutionEngine:
                 )
             return None
         return self.governance.revalidate(basis, case)
+
+    def _assess_completion(self, obligation_set, effects, outcomes, links):
+        return assess_onboarding_completion(
+            obligation_set,
+            effects,
+            outcomes,
+            links=links,
+        )
+
+    def _handle_completion_blocked(self, case, completion):
+        reconciling = begin_reconciliation(case)
+        self._persist_case_transition(
+            case,
+            reconciling,
+            "case.completion_blocked",
+            self._completion_blocker_payload(completion),
+        )
+        return reconciling
+
+    @staticmethod
+    def _completion_blocker_payload(completion):
+        return {
+            "requirement_id": completion.requirement_id,
+            "blocking_reasons": list(completion.blocking_reasons),
+            "missing_effect_ids": [str(item) for item in completion.missing_effect_ids],
+            "missing_outcome_kinds": list(completion.missing_outcome_kinds),
+            "missing_obligation_ids": [
+                str(item) for item in completion.missing_obligation_ids
+            ],
+            "uncovered_obligation_ids": [
+                str(item) for item in completion.uncovered_obligation_ids
+            ],
+            "missing_domain_state_obligation_ids": [
+                str(item)
+                for item in completion.missing_domain_state_obligation_ids
+            ],
+            "governance_basis_id": (
+                str(completion.governance_basis_id)
+                if completion.governance_basis_id
+                else None
+            ),
+        }
 
     @staticmethod
     def _obligation_for_effect(

@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
+from uuid import UUID
 
 from ..messaging import OutboxEvent
 from ..providers.feishu import FEISHU_INTAKE_EVENT_TYPE
@@ -66,10 +67,27 @@ def execute_outbox_action(action: WorkflowWakeAction) -> None:
     """
     from dbos import DBOS, SetWorkflowID
 
-    from .definitions import onboarding_case_workflow
+    from ..config import get_settings
+    from ..persistence import SqlStore
+    from .definitions import offboarding_case_workflow, onboarding_case_workflow
+
+    case_kind = str(action.message.get("case_kind") or "").strip()
+    if not case_kind:
+        settings = get_settings()
+        case = SqlStore(settings.worker_database_url or settings.database_url).get_case(
+            UUID(action.workflow_id)
+        )
+        case_kind = case.case_kind if case is not None else ""
+    workflows = {
+        "employee-onboarding": onboarding_case_workflow,
+        "employee-offboarding": offboarding_case_workflow,
+    }
+    workflow = workflows.get(case_kind)
+    if workflow is None:
+        raise ValueError(f"no DBOS workflow for case kind {case_kind!r}")
 
     with SetWorkflowID(action.workflow_id):
-        DBOS.start_workflow(onboarding_case_workflow, case_id=action.workflow_id)
+        DBOS.start_workflow(workflow, case_id=action.workflow_id)
     DBOS.send(
         destination_id=action.workflow_id,
         topic=action.topic,

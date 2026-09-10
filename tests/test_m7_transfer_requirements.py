@@ -210,12 +210,32 @@ def test_missing_successor_stays_explicit_without_removing_revocation_obligation
 
 
 def test_successor_must_be_active_distinct_and_current_in_scope() -> None:
-    _, authority, policy, case, *_ = _setup(successor="person:successor")
+    store, authority, policy, case, *_ = _setup(successor="person:successor")
+    governance_basis_id = uuid4()
     qualified = derive_transfer_requirements(
-        case, policy, authority, governance_basis_id=uuid4()
+        case, policy, authority, governance_basis_id=governance_basis_id
     )
     manager = next(item for item in qualified if item.role == "manager")
     assert manager.status is TransferRequirementStatus.SUCCESSOR_QUALIFIED
+    repository = TransferRequirementRepository(store)
+    repository.put_all(qualified)
+    fulfilled = repository.mark_fulfilled(
+        manager.requirement_id,
+        successor_principal_id="person:successor",
+    )
+    assert fulfilled.status is TransferRequirementStatus.FULFILLED
+    assert (
+        repository.mark_fulfilled(
+            manager.requirement_id,
+            successor_principal_id="person:successor",
+        )
+        == fulfilled
+    )
+    with pytest.raises(TransferError, match="does not match"):
+        repository.mark_fulfilled(
+            manager.requirement_id,
+            successor_principal_id="person:outsider",
+        )
 
     _, authority, policy, case, *_ = _setup(successor="person:outsider")
     wrong_scope = derive_transfer_requirements(
