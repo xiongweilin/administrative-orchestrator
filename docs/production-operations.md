@@ -78,8 +78,11 @@ signed-header) material, the canonical message read credential, the model
 gateway, the durable artifact root, and the current Feishu-to-Administrative
 identity bindings. The worker runtime must inject the configured Feishu
 processor; the relay intentionally fails closed when processing dependencies
-are absent. These are deployment prerequisites, not evidence that the
-external systems have already run successfully.
+are absent. The production Compose reference mounts
+`administrative-intake-artifacts` at the configured artifact root for the
+worker; the deployment backup policy must include that volume alongside the
+Administrative database. These are deployment prerequisites, not evidence
+that the external systems have already run successfully.
 
 Run the static deployment gate before starting the application processes:
 
@@ -109,7 +112,8 @@ Secret values belong in the deployment secret manager/environment. Domain record
 
 ## Startup sequence
 
-1. Provision PostgreSQL and durable Kernel storage.
+1. Provision PostgreSQL, durable Kernel storage, and the durable M6 artifact
+   volume when intake is enabled.
 2. Restore required secrets from the platform secret manager.
 3. Run `alembic upgrade head` against the Administrative PostgreSQL database.
 4. Ensure the DBOS system database exists and is reachable.
