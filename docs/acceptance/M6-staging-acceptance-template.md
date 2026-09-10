@@ -47,8 +47,8 @@ references.
 
 | Gate | Required staging observation | Status | Evidence reference / notes |
 | --- | --- | --- | --- |
-| A — Feishu authenticity | URL verification and a valid staging callback are accepted; invalid token/signature or stale signed callback is rejected; no unverified event is enqueued. | `[ ]` | `[reference]` |
-| B — Durable ingress | One accepted callback creates one verified `IntakeReceipt` and one `intake.feishu.received` outbox event in the same durable path; duplicate delivery is idempotent; conflicting delivery identity fails closed. | `[ ]` | `[reference]` |
+| A — Feishu authenticity | The official Feishu SDK long connection is active and a real event is received; the gateway forwards only trusted metadata/token, Administrative accepts a valid token, wrong/missing tokens are rejected, and a forged metadata envelope creates no receipt. URL verification and signed HTTP callback headers are `N/A` for this topology unless that transport is separately enabled. | `[ ]` | `[reference]` |
+| B — Durable ingress | One accepted long-connection metadata handoff creates one verified `IntakeReceipt` and one `intake.feishu.received` outbox event in the same durable path; duplicate delivery is idempotent; conflicting delivery identity fails closed. | `[ ]` | `[reference]` |
 | C — No-body boundary | Receipt, outbox payload, ordinary logs, and this record contain metadata/digests/references only; no callback body, message text, document text, token, or model content is copied. | `[ ]` | `[reference]` |
 | D — Canonical source lineage | The worker fetches the canonical message after acceptance and verifies provider tenant, message, sender, and thread identity; `SourceArtifact`/`EvidenceSpan` lineage is durable and digest-addressed. | `[ ]` | `[reference]` |
 | E — Artifact integrity foundation | A non-sensitive fixture/reference is stored, read, and digest-verified; missing/corrupt/unavailable artifact behavior fails closed. Record digest/reference only, never the fixture body. | `[ ]` | `[reference]` |
@@ -70,7 +70,7 @@ Do not infer results for a provider or system that was not actually exercised.
 
 | System / boundary | Fresh result | Protected evidence reference | Owner / next action |
 | --- | --- | --- | --- |
-| Feishu callback + canonical API | `[PASS/FAIL/PENDING]` | `[reference]` | `[owner/action]` |
+| Feishu SDK long connection + canonical API | `[PASS/FAIL/PENDING]` | `[reference]` | `[owner/action]` |
 | Identity provider / identity binding | `[PASS/FAIL/PENDING]` | `[reference]` | `[owner/action]` |
 | Odoo authoritative reader | `[PASS/FAIL/PENDING]` | `[reference]` | `[owner/action]` |
 | Keycloak identity/connector path | `[PASS/FAIL/PENDING]` | `[reference]` | `[owner/action]` |

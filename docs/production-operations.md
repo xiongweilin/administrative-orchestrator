@@ -41,7 +41,7 @@ Administrative API -------- Operations API / Console
 The M6 intake path is adjacent to the trusted-action path:
 
 ```text
-Feishu callback
+Feishu official SDK long connection
   -> verified metadata-only durable ingress
   -> Administrative PostgreSQL receipt/outbox
   -> worker canonical fetch
@@ -51,7 +51,7 @@ Feishu callback
   -> existing IngressReceipt / AdministrativeRequest / M5 case path
 ```
 
-The callback does not wait for canonical fetch or model processing. No Feishu
+The long-connection metadata handoff does not wait for canonical fetch or model processing. No Feishu
 message body or extracted content belongs in the receipt, outbox payload, or
 ordinary operational logs.
 
@@ -73,16 +73,29 @@ The production control plane must satisfy all of these before startup:
 - `PORTABLE_RUNTIME_ADMIN_PRODUCTION_STATE_PATH` is an absolute path on durable single-writer storage.
 
 When M6 intake is enabled, the deployment must additionally provide
-configuration references for the Feishu callback verification (and optional
-signed-header) material, the canonical message read credential, the model
-gateway, the durable artifact root, and the current Feishu-to-Administrative
-identity bindings. The worker runtime must inject the configured Feishu
+configuration references for the Feishu long-connection token boundary, the
+worker's app credentials for dynamic tenant-token canonical reads, the
+candidate-only model gateway, the durable artifact root, and the current
+Feishu-to-Administrative identity bindings. The app credentials, ingress
+verification token, gateway transport credentials, and model credentials must
+remain separate owners. A static `ADMIN_FEISHU_ACCESS_TOKEN` is only a
+test/manual compatibility override; staging/production uses the dynamic
+tenant-token provider. The worker runtime must inject the configured Feishu
 processor; the relay intentionally fails closed when processing dependencies
 are absent. The production Compose reference mounts
 `administrative-intake-artifacts` at the configured artifact root for the
 worker; the deployment backup policy must include that volume alongside the
 Administrative database. These are deployment prerequisites, not evidence
 that the external systems have already run successfully.
+
+For local Windows staging, the Feishu verification token has a separate
+Credential Manager owner `Agent:Metratio:AdministrativeFeishuVerificationToken`.
+Use `deploy/windows/Set-AdministrativeM6FeishuVerificationToken.ps1` with its
+hidden-input `store-and-materialize` mode to create a task-scoped
+`.env.m6-secrets` file outside the repository. Do not pass the token as a CLI
+argument, place it in chat, or commit the materialized file. This token is not
+the worker's Feishu app secret, canonical-read tenant token, gateway HMAC, or
+control-plane key.
 
 Run the static deployment gate before starting the application processes:
 
@@ -376,7 +389,7 @@ Record at minimum:
 
 For M6, also record only non-sensitive evidence references for:
 
-- Feishu callback verification, duplicate delivery, canonical fetch, and
+- Feishu long-connection authenticity, duplicate delivery, canonical fetch, and
   metadata-only durable ingress;
 - source/artifact/evidence digest lineage and artifact corruption/missing
   object fail-closed behavior;
