@@ -184,3 +184,83 @@ def test_expire_operations_require_a_reason() -> None:
             actor_principal_id='person:admin',
             reason='',
         )
+
+
+def test_expire_endpoints_record_events_and_fail_closed(monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    from fastapi import HTTPException
+
+    from administrative_orchestrator import operations_api
+
+    _, _, lifecycle, assignment, delegation = _setup()
+    monkeypatch.setattr(
+        operations_api,
+        '_actor',
+        lambda request: SimpleNamespace(principal_id='person:admin'),
+    )
+    monkeypatch.setattr(
+        operations_api,
+        '_require',
+        lambda actor, permission, case=None: None,
+    )
+    monkeypatch.setattr(operations_api, '_lifecycle', lifecycle)
+
+    role_event = operations_api.expire_role_assignment(
+        assignment.assignment_id,
+        operations_api.ExpireAuthorityBody(reason='offboarding'),
+        None,
+    )
+    assert role_event.event_type == 'role_assignment.expired'
+
+    delegation_event = operations_api.expire_delegation(
+        delegation.delegation_id,
+        operations_api.ExpireAuthorityBody(reason='offboarding'),
+        None,
+    )
+    assert delegation_event.event_type == 'delegation.expired'
+
+    with pytest.raises(HTTPException) as excinfo:
+        operations_api.expire_role_assignment(
+            uuid4(),
+            operations_api.ExpireAuthorityBody(reason='missing target'),
+            None,
+        )
+    assert excinfo.value.status_code == 409
+
+
+def test_expire_event_replay_with_different_reason_fails_closed() -> None:
+    _, _, lifecycle, assignment, _ = _setup()
+    effective_at = _BASELINE + timedelta(days=3)
+    lifecycle.expire_role_assignment(
+        assignment.assignment_id,
+        actor_principal_id='person:admin',
+        reason='first reason',
+        at=effective_at,
+    )
+    with pytest.raises(AuthorityError, match='different semantics'):
+        lifecycle.expire_role_assignment(
+            assignment.assignment_id,
+            actor_principal_id='person:admin',
+            reason='different reason',
+            at=effective_at,
+        )
+
+
+def test_identity_lifecycle_metrics_cover_expiry_paths() -> None:
+    from administrative_orchestrator import observability
+
+    def value(event: str) -> float:
+        return observability.IDENTITY_LIFECYCLE.labels(event=event)._value.get()
+
+    before_role = value('role_assignment.expired')
+    observability._record_operations_semantics(
+        'POST', '/v1/operations/role-assignments/abc/expire', 200
+    )
+    assert value('role_assignment.expired') == before_role + 1
+
+    before_delegation = value('delegation.expired')
+    observability._record_operations_semantics(
+        'POST', '/v1/operations/delegations/abc/expire', 200
+    )
+    assert value('delegation.expired') == before_delegation + 1
