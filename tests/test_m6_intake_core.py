@@ -13,6 +13,7 @@ from administrative_orchestrator.intake.models import (
     CandidateAuthority,
     CandidateCaseUpdate,
     CandidateFactAssertion,
+    CandidateStatus,
     EvidenceSpan,
     IntakeAssessment,
     IntakeDisposition,
@@ -23,6 +24,8 @@ from administrative_orchestrator.intake.models import (
     SourceArtifact,
 )
 from administrative_orchestrator.intake.repository import (
+    CandidateAdministrativeRequestRow,
+    CandidateConflict,
     IntakeReceiptConflict,
     IntakeRepository,
     PromotionConflict,
@@ -266,6 +269,33 @@ def test_candidate_fact_replay_ignores_only_creation_timestamp() -> None:
 
     assert replay == first
     assert repository.get_candidate_fact(first.candidate_fact_id) == first
+
+
+def test_candidate_replay_ignores_mutated_admission_status() -> None:
+    store = SqlStore("sqlite+pysqlite:///:memory:")
+    store.init_schema()
+    repository = IntakeRepository(store)
+    candidate = CandidateAdministrativeRequest(
+        conversation_ref="test-provider/tenant:test/thread:1",
+        interpretation_refs=(uuid4(),),
+        candidate_requester="external:person:1",
+        candidate_intent="onboard employee:1",
+        source_refs=(uuid4(),),
+    )
+    first = repository.append_candidate_request(candidate)
+    with store.sessions.begin() as db:
+        row = db.get(CandidateAdministrativeRequestRow, first.candidate_id)
+        assert row is not None
+        row.status = CandidateStatus.ADMITTED.value
+
+    replay = repository.append_candidate_request(candidate)
+    assert replay.status is CandidateStatus.ADMITTED
+    assert replay == first.model_copy(update={"status": CandidateStatus.ADMITTED})
+
+    with pytest.raises(CandidateConflict):
+        repository.append_candidate_request(
+            candidate.model_copy(update={"candidate_intent": "different intent"})
+        )
 
 
 def test_promotion_is_idempotent_per_candidate_and_request() -> None:

@@ -356,6 +356,16 @@ def _candidate_fact_semantics(fact: CandidateFactAssertion) -> dict[str, Any]:
     return fact.model_dump(mode="json", exclude={"created_at"})
 
 
+def _candidate_semantics(candidate: CandidateAdministrativeRequest) -> dict[str, Any]:
+    """Return the immutable candidate fields used for idempotency.
+
+    ``status`` is mutable review/admission state (active, admitted, superseded,
+    rejected) and must not turn a replay of the same candidate lineage into a
+    semantic conflict.
+    """
+    return candidate.model_dump(mode="json", exclude={"status"})
+
+
 def _candidate_from_row(row: CandidateAdministrativeRequestRow) -> CandidateAdministrativeRequest:
     return CandidateAdministrativeRequest.model_validate(
         {
@@ -726,7 +736,7 @@ class IntakeRepository:
             existing = db.get(CandidateAdministrativeRequestRow, candidate.candidate_id)
             if existing is not None:
                 restored = _candidate_from_row(existing)
-                if restored != candidate:
+                if _candidate_semantics(restored) != _candidate_semantics(candidate):
                     raise CandidateConflict("candidate identity was reused with different semantics")
                 return restored
             db.add(
