@@ -204,8 +204,6 @@ def test_odoo_authoritative_reader_maps_employee_department_and_manager(monkeypa
 
     def execute(model, method, args, kwargs=None):
         del method, args, kwargs
-        if model == "ir.model":
-            return 1
         if model == "hr.employee":
             return [
                 {
@@ -267,15 +265,17 @@ def test_odoo_authoritative_reader_tolerates_absent_contract_model(monkeypatch) 
 
     def execute(model, method, args, kwargs=None):
         del method, args, kwargs
-        if model == "ir.model":
-            return 0
+        if model == "hr.contract":
+            raise OdooSourceError(
+                "Odoo JSON-RPC returned an application error: Object hr.contract does not exist"
+            )
         if model == "hr.employee":
             return [
                 {
                     "id": 42,
                     "name": "Alice",
-                    "department_id": [7, "Engineering"],
-                    "parent_id": None,
+                    "department_id": False,
+                    "parent_id": False,
                     "work_email": "alice@example.test",
                     "active": True,
                     "write_date": "2026-09-09 09:00:00",
@@ -287,7 +287,8 @@ def test_odoo_authoritative_reader_tolerates_absent_contract_model(monkeypatch) 
 
     employee = source.read_employee("odoo:hr.employee:42")
     assert employee.value["present"] is True
-    assert employee.value["department_ref"] == "odoo:hr.department:7"
+    assert employee.value["department_ref"] is None
+    assert employee.value["manager_ref"] is None
     assert employee.value["employment_state"] is None
     assert employee.value["employment_type"] is None
     assert employee.value["start_date"] is None
