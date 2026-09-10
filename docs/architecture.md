@@ -95,12 +95,13 @@ human-confirmed PromotionRecord
 existing IngressReceipt -> existing M5 AdministrativeRequest / Case path
 ```
 
-The current Feishu reference slice makes the first handoff durable before any
-provider content is read:
+The current Feishu reference slice uses the official SDK long connection and
+makes the first handoff durable before any provider content is read:
 
 ```text
-Feishu callback
-  -> token/signature/time verification
+Feishu official SDK long connection
+  -> trusted metadata-only gateway handoff
+  -> token verification at the Administrative boundary
   -> IntakeReceipt + intake.feishu.received outbox event (one transaction)
   -> asynchronous canonical message fetch
   -> ArtifactStore + SourceArtifact + EvidenceSpan
@@ -110,10 +111,12 @@ Feishu callback
 
 The receipt and outbox payload carry delivery metadata only; they do not carry
 the message body or extracted content. The configured runtime builds the
-callback boundary and worker pipeline from deployment settings, and the relay
-fails closed when processing dependencies are absent. This repository
-therefore documents the durable ingress and runtime boundary, not a claim that
-a real Feishu deployment has already been exercised.
+metadata boundary and worker pipeline from deployment settings, and the relay
+fails closed when processing dependencies are absent. URL-verification and
+signed HTTP callback behavior are outside this reference slice unless a
+separate callback transport is enabled. This repository therefore documents
+the durable ingress and runtime boundary, not a claim that a real Feishu
+deployment has already been exercised.
 
 Inbox conversations are keyed by provider, tenant, and provider thread.
 Provider-native sender identity is resolved through the current Administrative
