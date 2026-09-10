@@ -39,17 +39,18 @@ docker compose --env-file .env.example up -d agent-kernel api operations-api wor
 ```
 
 The verification token is intentionally not in `.env.example`. Materialize it
-with the repository-owned Windows helper after the user has entered it into
-Windows Credential Manager:
+with the repository-owned Windows helper after the user has entered the token
+from the Feishu app configuration into Windows Credential Manager:
 
 ```powershell
 pwsh -File ..\windows\Set-AdministrativeM6FeishuVerificationToken.ps1 `
   -Command store-and-materialize
 ```
 
-The helper writes only the task-scoped `.env.m6-secrets` file under this
-directory and never prints the value. The gateway app ID and app secret are
-read in-process from the existing external `feishu_secrets` volume.
+The helper stores the token in Windows Credential Manager and writes only the
+task-scoped `.env.m6-secrets` file under this directory; it never prints the
+value. The gateway app ID and app secret are read in-process from the existing
+external `feishu_secrets` volume.
 
 ## Runtime checks
 

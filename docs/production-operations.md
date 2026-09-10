@@ -98,11 +98,12 @@ that the external systems have already run successfully.
 For local Windows staging, the Feishu verification token has a separate
 Credential Manager owner `Agent:Metratio:AdministrativeFeishuVerificationToken`.
 Use `deploy/windows/Set-AdministrativeM6FeishuVerificationToken.ps1` with its
-hidden-input `store-and-materialize` mode to create a task-scoped
-`.env.m6-secrets` file outside the repository. Do not pass the token as a CLI
-argument, place it in chat, or commit the materialized file. This token is not
-the worker's Feishu app secret, canonical-read tenant token, gateway HMAC, or
-control-plane key.
+hidden-input `store-and-materialize` mode to import the token configured for
+the Feishu application and create a task-scoped `.env.m6-secrets` file outside
+the repository. The helper stores the token in Windows Credential Manager and
+never prints it. Do not pass the token as a CLI argument, place it in chat, or
+commit the materialized file. This token is not the worker's Feishu app
+secret, canonical-read tenant token, gateway HMAC, or control-plane key.
 
 Run the static deployment gate before starting the application processes:
 
