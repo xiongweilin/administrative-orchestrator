@@ -92,6 +92,9 @@ services:
       ADMIN_AUTH_MODE: "development"
       ADMIN_EXTERNAL_EFFECTS_ENABLED: "true"
       ADMIN_SANDBOX_BASE_URL: http://sandbox:8010
+      ADMIN_FEISHU_BASE_URL: ${ADMIN_FEISHU_BASE_URL:-https://open.feishu.cn}
+      ADMIN_FEISHU_VERIFICATION_TOKEN: ${ADMIN_FEISHU_VERIFICATION_TOKEN:-}
+      ADMIN_FEISHU_ENCRYPT_KEY: ${ADMIN_FEISHU_ENCRYPT_KEY:-}
     ports:
       - "127.0.0.1:${API_PORT:-8000}:8000"
     depends_on:
@@ -119,6 +122,13 @@ services:
       ADMIN_EXTERNAL_EFFECTS_ENABLED: "true"
       ADMIN_SANDBOX_BASE_URL: http://sandbox:8010
       ADMIN_WORKER_POLL_SECONDS: ${WORKER_POLL_SECONDS:-0.25}
+      ADMIN_FEISHU_BASE_URL: ${ADMIN_FEISHU_BASE_URL:-https://open.feishu.cn}
+      ADMIN_FEISHU_ACCESS_TOKEN: ${ADMIN_FEISHU_ACCESS_TOKEN:-}
+      ADMIN_FEISHU_ARTIFACT_ROOT: /var/lib/administrative/intake-artifacts
+      ADMIN_INTAKE_MODEL_URL: ${ADMIN_INTAKE_MODEL_URL:-}
+      ADMIN_INTAKE_MODEL_API_KEY: ${ADMIN_INTAKE_MODEL_API_KEY:-}
+    volumes:
+      - administrative-intake-artifacts:/var/lib/administrative/intake-artifacts
     depends_on:
       foundation-bootstrap:
         condition: service_completed_successfully
@@ -128,3 +138,4 @@ services:
 volumes:
   administrative-pgdata:
   administrative-sandbox-pgdata:
+  administrative-intake-artifacts:
