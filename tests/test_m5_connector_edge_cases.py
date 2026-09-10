@@ -356,7 +356,7 @@ async def test_keycloak_invoke_existing_create_and_rejection_paths(monkeypatch) 
     assert existing.external_operation_ref == "keycloak:user:user-42"
 
     connector = _keycloak_connector()
-    find = AsyncMock(side_effect=[[], [{"id": "user-created"}]])
+    find = AsyncMock(side_effect=[[], [], [{"id": "user-created"}]])
     request = AsyncMock(return_value=httpx.Response(201))
     monkeypatch.setattr(connector, "_find_by_attribute", find)
     monkeypatch.setattr(connector, "_request", request)
