@@ -133,10 +133,14 @@ implementation includes the Administrative Intake Plane contract and durable
 core, the Feishu metadata-only durable ingress and asynchronous pipeline, the
 Operations review surface with the explicit human-confirmed
 `bridge_to_m5` onboarding path, and the content-addressed `ArtifactStore`
-foundation. The bridge preserves admitted intake facts as `CLAIM`; it does not
-turn a candidate or a human confirmation into `AUTHORITATIVE` truth. The
-authoritative refresh/revalidation path remains owned by the existing M5 HRIS
-reader and governance checks.
+foundation wired to Feishu canonical file/image attachments. The production
+Compose worker now mounts the named artifact volume and receives the optional
+Feishu/model runtime references. The bridge preserves admitted intake facts as
+`CLAIM`; it does not turn a candidate or a human confirmation into
+`AUTHORITATIVE` truth. The authoritative refresh/revalidation path remains
+owned by the existing M5 HRIS reader and governance checks. This implementation
+wiring is not real-provider staging evidence and does not claim OCR,
+document-to-Work behavior, or a completed provider-to-M5 run.
 
 M6 is **in progress and is not complete until real staging evidence exists**.
 Repository tests and local fixtures do not constitute real Feishu, Odoo,

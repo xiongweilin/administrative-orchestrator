@@ -27,6 +27,11 @@ x-admin-common: &admin-common
     ADMIN_KEYCLOAK_READER_SECRET: ${ADMIN_KEYCLOAK_READER_SECRET:?inject ADMIN_KEYCLOAK_READER_SECRET}
     ADMIN_AUTHORITATIVE_FACT_MAX_AGE_SECONDS: ${ADMIN_AUTHORITATIVE_FACT_MAX_AGE_SECONDS:-300}
     ADMIN_CONNECTOR_TIMEOUT_SECONDS: ${ADMIN_CONNECTOR_TIMEOUT_SECONDS:-10}
+    # Optional M6 provider boundary. Empty credentials keep intake disabled;
+    # the API and worker fail closed until the staging operator configures it.
+    ADMIN_FEISHU_BASE_URL: ${ADMIN_FEISHU_BASE_URL:-https://open.feishu.cn}
+    ADMIN_FEISHU_VERIFICATION_TOKEN: ${ADMIN_FEISHU_VERIFICATION_TOKEN:-}
+    ADMIN_FEISHU_ENCRYPT_KEY: ${ADMIN_FEISHU_ENCRYPT_KEY:-}
   depends_on:
     migrate:
       condition: service_completed_successfully
@@ -155,6 +160,12 @@ services:
       ADMIN_WORKER_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:?set POSTGRES_USER}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-administrative}
       ADMIN_DBOS_SYSTEM_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:?set POSTGRES_USER}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/administrative_dbos
       ADMIN_WORKER_POLL_SECONDS: ${ADMIN_WORKER_POLL_SECONDS:-1}
+      ADMIN_FEISHU_ACCESS_TOKEN: ${ADMIN_FEISHU_ACCESS_TOKEN:-}
+      ADMIN_FEISHU_ARTIFACT_ROOT: ${ADMIN_FEISHU_ARTIFACT_ROOT:-/var/lib/administrative/intake-artifacts}
+      ADMIN_INTAKE_MODEL_URL: ${ADMIN_INTAKE_MODEL_URL:-}
+      ADMIN_INTAKE_MODEL_API_KEY: ${ADMIN_INTAKE_MODEL_API_KEY:-}
+    volumes:
+      - administrative-intake-artifacts:/var/lib/administrative/intake-artifacts
 
   operations-console:
     build:
@@ -175,3 +186,4 @@ services:
 volumes:
   administrative-production-pgdata:
   administrative-kernel-state:
+  administrative-intake-artifacts:
