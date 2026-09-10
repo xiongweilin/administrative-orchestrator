@@ -178,3 +178,22 @@ def test_production_profile_requires_https_oidc_and_asymmetric_algorithms() -> N
         oidc_allowed_algorithms="RS256,ES256",
     )
     assert settings.authority_enforcement_enabled is True
+
+
+def test_staging_profile_requires_oidc_and_allows_explicit_local_http() -> None:
+    settings = Settings(
+        runtime_profile="staging",
+        auth_mode="oidc",
+        oidc_issuer="http://keycloak:8080/realms/m6",
+        oidc_audience=AUDIENCE,
+        oidc_allow_insecure_http=True,
+    )
+    assert settings.authority_enforcement_enabled is True
+
+    with pytest.raises(ValueError, match="HTTP requires"):
+        Settings(
+            runtime_profile="staging",
+            auth_mode="oidc",
+            oidc_issuer="http://keycloak:8080/realms/m6",
+            oidc_audience=AUDIENCE,
+        )

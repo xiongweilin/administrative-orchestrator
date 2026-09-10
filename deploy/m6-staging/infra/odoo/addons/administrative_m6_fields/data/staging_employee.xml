@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo noupdate="1">
+  <record id="employee_m6_authoritative_subject" model="hr.employee">
+    <field name="name">M6 authoritative staging subject</field>
+    <field name="work_email">m6-subject@staging.invalid</field>
+    <field name="active">True</field>
+  </record>
+</odoo>
