@@ -5,6 +5,7 @@ from uuid import uuid4
 
 import pytest
 from pydantic import ValidationError
+from sqlalchemy import text
 
 from administrative_orchestrator.domain import AdministrativeRequest
 from administrative_orchestrator.intake.models import (
@@ -30,6 +31,10 @@ from administrative_orchestrator.intake.repository import (
     IntakeRepository,
     PromotionConflict,
     SourceArtifactConflict,
+)
+from administrative_orchestrator.onboarding_admission import (
+    CandidateOnboardingAdmissionService,
+    OnboardingAdmissionError,
 )
 from administrative_orchestrator.persistence import SqlStore
 
@@ -296,6 +301,55 @@ def test_candidate_replay_ignores_mutated_admission_status() -> None:
         repository.append_candidate_request(
             candidate.model_copy(update={"candidate_intent": "different intent"})
         )
+
+
+def test_onboarding_bridge_rejects_invalid_facts_before_creating_state() -> None:
+    store = SqlStore("sqlite+pysqlite:///:memory:")
+    store.init_schema()
+    repository = IntakeRepository(store)
+    artifact = repository.append_source_artifact(_artifact())
+    fact = repository.append_candidate_fact(
+        CandidateFactAssertion(
+            fact_key="employee_id",
+            value="employee:1",
+            authority=CandidateAuthority.CLAIM,
+            source_refs=(artifact.artifact_id,),
+            no_evidence_reason="staging regression fixture",
+        )
+    )
+    candidate = repository.append_candidate_request(
+        CandidateAdministrativeRequest(
+            conversation_ref="test-provider/tenant:test/thread:1",
+            interpretation_refs=(uuid4(),),
+            candidate_requester="external:person:1",
+            candidate_intent="onboard employee:1",
+            candidate_fact_refs=(fact.candidate_fact_id,),
+            source_refs=(artifact.artifact_id,),
+        )
+    )
+    assessment = IntakeAssessment(
+        candidate_ref=candidate.candidate_id,
+        disposition=IntakeDisposition.ADMIT,
+        authority=AssessmentAuthority.HUMAN_REVIEW,
+        is_final=True,
+        reviewer_principal_id="person:reviewer",
+        basis={"reviewed": True},
+    )
+    service = CandidateOnboardingAdmissionService(store, repository)
+    with pytest.raises(OnboardingAdmissionError):
+        service.promote_and_evaluate(
+            candidate,
+            assessment,
+            source_system="test-provider",
+            tenant_ref="tenant:test",
+            source_event_id="event:1",
+            requester_principal_id="person:reviewer",
+            subject_ref="employee:1",
+        )
+    assert repository.get_promotion(candidate.candidate_id) is None
+    with store.sessions() as db:
+        assert db.execute(text("select count(*) from administrative_case")).scalar_one() == 0
+        assert db.execute(text("select count(*) from administrative_request")).scalar_one() == 0
 
 
 def test_promotion_is_idempotent_per_candidate_and_request() -> None:
