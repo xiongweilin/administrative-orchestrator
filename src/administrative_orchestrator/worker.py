@@ -3,6 +3,8 @@ from __future__ import annotations
 import signal
 import sys
 import time
+from collections.abc import Callable
+from typing import Any
 
 from .config import get_settings
 from .messaging import (
@@ -22,7 +24,11 @@ def _request_stop(signum: int, frame: object) -> None:
     _stop = True
 
 
-def relay_once(store: SqlStore) -> tuple[int, int, int]:
+def relay_once(
+    store: SqlStore,
+    *,
+    feishu_processor: Callable[[dict[str, Any]], object] | None = None,
+) -> tuple[int, int, int]:
     """Recover stale claims and dispatch one bounded outbox batch."""
     from .workflows.relay import dispatch_outbox_event
 
@@ -37,7 +43,7 @@ def relay_once(store: SqlStore) -> tuple[int, int, int]:
     failed = 0
     for event in events:
         try:
-            dispatch_outbox_event(event)
+            dispatch_outbox_event(event, feishu_processor=feishu_processor)
         except Exception as exc:  # noqa: BLE001 - one poison event must not stop the worker
             mark_retry(
                 store,
@@ -52,10 +58,14 @@ def relay_once(store: SqlStore) -> tuple[int, int, int]:
     return recovered, dispatched, failed
 
 
-def run_forever(store: SqlStore) -> None:
+def run_forever(
+    store: SqlStore,
+    *,
+    feishu_processor: Callable[[dict[str, Any]], object] | None = None,
+) -> None:
     settings = get_settings()
     while not _stop:
-        relay_once(store)
+        relay_once(store, feishu_processor=feishu_processor)
         time.sleep(max(0.05, settings.worker_poll_seconds))
 
 

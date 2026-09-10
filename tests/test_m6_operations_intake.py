@@ -18,11 +18,17 @@ from administrative_orchestrator.intake.models import (
 )
 from administrative_orchestrator.intake.repository import IntakeRepository
 from administrative_orchestrator.persistence import SqlStore
+from administrative_orchestrator.policy_plane import (
+    PolicyRepository,
+    default_onboarding_policy_version,
+)
+from administrative_orchestrator.unit_of_work import AdministrativeUnitOfWork
 
 
 def _store_and_candidate() -> tuple[SqlStore, IntakeRepository, CandidateAdministrativeRequest]:
     store = SqlStore("sqlite+pysqlite:///:memory:")
     store.init_schema()
+    PolicyRepository(store).put_version(default_onboarding_policy_version())
     repository = IntakeRepository(store)
     candidate = repository.append_candidate_request(
         CandidateAdministrativeRequest(
@@ -57,6 +63,8 @@ def intake_console(monkeypatch: pytest.MonkeyPatch):
         external_subject="external:reviewer",
     )
     monkeypatch.setattr(operations_api, "_store", store)
+    monkeypatch.setattr(operations_api, "_policies", PolicyRepository(store))
+    monkeypatch.setattr(operations_api, "_uow", AdministrativeUnitOfWork(store))
     monkeypatch.setattr(operations_api, "_intake", repository)
     monkeypatch.setattr(
         operations_api,
@@ -104,6 +112,7 @@ def test_intake_console_supports_review_and_human_confirmed_promotion(intake_con
             "requester_principal_id": "person:requester",
             "case_kind": "employee-onboarding",
             "subject_ref": "employee:1",
+            "bridge_to_m5": True,
         },
     )
     assert promotion_response.status_code == 200

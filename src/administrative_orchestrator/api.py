@@ -4,6 +4,7 @@ from typing import Any
 from uuid import UUID
 
 from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
 
@@ -40,6 +41,7 @@ from .fact_transitions import replace_facts_for_reevaluation
 from .governance import GovernanceBasis, GovernanceRepository
 from .ingress import DuplicateIngressEvent, get_ingress_receipt
 from .inspection import list_authorizations, list_decisions, list_realizations
+from .intake.repository import IntakeReceiptConflict
 from .messaging import FailedOutboxEvent, list_failed_outbox
 from .obligations import ObligationRepository, OnboardingObligationSet
 from .persistence import ConcurrencyConflict, SqlStore
@@ -49,6 +51,12 @@ from .policy_plane import (
     PolicyRepository,
     PolicyVersionRecord,
     compile_onboarding_policy,
+)
+from .providers.feishu import (
+    FeishuAcceptance,
+    FeishuChallenge,
+    FeishuVerificationError,
+    FeishuWebhookBoundary,
 )
 from .service import (
     TransitionError,
@@ -72,10 +80,17 @@ _policies = PolicyRepository(_store)
 _governance = GovernanceRepository(_store)
 _obligations = ObligationRepository(_store)
 _authenticator = Authenticator(_store, _settings)
+_feishu_intake_boundary: FeishuWebhookBoundary | None = None
 if _settings.auto_create_schema:
     # UoW and repositories above intentionally import/register all domain row
     # models before metadata creation.
     _store.init_schema()
+
+
+def configure_feishu_intake(boundary: FeishuWebhookBoundary | None) -> None:
+    """Inject the provider verifier without making secrets part of app import."""
+    global _feishu_intake_boundary
+    _feishu_intake_boundary = boundary
 
 
 class CreateOnboardingCase(BaseModel):
@@ -185,6 +200,38 @@ def _existing_onboarding_response(
 @app.get("/healthz")
 def healthz() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.post("/v1/intake/feishu/events", status_code=202)
+async def receive_feishu_event(request: Request) -> JSONResponse:
+    """Accept only the authenticated Feishu envelope and enqueue metadata.
+
+    Canonical message fetch, artifact persistence, identity resolution, and
+    interpretation happen in the worker after this transaction commits.
+    """
+    boundary = _feishu_intake_boundary
+    if boundary is None:
+        raise HTTPException(status_code=503, detail="Feishu intake is not configured")
+    body = await request.body()
+    try:
+        accepted = boundary.accept(body, request.headers)
+    except FeishuVerificationError as exc:
+        raise HTTPException(status_code=401, detail="invalid Feishu callback") from exc
+    except IntakeReceiptConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    if isinstance(accepted, FeishuChallenge):
+        return JSONResponse(status_code=200, content={"challenge": accepted.challenge})
+    assert isinstance(accepted, FeishuAcceptance)
+    return JSONResponse(
+        status_code=202,
+        content={
+            "accepted": True,
+            "created": accepted.created,
+            "receipt_id": str(accepted.receipt.receipt_id),
+            "outbox_event_id": str(accepted.outbox_event_id),
+        },
+    )
 
 
 @app.get("/readyz")
