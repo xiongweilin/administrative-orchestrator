@@ -44,10 +44,12 @@ def build_hris_source(settings: Settings) -> HRFactSource | None:
     raise FactAcquisitionError(f"unsupported HRIS source kind {settings.hris_source_kind!r}")
 
 
-def merge_authoritative_onboarding_facts(
+def _merge_authoritative_facts(
     case: AdministrativeCase,
     record: AuthoritativeRecord,
     *,
+    source: str,
+    authoritative_keys: tuple[str, ...],
     owner: str = "service:administrative-orchestrator",
 ) -> FactSnapshot:
     """Overlay authoritative HRIS fields without promoting request-only inputs."""
@@ -59,16 +61,6 @@ def merge_authoritative_onboarding_facts(
 
     facts = dict(case.fact_snapshot.facts)
     assertions = _existing_assertions(case.fact_snapshot)
-    authoritative_keys = (
-        "employee_ref",
-        "department_ref",
-        "start_date",
-        "employment_type",
-        "manager_ref",
-        "work_email",
-        "active",
-        "employment_state",
-    )
     for key in authoritative_keys:
         if key not in record.value:
             continue
@@ -92,7 +84,7 @@ def merge_authoritative_onboarding_facts(
 
     digest = _snapshot_digest(facts, assertions)
     return FactSnapshot(
-        source="composite:employee-onboarding",
+        source=source,
         owner=owner,
         # Conservative compatibility aggregate: mixed snapshots are never
         # globally promoted above their least-authoritative constituent.
@@ -106,6 +98,43 @@ def merge_authoritative_onboarding_facts(
     )
 
 
+_ONBOARDING_AUTHORITATIVE_KEYS = (
+    "employee_ref",
+    "department_ref",
+    "start_date",
+    "employment_type",
+    "manager_ref",
+    "work_email",
+    "active",
+    "employment_state",
+)
+
+_OFFBOARDING_AUTHORITATIVE_KEYS = (
+    "employee_ref",
+    "department_ref",
+    "employment_type",
+    "termination_status",
+    "termination_effective_at",
+    "active",
+)
+
+
+def merge_authoritative_onboarding_facts(
+    case: AdministrativeCase,
+    record: AuthoritativeRecord,
+    *,
+    owner: str = "service:administrative-orchestrator",
+) -> FactSnapshot:
+    """Overlay authoritative HRIS fields without promoting request-only inputs."""
+    return _merge_authoritative_facts(
+        case,
+        record,
+        source="composite:employee-onboarding",
+        authoritative_keys=_ONBOARDING_AUTHORITATIVE_KEYS,
+        owner=owner,
+    )
+
+
 def merge_authoritative_offboarding_facts(
     case: AdministrativeCase,
     record: AuthoritativeRecord,
@@ -113,50 +142,12 @@ def merge_authoritative_offboarding_facts(
     owner: str = "service:administrative-orchestrator",
 ) -> FactSnapshot:
     """Overlay authoritative HRIS termination facts for employee offboarding."""
-    if case.fact_snapshot is None:
-        raise FactAcquisitionError("case has no current fact snapshot")
-    if not record.value.get("present", False):
-        raise FactAcquisitionError("authoritative HRIS reports employee absent")
-
-    facts = dict(case.fact_snapshot.facts)
-    assertions = _existing_assertions(case.fact_snapshot)
-    authoritative_keys = (
-        "employee_ref",
-        "department_ref",
-        "employment_type",
-        "termination_status",
-        "termination_effective_at",
-        "active",
-    )
-    for key in authoritative_keys:
-        if key not in record.value:
-            continue
-        value = record.value[key]
-        if value is None:
-            continue
-        facts[key] = value
-        assertions[key] = FactAssertion(
-            value=value,
-            authority=FactAuthority.AUTHORITATIVE,
-            source=record.source,
-            owner=owner,
-            source_ref=record.source_ref,
-            source_version=record.source_version,
-            observed_at=record.observed_at,
-            digest=_value_digest(value),
-        )
-
-    digest = _snapshot_digest(facts, assertions)
-    return FactSnapshot(
+    return _merge_authoritative_facts(
+        case,
+        record,
         source="composite:employee-offboarding",
+        authoritative_keys=_OFFBOARDING_AUTHORITATIVE_KEYS,
         owner=owner,
-        authority=FactAuthority.CLAIM,
-        source_ref=record.source_ref,
-        source_version=record.source_version,
-        observed_at=record.observed_at,
-        facts=facts,
-        assertions=assertions,
-        digest=digest,
     )
 
 
