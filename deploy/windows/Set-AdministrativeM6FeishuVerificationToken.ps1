@@ -76,7 +76,7 @@ function Write-VerificationToken {
 
     $pointer = [Runtime.InteropServices.Marshal]::SecureStringToCoTaskMemUnicode($SecureValue)
     try {
-        $bytes = [checked]($SecureValue.Length * 2)
+        $bytes = [uint32]($SecureValue.Length * 2)
         if ($bytes -eq 0) { throw 'Credential value cannot be empty.' }
         $credential = [AdministrativeFeishuCredential.NativeMethods+CREDENTIAL]::new()
         $credential.Type = 1
@@ -131,7 +131,8 @@ if ($Command -in @('materialize', 'store-and-materialize')) {
                 "ADMIN_FEISHU_VERIFICATION_TOKEN=$token`n",
                 $encoding
             )
-            & icacls.exe $resolvedOutput /inheritance:r /grant:r "$env:USERNAME:(R,W)" *> $null
+            $principal = "$env:USERDOMAIN\$env:USERNAME"
+            & icacls.exe $resolvedOutput /inheritance:r /grant:r "${principal}:(R,W)" *> $null
             if ($LASTEXITCODE -ne 0) {
                 throw 'Failed to restrict task-scoped env file permissions.'
             }
