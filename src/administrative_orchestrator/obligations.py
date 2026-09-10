@@ -9,9 +9,22 @@ from pydantic import Field
 from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Integer, String, Uuid, select
 from sqlalchemy.orm import Mapped, Session, mapped_column
 
-from .domain import AdministrativeCase, AuthorityClass, EffectRecord, UtcModel, utcnow
+from .authority import AuthorityRepository
+from .domain import (
+    AdministrativeCase,
+    AuthorityClass,
+    EffectRecord,
+    UtcModel,
+    normalize_datetime,
+    utcnow,
+)
 from .persistence import Base, SqlStore
-from .policy import PolicyEvaluation
+from .policy import OffboardingPolicy, PolicyEvaluation
+from .transfer import (
+    AdministrativeTransferRequirement,
+    TransferMode,
+    derive_transfer_requirements,
+)
 
 
 class ObligationError(RuntimeError):
@@ -531,6 +544,226 @@ def derive_onboarding_obligations(
     )
 
 
+def derive_offboarding_obligations(
+    case: AdministrativeCase,
+    evaluation: PolicyEvaluation,
+    policy: OffboardingPolicy,
+    authority_repository: AuthorityRepository,
+    *,
+    governance_basis_id: UUID,
+    transfer_requirements: tuple[AdministrativeTransferRequirement, ...] | None = None,
+) -> AdministrativeObligationSet:
+    if case.case_kind != "employee-offboarding":
+        raise ObligationError("offboarding obligations require employee-offboarding case")
+    if case.fact_snapshot is None:
+        raise ObligationError("offboarding obligations require current facts")
+    if evaluation.policy_ref != case.policy_ref or policy.policy_ref != case.policy_ref:
+        raise ObligationError("offboarding obligations require current policy evaluation")
+
+    facts = case.fact_snapshot.facts
+    departing = str(facts.get("departing_principal_id") or "").strip()
+    if not departing:
+        raise ObligationError("offboarding obligations require departing_principal_id")
+    try:
+        effective_at = normalize_datetime(
+            datetime.fromisoformat(
+                str(facts[policy.definition.effective_time_fact]).replace("Z", "+00:00")
+            )
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ObligationError("qualified termination effective time is required") from exc
+    transfers = transfer_requirements
+    if transfers is None:
+        transfers = derive_transfer_requirements(
+            case,
+            policy,
+            authority_repository,
+            governance_basis_id=governance_basis_id,
+        )
+
+    obligations: list[AdministrativeObligation] = []
+    for template in sorted(
+        evaluation.allowed_effects,
+        key=lambda item: (item.target_system, item.operation, item.authority_class.value),
+    ):
+        effect_state = {
+            "employee.deactivate": {"active": False},
+            "identity.disable": {"enabled": False},
+            "sessions.revoke": {"active_sessions": 0},
+        }.get(template.operation)
+        if effect_state is None:
+            raise ObligationError(
+                f"offboarding effect has no postcondition contract: {template.operation!r}"
+            )
+        expected_postcondition: dict[str, Any] = {
+            "target_system": template.target_system,
+            "operation": template.operation,
+            "subject_ref": case.subject_ref,
+            **effect_state,
+            "payload": {
+                key: facts[key]
+                for key in (
+                    "employee_ref",
+                    "employment_episode_ref",
+                    "termination_status",
+                    "termination_effective_at",
+                )
+                if facts.get(key) is not None
+            },
+        }
+        obligations.append(
+            _domain_or_external_obligation(
+                case,
+                governance_basis_id,
+                discriminator=f"external:{template.target_system}:{template.operation}",
+                kind=f"{template.target_system}.{template.operation}",
+                target_system=template.target_system,
+                operation=template.operation,
+                expected_postcondition=expected_postcondition,
+                authority_class=template.authority_class,
+                fulfillment_kind=ObligationFulfillmentKind.EXTERNAL_EFFECT_VERIFIED,
+            )
+        )
+
+    for binding in authority_repository.list_current_identity_bindings(
+        departing, at=effective_at
+    ):
+        obligations.append(
+            _domain_or_external_obligation(
+                case,
+                governance_basis_id,
+                discriminator=f"identity-binding:{binding.binding_id}",
+                kind="administrative.identity_binding.expire",
+                target_system="administrative",
+                operation="identity_binding.expire",
+                expected_postcondition={
+                    "binding_id": str(binding.binding_id),
+                    "principal_id": departing,
+                    "current": False,
+                },
+                authority_class=AuthorityClass.PRIVILEGED_ACCESS,
+                fulfillment_kind=ObligationFulfillmentKind.DOMAIN_STATE_VERIFIED,
+            )
+        )
+
+    for requirement in transfers:
+        obligations.append(
+            _domain_or_external_obligation(
+                case,
+                governance_basis_id,
+                discriminator=f"role-expire:{requirement.relationship_ref}",
+                kind="administrative.role_assignment.expire",
+                target_system="administrative",
+                operation="role_assignment.expire",
+                expected_postcondition={
+                    "assignment_id": str(requirement.relationship_ref),
+                    "principal_id": departing,
+                    "current": False,
+                },
+                authority_class=AuthorityClass.EMPLOYMENT,
+                fulfillment_kind=ObligationFulfillmentKind.DOMAIN_STATE_VERIFIED,
+            )
+        )
+        if requirement.transfer_mode is TransferMode.TRANSFER_REQUIRED:
+            obligations.append(
+                _domain_or_external_obligation(
+                    case,
+                    governance_basis_id,
+                    discriminator=f"role-transfer:{requirement.requirement_id}",
+                    kind="administrative.role_assignment.transfer",
+                    target_system="administrative",
+                    operation="role_assignment.transfer",
+                    expected_postcondition={
+                        "transfer_requirement_id": str(requirement.requirement_id),
+                        "successor_principal_id": requirement.successor_principal_id,
+                        "role": requirement.role,
+                        "organization_scope": requirement.organization_scope,
+                        "current": True,
+                    },
+                    authority_class=AuthorityClass.EMPLOYMENT,
+                    fulfillment_kind=ObligationFulfillmentKind.DOMAIN_STATE_VERIFIED,
+                )
+            )
+
+    for delegation in authority_repository.list_current_delegations_involving(
+        departing, at=effective_at
+    ):
+        obligations.append(
+            _domain_or_external_obligation(
+                case,
+                governance_basis_id,
+                discriminator=f"delegation-expire:{delegation.delegation_id}",
+                kind="administrative.delegation.expire",
+                target_system="administrative",
+                operation="delegation.expire",
+                expected_postcondition={
+                    "delegation_id": str(delegation.delegation_id),
+                    "current": False,
+                },
+                authority_class=AuthorityClass.EMPLOYMENT,
+                fulfillment_kind=ObligationFulfillmentKind.DOMAIN_STATE_VERIFIED,
+            )
+        )
+
+    obligations.append(
+        _domain_or_external_obligation(
+            case,
+            governance_basis_id,
+            discriminator=f"principal-deactivate:{departing}",
+            kind="administrative.principal.deactivate",
+            target_system="administrative",
+            operation="principal.deactivate",
+            expected_postcondition={"principal_id": departing, "active": False},
+            authority_class=AuthorityClass.EMPLOYMENT,
+            fulfillment_kind=ObligationFulfillmentKind.DOMAIN_STATE_VERIFIED,
+        )
+    )
+    requirement_id = uuid5(
+        NAMESPACE_URL,
+        f"administrative:obligation-set:{case.case_id}:{case.authority_epoch}:"
+        f"{governance_basis_id}",
+    )
+    return AdministrativeObligationSet(
+        requirement_id=requirement_id,
+        case_id=case.case_id,
+        authority_epoch=case.authority_epoch,
+        governance_basis_id=governance_basis_id,
+        obligations=tuple(obligations),
+    )
+
+
+def _domain_or_external_obligation(
+    case: AdministrativeCase,
+    governance_basis_id: UUID,
+    *,
+    discriminator: str,
+    kind: str,
+    target_system: str,
+    operation: str,
+    expected_postcondition: dict[str, Any],
+    authority_class: AuthorityClass,
+    fulfillment_kind: ObligationFulfillmentKind,
+) -> AdministrativeObligation:
+    return AdministrativeObligation(
+        obligation_id=uuid5(
+            NAMESPACE_URL,
+            f"administrative:obligation:{case.case_id}:{case.authority_epoch}:"
+            f"{discriminator}",
+        ),
+        case_id=case.case_id,
+        authority_epoch=case.authority_epoch,
+        governance_basis_id=governance_basis_id,
+        kind=kind,
+        subject_ref=case.subject_ref,
+        target_system=target_system,
+        required_operation=operation,
+        expected_postcondition=expected_postcondition,
+        authority_class=authority_class,
+        required=True,
+        fulfillment_kind=fulfillment_kind,
+    )
+
+
 def _fulfillment_semantics(
     fulfillment: ObligationDomainStateFulfillment,
 ) -> dict[str, Any]:
@@ -543,6 +776,8 @@ def derive_administrative_obligations(
     evaluation: PolicyEvaluation,
     *,
     governance_basis_id: UUID,
+    offboarding_policy: OffboardingPolicy | None = None,
+    authority_repository: AuthorityRepository | None = None,
 ) -> AdministrativeObligationSet:
     """Dispatch obligation derivation by case kind.
 
@@ -552,6 +787,18 @@ def derive_administrative_obligations(
     if case.case_kind == "employee-onboarding":
         return derive_onboarding_obligations(
             case, evaluation, governance_basis_id=governance_basis_id
+        )
+    if case.case_kind == "employee-offboarding":
+        if offboarding_policy is None or authority_repository is None:
+            raise ObligationError(
+                "offboarding derivation requires policy and authority repository"
+            )
+        return derive_offboarding_obligations(
+            case,
+            evaluation,
+            offboarding_policy,
+            authority_repository,
+            governance_basis_id=governance_basis_id,
         )
     raise ObligationError(
         f"no obligation derivation is registered for case kind {case.case_kind!r}"
@@ -572,5 +819,6 @@ __all__ = [
     "ObligationSetRow",
     "OnboardingObligationSet",
     "derive_administrative_obligations",
+    "derive_offboarding_obligations",
     "derive_onboarding_obligations",
 ]

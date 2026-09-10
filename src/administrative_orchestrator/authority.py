@@ -288,6 +288,76 @@ class AuthorityRepository:
             )
         return delegation
 
+    def list_current_identity_bindings(
+        self,
+        principal_id: str,
+        *,
+        at: datetime | None = None,
+    ) -> tuple[IdentityBinding, ...]:
+        at = normalize_datetime(at or utcnow())
+        with self.store.sessions() as db:
+            rows = (
+                db.execute(
+                    select(IdentityBindingRow).where(
+                        IdentityBindingRow.principal_id == principal_id
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            return tuple(
+                binding
+                for binding in (self._binding_from_row(row) for row in rows)
+                if binding.is_current_at(at)
+            )
+
+    def list_current_role_assignments(
+        self,
+        principal_id: str,
+        *,
+        at: datetime | None = None,
+    ) -> tuple[RoleAssignment, ...]:
+        at = normalize_datetime(at or utcnow())
+        with self.store.sessions() as db:
+            rows = (
+                db.execute(
+                    select(RoleAssignmentRow).where(
+                        RoleAssignmentRow.principal_id == principal_id
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            return tuple(
+                assignment
+                for assignment in (self._assignment_from_row(row) for row in rows)
+                if assignment.is_current_at(at)
+            )
+
+    def list_current_delegations_involving(
+        self,
+        principal_id: str,
+        *,
+        at: datetime | None = None,
+    ) -> tuple[Delegation, ...]:
+        at = normalize_datetime(at or utcnow())
+        with self.store.sessions() as db:
+            rows = (
+                db.execute(
+                    select(DelegationRow).where(
+                        (DelegationRow.from_principal_id == principal_id)
+                        | (DelegationRow.to_principal_id == principal_id)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            return tuple(
+                delegation
+                for delegation in (self._delegation_from_row(row) for row in rows)
+                if delegation.valid_from <= at < delegation.valid_until
+            )
+
     def roles_for(
         self,
         principal_id: str,
