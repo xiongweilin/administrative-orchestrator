@@ -48,6 +48,7 @@ def _boundary() -> tuple[SqlStore, FeishuWebhookBoundary]:
     repository = IntakeRepository(store)
     verifier = FeishuEventVerifier(
         "verification-token",
+        gateway_shared_secret="gateway-secret",
         clock=lambda: datetime.fromtimestamp(EVENT_TIME / 1000, tz=UTC).timestamp(),
     )
     return store, FeishuWebhookBoundary(repository, verifier)
@@ -106,3 +107,19 @@ def test_feishu_http_boundary_reports_unconfigured(monkeypatch) -> None:
         content=_body(),
     )
     assert response.status_code == 503
+
+
+def test_feishu_http_boundary_accepts_long_connection_handoff_with_gateway_auth(monkeypatch) -> None:
+    _, boundary = _boundary()
+    monkeypatch.setattr(api, "_feishu_intake_boundary", boundary)
+    decoded = json.loads(_body())
+    decoded["header"].pop("token")
+    client = TestClient(api.app)
+
+    response = client.post(
+        "/v1/intake/feishu/events",
+        content=json.dumps(decoded).encode(),
+        headers={"X-Administrative-Ingress-Token": "gateway-secret"},
+    )
+
+    assert response.status_code == 202

@@ -351,6 +351,11 @@ def _fact_from_row(row: CandidateFactAssertionRow) -> CandidateFactAssertion:
     )
 
 
+def _candidate_fact_semantics(fact: CandidateFactAssertion) -> dict[str, Any]:
+    """Return the immutable candidate-fact fields used for idempotency."""
+    return fact.model_dump(mode="json", exclude={"created_at"})
+
+
 def _candidate_from_row(row: CandidateAdministrativeRequestRow) -> CandidateAdministrativeRequest:
     return CandidateAdministrativeRequest.model_validate(
         {
@@ -675,7 +680,7 @@ class IntakeRepository:
             existing = db.get(CandidateFactAssertionRow, fact.candidate_fact_id)
             if existing is not None:
                 restored = _fact_from_row(existing)
-                if restored != fact:
+                if _candidate_fact_semantics(restored) != _candidate_fact_semantics(fact):
                     raise CandidateConflict("candidate fact identity was reused with different semantics")
                 return restored
             db.add(
