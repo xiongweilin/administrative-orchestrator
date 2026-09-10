@@ -5,6 +5,11 @@ from ...domain import AdministrativeCase
 from ...governance import GovernanceBasis
 from ...obligations import AdministrativeObligation
 from ...persistence import SqlStore
+from .capabilities import (
+    ADMINISTRATIVE_HRIS_EMPLOYEE_CREATE,
+    ADMINISTRATIVE_IAM_IDENTITY_CREATE,
+    OFFBOARDING_CUTOVER_CAPABILITIES,
+)
 from .client import HttpKernelResponsibilityClient, KernelResponsibilityClient
 from .compatibility import HttpKernelContractProbe, KernelCompatibilityError, KernelContractIdentity
 from .evidence import HttpKernelEvidenceClient, KernelEvidenceClient
@@ -18,8 +23,9 @@ from .repository import KernelBridgeRepository
 # generic rather than HRIS-specific.
 KERNEL_CUTOVER_CAPABILITIES = frozenset(
     {
-        "administrative.hris.employee.create.v1",
-        "administrative.iam.identity.create.v1",
+        ADMINISTRATIVE_HRIS_EMPLOYEE_CREATE,
+        ADMINISTRATIVE_IAM_IDENTITY_CREATE,
+        *OFFBOARDING_CUTOVER_CAPABILITIES,
     }
 )
 
