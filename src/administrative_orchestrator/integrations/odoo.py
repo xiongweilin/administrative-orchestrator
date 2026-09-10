@@ -170,10 +170,16 @@ class OdooHRFactSource:
         cached = self._available_models.get(model)
         if cached is not None:
             return cached
-        count = self._execute_kw("ir.model", "search_count", [[("model", "=", model)]])
-        available = bool(count)
-        self._available_models[model] = available
-        return available
+        try:
+            self._execute_kw(model, "search_count", [[]])
+        except OdooSourceError as exc:
+            text = str(exc).lower()
+            if "doesn't exist" not in text and "does not exist" not in text:
+                raise
+            self._available_models[model] = False
+            return False
+        self._available_models[model] = True
+        return True
 
     def _absent(self, model: str, record_id: int) -> AuthoritativeRecord:
         observed_at = utcnow()
@@ -234,7 +240,17 @@ class OdooHRFactSource:
         if not isinstance(raw, dict):
             raise OdooSourceError("Odoo JSON-RPC response is invalid")
         if raw.get("error") is not None:
-            raise OdooSourceError("Odoo JSON-RPC returned an application error")
+            error = raw.get("error")
+            data = error.get("data") if isinstance(error, dict) else None
+            detail = ""
+            if isinstance(data, dict):
+                detail = str(data.get("message") or "")
+            if not detail and isinstance(error, dict):
+                detail = str(error.get("message") or "")
+            raise OdooSourceError(
+                "Odoo JSON-RPC returned an application error"
+                + (f": {detail}" if detail else "")
+            )
         return raw.get("result")
 
 
@@ -249,9 +265,14 @@ def _numeric_id(ref: str, expected_model: str) -> int:
 
 
 def _many2one_id(value: Any) -> int | None:
-    if isinstance(value, (list, tuple)) and value and isinstance(value[0], int):
+    if (
+        isinstance(value, (list, tuple))
+        and value
+        and isinstance(value[0], int)
+        and not isinstance(value[0], bool)
+    ):
         return value[0]
-    if isinstance(value, int):
+    if isinstance(value, int) and not isinstance(value, bool):
         return value
     return None
 
