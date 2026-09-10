@@ -13,6 +13,8 @@ _CORRELATION_ID = ContextVar("administrative_correlation_id", default="")
 _CORRELATION_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 _IDENTITY_REVOKE_PATTERN = re.compile(r"^/v1/operations/identities/[^/]+/revoke$")
 _PRINCIPAL_DEACTIVATE_PATTERN = re.compile(r"^/v1/operations/principals/[^/]+/deactivate$")
+_ROLE_EXPIRE_PATTERN = re.compile(r"^/v1/operations/role-assignments/[^/]+/expire$")
+_DELEGATION_EXPIRE_PATTERN = re.compile(r"^/v1/operations/delegations/[^/]+/expire$")
 
 HTTP_REQUESTS = Counter(
     "administrative_http_requests_total",
@@ -131,6 +133,10 @@ def _record_operations_semantics(method: str, path: str, status_code: int) -> No
         record_identity_lifecycle("identity_binding.revoked")
     elif _PRINCIPAL_DEACTIVATE_PATTERN.fullmatch(path):
         record_identity_lifecycle("principal.deactivated")
+    elif _ROLE_EXPIRE_PATTERN.fullmatch(path):
+        record_identity_lifecycle("role_assignment.expired")
+    elif _DELEGATION_EXPIRE_PATTERN.fullmatch(path):
+        record_identity_lifecycle("delegation.expired")
 
 
 __all__ = [
