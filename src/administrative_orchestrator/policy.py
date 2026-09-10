@@ -69,6 +69,15 @@ class OffboardingPolicyDefinition(BaseModel):
     revoke_only_roles: tuple[str, ...] = ("hr_approver", "access_approver")
     effective_time_fact: str = "termination_effective_at"
 
+    @model_validator(mode="after")
+    def validate_transfer_classification(self) -> OffboardingPolicyDefinition:
+        overlap = set(self.transfer_required_roles) & set(self.revoke_only_roles)
+        if overlap:
+            raise ValueError(
+                "offboarding roles cannot be both transfer-required and revoke-only"
+            )
+        return self
+
 
 class PolicyEvaluation(BaseModel):
     policy_ref: PolicyRef

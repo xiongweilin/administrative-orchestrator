@@ -6,6 +6,7 @@ from administrative_orchestrator.persistence import SqlStore
 from administrative_orchestrator.policy import (
     OffboardingFacts,
     OffboardingPolicy,
+    OffboardingPolicyDefinition,
     PolicyDisposition,
 )
 from administrative_orchestrator.policy_plane import (
@@ -98,4 +99,11 @@ def test_compile_offboarding_policy_rejects_other_policy_ids() -> None:
     )
     with pytest.raises(PolicyPlaneError):
         compile_offboarding_policy(record)
+
+
+def test_offboarding_policy_rejects_overlapping_transfer_classification() -> None:
+    definition = OffboardingPolicy.default_definition()
+    definition["revoke_only_roles"].append("manager")
+    with pytest.raises(ValueError, match="both transfer-required and revoke-only"):
+        OffboardingPolicyDefinition.model_validate(definition)
 
