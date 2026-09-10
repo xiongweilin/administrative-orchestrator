@@ -695,6 +695,25 @@ class IntakeRepository:
             db.flush()
             return fact
 
+    def get_candidate_fact(self, fact_ref: UUID) -> CandidateFactAssertion | None:
+        with self.store.sessions() as db:
+            row = db.get(CandidateFactAssertionRow, fact_ref)
+            return None if row is None else _fact_from_row(row)
+
+    def list_candidate_facts(
+        self, candidate_ref: UUID
+    ) -> list[CandidateFactAssertion]:
+        """Load the immutable fact assertions referenced by one candidate."""
+        candidate = self.get_candidate(candidate_ref)
+        if candidate is None:
+            return []
+        with self.store.sessions() as db:
+            rows = [
+                db.get(CandidateFactAssertionRow, fact_ref)
+                for fact_ref in candidate.candidate_fact_refs
+            ]
+            return [_fact_from_row(row) for row in rows if row is not None]
+
     def append_candidate_request(
         self, candidate: CandidateAdministrativeRequest
     ) -> CandidateAdministrativeRequest:
