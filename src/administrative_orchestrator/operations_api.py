@@ -18,6 +18,7 @@ from .admission import (
 from .auth import AuthenticatedPrincipal, Authenticator
 from .authority import AuthorityError, AuthorityRepository, IdentityBinding
 from .authority_lifecycle import AuthorityLifecycleEvent, AuthorityLifecycleRepository
+from .candidate_admission import CandidateAdministrativeAdmissionService
 from .config import get_settings
 from .conversation import ConversationMessageRow, ConversationRow
 from .domain import AdministrativeCase, AdministrativeRequest, CaseStatus, utcnow
@@ -38,6 +39,7 @@ from .intake.models import (
 )
 from .intake.repository import AssessmentConflict, IntakeRepository
 from .obligations import ObligationRepository
+from .offboarding_admission import CandidateOffboardingAdmissionService
 from .onboarding_admission import (
     CandidateOnboardingAdmissionService,
     OnboardingAdmissionError,
@@ -323,6 +325,21 @@ def finalize_intake_assessment(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
+def _admission_bridge(case_kind: str) -> CandidateAdministrativeAdmissionService:
+    """Select the typed candidate admission service for one case kind."""
+    if case_kind == "employee-onboarding":
+        return CandidateOnboardingAdmissionService(
+            _store, _intake, _intake_promotions, policies=_policies, uow=_uow
+        )
+    if case_kind == "employee-offboarding":
+        return CandidateOffboardingAdmissionService(
+            _store, _intake, _intake_promotions, policies=_policies, uow=_uow
+        )
+    raise OnboardingAdmissionError(
+        f"bridge_to_m5 does not support case_kind={case_kind!r}"
+    )
+
+
 @app.post(
     "/v1/operations/intake/candidates/{candidate_id}/promote",
     response_model=IntakePromotionResponse,
@@ -342,21 +359,11 @@ def promote_intake_candidate(
         raise HTTPException(status_code=404, detail="intake assessment not found")
     try:
         if payload.bridge_to_m5:
-            if payload.case_kind != "employee-onboarding":
-                raise OnboardingAdmissionError(
-                    "bridge_to_m5 requires case_kind=employee-onboarding"
-                )
             if payload.subject_ref is None:
                 raise OnboardingAdmissionError(
-                    "employee-onboarding promotion requires subject_ref"
+                    "bridge_to_m5 promotion requires subject_ref"
                 )
-            onboarding = CandidateOnboardingAdmissionService(
-                _store,
-                _intake,
-                _intake_promotions,
-                policies=_policies,
-                uow=_uow,
-            ).promote_and_evaluate(
+            admission = _admission_bridge(payload.case_kind).promote_and_evaluate(
                 candidate,
                 assessment,
                 source_system=payload.source_system,
@@ -367,9 +374,9 @@ def promote_intake_candidate(
                 channel=payload.channel,
                 promotion_policy_ref=payload.promotion_policy_ref,
             )
-            result = onboarding.promotion
-            promoted_case = onboarding.case
-            policy_evaluation = onboarding.policy_evaluation
+            result = admission.promotion
+            promoted_case = admission.case
+            policy_evaluation = admission.policy_evaluation
         else:
             result = _intake_promotions.promote(
                 candidate,
