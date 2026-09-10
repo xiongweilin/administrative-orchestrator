@@ -105,6 +105,17 @@ def test_authoritative_record_freshness_and_snapshot_contract() -> None:
         stale.as_fact_snapshot(owner="service:test")
 
 
+def test_authoritative_merge_does_not_erase_claims_with_empty_authoritative_values() -> None:
+    case = _onboarding_case()
+    record = _authoritative(department_ref=None, start_date=None)
+
+    snapshot = merge_authoritative_onboarding_facts(case, record)
+
+    assert snapshot.facts["department_ref"] == "department:claim"
+    assert snapshot.assertions["department_ref"].authority is FactAuthority.CLAIM
+    assert "start_date" not in snapshot.facts
+
+
 def test_fact_acquisition_rejects_missing_absent_and_changed_authoritative_truth() -> None:
     case = _onboarding_case()
     with pytest.raises(FactAcquisitionError, match="no current fact snapshot"):
