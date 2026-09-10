@@ -37,6 +37,57 @@ type CaseDetail = {
   audit: Array<Record<string, unknown>> | null;
 };
 
+type IntakeDisposition =
+  | "admit"
+  | "needs_clarification"
+  | "information_only"
+  | "unsupported"
+  | "duplicate"
+  | "ambiguous"
+  | "requires_human_review";
+
+type CandidateStatus = "active" | "superseded" | "admitted" | "rejected";
+
+type IntakeAssessment = {
+  assessment_id: string;
+  candidate_ref: string;
+  disposition: IntakeDisposition;
+  basis: Record<string, unknown>;
+  authority: "model_suggestion" | "deterministic_rule" | "human_review";
+  is_final: boolean;
+  reviewer_principal_id: string | null;
+  created_at: string;
+};
+
+type IntakeQueueItem = {
+  candidate_id: string;
+  conversation_ref: string;
+  candidate_requester: string;
+  candidate_intent: string;
+  status: CandidateStatus;
+  created_at: string;
+  latest_assessment: IntakeAssessment | null;
+};
+
+type IntakeCandidateDetail = {
+  candidate: {
+    candidate_id: string;
+    conversation_ref: string;
+    interpretation_refs: string[];
+    candidate_requester: string;
+    candidate_intent: string;
+    candidate_fact_refs: string[];
+    source_refs: string[];
+    created_at: string;
+    supersedes_candidate_ref: string | null;
+    status: CandidateStatus;
+  };
+  assessments: IntakeAssessment[];
+  promotion: Record<string, unknown> | null;
+};
+
+type ConsoleView = "cases" | "intake";
+
 const config = {
   apiBase: import.meta.env.VITE_OPERATIONS_API_BASE_URL || "http://127.0.0.1:8001",
   oidcAuthority: import.meta.env.VITE_OIDC_AUTHORITY || "",
@@ -66,6 +117,10 @@ let currentUser: User | null = null;
 let queue: QueueItem[] = [];
 let selected: CaseDetail | null = null;
 let selectedId: string | null = null;
+let intakeQueue: IntakeQueueItem[] = [];
+let selectedCandidate: IntakeCandidateDetail | null = null;
+let selectedCandidateId: string | null = null;
+let activeView: ConsoleView = "intake";
 let errorMessage = "";
 let busy = false;
 
@@ -78,7 +133,7 @@ async function init(): Promise<void> {
   }
   render();
   if (currentUser && !currentUser.expired) {
-    await loadQueue();
+    await Promise.all([loadQueue(), loadIntakeQueue()]);
   }
 }
 
@@ -134,6 +189,142 @@ async function selectCase(caseId: string): Promise<void> {
     busy = false;
     render();
   }
+}
+
+async function loadIntakeQueue(): Promise<void> {
+  busy = true;
+  errorMessage = "";
+  render();
+  try {
+    intakeQueue = await api<IntakeQueueItem[]>(
+      "/v1/operations/intake/candidates?status=active&limit=500",
+    );
+    if (selectedCandidateId && intakeQueue.some((item) => item.candidate_id === selectedCandidateId)) {
+      selectedCandidate = await api<IntakeCandidateDetail>(
+        `/v1/operations/intake/candidates/${selectedCandidateId}`,
+      );
+    }
+  } catch (error) {
+    errorMessage = error instanceof Error ? error.message : String(error);
+  } finally {
+    busy = false;
+    render();
+  }
+}
+
+async function selectCandidate(candidateId: string): Promise<void> {
+  busy = true;
+  errorMessage = "";
+  selectedCandidateId = candidateId;
+  render();
+  try {
+    selectedCandidate = await api<IntakeCandidateDetail>(
+      `/v1/operations/intake/candidates/${candidateId}`,
+    );
+  } catch (error) {
+    selectedCandidate = null;
+    errorMessage = error instanceof Error ? error.message : String(error);
+  } finally {
+    busy = false;
+    render();
+  }
+}
+
+async function finalizeIntakeAssessment(): Promise<void> {
+  if (!selectedCandidateId) return;
+  const disposition = root.querySelector<HTMLSelectElement>("#intake-disposition")?.value as
+    | IntakeDisposition
+    | undefined;
+  const basisInput = root.querySelector<HTMLTextAreaElement>("#intake-basis")?.value.trim() || "";
+  if (!disposition) return;
+  let basis: Record<string, unknown> = {};
+  if (basisInput) {
+    try {
+      basis = JSON.parse(basisInput) as Record<string, unknown>;
+    } catch {
+      errorMessage = "Review basis must be valid JSON.";
+      render();
+      return;
+    }
+  }
+  busy = true;
+  errorMessage = "";
+  render();
+  try {
+    await api<IntakeAssessment>(
+      `/v1/operations/intake/candidates/${selectedCandidateId}/assessments`,
+      {
+        method: "POST",
+        body: JSON.stringify({ disposition, basis }),
+      },
+    );
+    selectedCandidate = await api<IntakeCandidateDetail>(
+      `/v1/operations/intake/candidates/${selectedCandidateId}`,
+    );
+    await loadIntakeQueue();
+  } catch (error) {
+    errorMessage = error instanceof Error ? error.message : String(error);
+  } finally {
+    busy = false;
+    render();
+  }
+}
+
+async function promoteIntakeCandidate(): Promise<void> {
+  if (!selectedCandidateId || !selectedCandidate) return;
+  const assessment = selectedCandidate.assessments.find(
+    (item) => item.is_final && item.disposition === "admit",
+  );
+  if (!assessment) {
+    errorMessage = "A final human ADMIT assessment is required before promotion.";
+    render();
+    return;
+  }
+  const value = (id: string): string =>
+    root.querySelector<HTMLInputElement>(`#${id}`)?.value.trim() || "";
+  const payload = {
+    assessment_id: assessment.assessment_id,
+    source_system: value("intake-source-system"),
+    tenant_ref: value("intake-tenant-ref"),
+    source_event_id: value("intake-source-event"),
+    requester_principal_id: value("intake-requester"),
+    case_kind: value("intake-case-kind") || "intake",
+    subject_ref: value("intake-subject") || null,
+  };
+  if (!payload.source_system || !payload.tenant_ref || !payload.source_event_id || !payload.requester_principal_id) {
+    errorMessage = "Source system, tenant, source event, and requester principal are required.";
+    render();
+    return;
+  }
+  if (!window.confirm("Create the existing Administrative request and case from this reviewed candidate?")) {
+    return;
+  }
+  busy = true;
+  errorMessage = "";
+  render();
+  try {
+    const result = await api<{ case: Record<string, unknown> }>(
+      `/v1/operations/intake/candidates/${selectedCandidateId}/promote`,
+      { method: "POST", body: JSON.stringify(payload) },
+    );
+    selectedId = String(result.case.case_id);
+    activeView = "cases";
+    selectedCandidate = null;
+    selectedCandidateId = null;
+    await loadQueue();
+    if (selectedId) await selectCase(selectedId);
+  } catch (error) {
+    errorMessage = error instanceof Error ? error.message : String(error);
+  } finally {
+    busy = false;
+    render();
+  }
+}
+
+function switchView(view: ConsoleView): void {
+  activeView = view;
+  errorMessage = "";
+  render();
 }
 
 async function refreshAuthoritativeFacts(): Promise<void> {
@@ -192,46 +383,150 @@ function statusClass(status: CaseStatus): string {
   return "neutral";
 }
 
+function intakeStatusClass(status: CandidateStatus): string {
+  if (status === "superseded" || status === "rejected") return "danger";
+  if (status === "admitted") return "ok";
+  return "warn";
+}
+
+function renderCaseQueue(): string {
+  return `
+    <div class="panel-heading">
+      <div>
+        <h2>Exception queue</h2>
+        <p>WAIT / RECONCILE / REASSESS / HUMAN REVIEW only.</p>
+      </div>
+      <button id="refresh-cases" ${!busy ? "" : "disabled"}>Refresh</button>
+    </div>
+    <div class="queue">
+      ${
+        queue
+          .map(
+            (item) => `
+              <button class="queue-item ${item.case_id === selectedId ? "selected" : ""}" data-case-id="${escapeHtml(item.case_id)}">
+                <div class="queue-row"><strong>${escapeHtml(item.subject_ref)}</strong><span class="badge ${statusClass(item.status)}">${escapeHtml(item.status)}</span></div>
+                <div class="muted">${escapeHtml(item.case_kind)} · epoch ${item.authority_epoch} · v${item.version}</div>
+                <div class="muted">${escapeHtml(new Date(item.updated_at).toLocaleString())}</div>
+              </button>`,
+          )
+          .join("") || `<div class="empty">No current exceptions.</div>`
+      }
+    </div>`;
+}
+
+function renderIntakeQueue(): string {
+  return `
+    <div class="panel-heading">
+      <div>
+        <h2>Intake review</h2>
+        <p>Candidate-only state. Human review is required before admission.</p>
+      </div>
+      <button id="refresh-intake" ${!busy ? "" : "disabled"}>Refresh</button>
+    </div>
+    <div class="queue">
+      ${
+        intakeQueue
+          .map(
+            (item) => `
+              <button class="queue-item ${item.candidate_id === selectedCandidateId ? "selected" : ""}" data-candidate-id="${escapeHtml(item.candidate_id)}">
+                <div class="queue-row"><strong>${escapeHtml(item.candidate_intent)}</strong><span class="badge ${intakeStatusClass(item.status)}">${escapeHtml(item.status)}</span></div>
+                <div class="muted">${escapeHtml(item.candidate_requester)} · ${escapeHtml(item.conversation_ref)}</div>
+                <div class="muted">${escapeHtml(new Date(item.created_at).toLocaleString())}</div>
+                ${item.latest_assessment ? `<div class="muted">latest: ${escapeHtml(item.latest_assessment.disposition)} · ${escapeHtml(item.latest_assessment.authority)}</div>` : `<div class="muted">not yet assessed</div>`}
+              </button>`,
+          )
+          .join("") || `<div class="empty">No active intake candidates.</div>`
+      }
+    </div>`;
+}
+
+function renderIntakeDetail(detail: IntakeCandidateDetail): string {
+  const candidate = detail.candidate;
+  const finalAdmit = detail.assessments.some(
+    (item) => item.is_final && item.disposition === "admit",
+  );
+  const basis = detail.assessments.at(-1)?.basis ?? { reviewed: true };
+  return `
+    <div class="detail-heading">
+      <div>
+        <div class="eyebrow">Candidate administrative request</div>
+        <h2>${escapeHtml(candidate.candidate_intent)}</h2>
+        <div class="muted">${escapeHtml(candidate.candidate_id)} · ${escapeHtml(candidate.conversation_ref)}</div>
+      </div>
+      <span class="badge ${intakeStatusClass(candidate.status)}">${escapeHtml(candidate.status)}</span>
+    </div>
+    <div class="cards">
+      ${section("Candidate", candidate)}
+      <article class="card">
+        <h3>Human assessment</h3>
+        <p class="muted">The reviewer identity is taken from the authenticated OIDC principal. Model suggestions cannot authorize promotion.</p>
+        <label for="intake-disposition">Disposition</label>
+        <select id="intake-disposition">
+          ${(["admit", "needs_clarification", "information_only", "unsupported", "duplicate", "ambiguous", "requires_human_review"] as IntakeDisposition[])
+            .map((item) => `<option value="${item}" ${item === (detail.assessments.at(-1)?.disposition ?? "admit") ? "selected" : ""}>${item}</option>`)
+            .join("")}
+        </select>
+        <label for="intake-basis">Review basis (JSON)</label>
+        <textarea id="intake-basis" rows="4">${escapeHtml(JSON.stringify(basis, null, 2))}</textarea>
+        <button id="save-intake-assessment" ${busy ? "disabled" : ""}>Record final human assessment</button>
+      </article>
+      <article class="card">
+        <h3>Admission</h3>
+        <p class="muted">Promotion creates the existing Administrative request/case path exactly once. All source identity fields are explicit.</p>
+        <div class="form-grid">
+          ${inputField("intake-source-system", "Source system", "", "test-provider")}
+          ${inputField("intake-tenant-ref", "Tenant", "", "provider-tenant")}
+          ${inputField("intake-source-event", "Source event", "", "verified-event-id")}
+          ${inputField("intake-requester", "Requester Principal", "", "person:requester")}
+          ${inputField("intake-case-kind", "Case kind", "intake", "employee-onboarding")}
+          ${inputField("intake-subject", "Subject ref", "", "employee:1")}
+        </div>
+        <button id="promote-intake-candidate" ${finalAdmit && !busy ? "" : "disabled"}>Promote human-confirmed candidate</button>
+      </article>
+      ${section("Assessment history", detail.assessments)}
+      ${detail.promotion ? section("Promotion", detail.promotion) : ""}
+    </div>`;
+}
+
+function inputField(id: string, label: string, value: string, placeholder: string): string {
+  return `<label class="field" for="${id}"><span>${escapeHtml(label)}</span><input id="${id}" value="${escapeHtml(value)}" placeholder="${escapeHtml(placeholder)}" /></label>`;
+}
+
 function render(): void {
   const authenticated = Boolean(currentUser && !currentUser.expired);
+  const queueMarkup = activeView === "intake" ? renderIntakeQueue() : renderCaseQueue();
+  const detailMarkup =
+    activeView === "intake"
+      ? selectedCandidate
+        ? renderIntakeDetail(selectedCandidate)
+        : `<div class="empty detail-empty">Select a candidate for human review.</div>`
+      : selected
+        ? renderDetail(selected)
+        : `<div class="empty detail-empty">Select an exception case.</div>`;
   root.innerHTML = `
     <header class="topbar">
       <div>
         <div class="eyebrow">Human Exception Operations Surface</div>
         <h1>Administrative Operations</h1>
       </div>
-      <div class="session">
-        ${authenticated ? `<span>${escapeHtml(currentUser?.profile.sub)}</span><button id="logout">Sign out</button>` : `<button id="login">Sign in</button>`}
+      <div class="topbar-right">
+        <nav class="view-tabs" aria-label="Operations surface">
+          <button id="view-intake" class="${activeView === "intake" ? "active" : ""}" ${authenticated ? "" : "disabled"}>Intake review</button>
+          <button id="view-cases" class="${activeView === "cases" ? "active" : ""}" ${authenticated ? "" : "disabled"}>Exception cases</button>
+        </nav>
+        <div class="session">
+          ${authenticated ? `<span>${escapeHtml(currentUser?.profile.sub)}</span><button id="logout">Sign out</button>` : `<button id="login">Sign in</button>`}
+        </div>
       </div>
     </header>
     <main class="layout">
       <aside class="queue-panel">
-        <div class="panel-heading">
-          <div>
-            <h2>Exception queue</h2>
-            <p>WAIT / RECONCILE / REASSESS / HUMAN REVIEW only.</p>
-          </div>
-          <button id="refresh" ${authenticated && !busy ? "" : "disabled"}>Refresh</button>
-        </div>
-        ${
-          authenticated
-            ? `<div class="queue">${queue
-                .map(
-                  (item) => `
-                    <button class="queue-item ${item.case_id === selectedId ? "selected" : ""}" data-case-id="${escapeHtml(item.case_id)}">
-                      <div class="queue-row"><strong>${escapeHtml(item.subject_ref)}</strong><span class="badge ${statusClass(item.status)}">${escapeHtml(item.status)}</span></div>
-                      <div class="muted">${escapeHtml(item.case_kind)} · epoch ${item.authority_epoch} · v${item.version}</div>
-                      <div class="muted">${escapeHtml(new Date(item.updated_at).toLocaleString())}</div>
-                    </button>`,
-                )
-                .join("") || `<div class="empty">No current exceptions.</div>`}</div>`
-            : `<div class="empty">Authenticate through OIDC to inspect governed operations.</div>`
-        }
+        ${authenticated ? queueMarkup : `<div class="empty">Authenticate through OIDC to inspect governed operations.</div>`}
       </aside>
       <section class="detail-panel">
         ${errorMessage ? `<div class="error">${escapeHtml(errorMessage)}</div>` : ""}
         ${busy ? `<div class="loading">Loading current authoritative state…</div>` : ""}
-        ${selected ? renderDetail(selected) : `<div class="empty detail-empty">Select an exception case.</div>`}
+        ${authenticated ? detailMarkup : `<div class="empty detail-empty">Sign in to access governed operations.</div>`}
       </section>
     </main>
     <footer>
@@ -241,7 +536,16 @@ function render(): void {
 
   root.querySelector<HTMLButtonElement>("#login")?.addEventListener("click", () => void login());
   root.querySelector<HTMLButtonElement>("#logout")?.addEventListener("click", () => void logout());
-  root.querySelector<HTMLButtonElement>("#refresh")?.addEventListener("click", () => void loadQueue());
+  root.querySelector<HTMLButtonElement>("#view-intake")?.addEventListener("click", () => switchView("intake"));
+  root.querySelector<HTMLButtonElement>("#view-cases")?.addEventListener("click", () => switchView("cases"));
+  root.querySelector<HTMLButtonElement>("#refresh-cases")?.addEventListener("click", () => void loadQueue());
+  root.querySelector<HTMLButtonElement>("#refresh-intake")?.addEventListener("click", () => void loadIntakeQueue());
+  root.querySelector<HTMLButtonElement>("#save-intake-assessment")?.addEventListener("click", () =>
+    void finalizeIntakeAssessment(),
+  );
+  root.querySelector<HTMLButtonElement>("#promote-intake-candidate")?.addEventListener("click", () =>
+    void promoteIntakeCandidate(),
+  );
   root.querySelector<HTMLButtonElement>("#authoritative-refresh")?.addEventListener("click", () =>
     void refreshAuthoritativeFacts(),
   );
@@ -249,6 +553,12 @@ function render(): void {
     button.addEventListener("click", () => {
       const caseId = button.dataset.caseId;
       if (caseId) void selectCase(caseId);
+    });
+  });
+  root.querySelectorAll<HTMLButtonElement>("[data-candidate-id]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const candidateId = button.dataset.candidateId;
+      if (candidateId) void selectCandidate(candidateId);
     });
   });
 }
