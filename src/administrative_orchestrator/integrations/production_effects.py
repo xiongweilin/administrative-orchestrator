@@ -39,6 +39,7 @@ class OdooEffectConnection:
     username: str
     credential: CredentialRef
     request_ref_field: str = "x_administrative_request_ref"
+    deactivate_request_ref_field: str = "x_administrative_deactivate_request_ref"
     subject_ref_field: str = "x_administrative_subject_ref"
     timeout_seconds: float = 10.0
     allow_insecure_http: bool = False
@@ -47,7 +48,11 @@ class OdooEffectConnection:
         _validate_base_url(self.base_url, allow_insecure_http=self.allow_insecure_http)
         if not self.database.strip() or not self.username.strip():
             raise ConnectorConfigurationError("Odoo database and username are required")
-        for field in (self.request_ref_field, self.subject_ref_field):
+        for field in (
+            self.request_ref_field,
+            self.deactivate_request_ref_field,
+            self.subject_ref_field,
+        ):
             if not field.startswith("x_"):
                 raise ConnectorConfigurationError(
                     "Odoo integration identity fields must be custom x_ fields"
@@ -323,6 +328,161 @@ class OdooEmployeeVerifier:
             )
 
 
+class OdooEmployeeDeactivateConnector:
+    """Deactivate one exact Odoo employee with durable request identity."""
+
+    def __init__(self, connector: OdooEmployeeEffectConnector) -> None:
+        self.connector = connector
+
+    async def invoke(
+        self,
+        *,
+        request_ref: str,
+        subject_ref: str,
+        parameters: dict[str, Any],
+    ) -> ConnectorResult:
+        employee_ref = str(parameters.get("employee_external_ref") or subject_ref)
+        employee_id = _odoo_numeric_ref(employee_ref, "hr.employee")
+        if employee_id is None:
+            return ConnectorResult(
+                ConnectorStatus.FAILED,
+                error_code="InvalidOdooEmployeeReference",
+                error_message="employee deactivation requires odoo:hr.employee:<id>",
+            )
+        try:
+            row = await self._read(employee_id)
+            if not row:
+                return ConnectorResult(
+                    ConnectorStatus.FAILED,
+                    error_code="OdooEmployeeNotFound",
+                    error_message="the exact Odoo employee does not exist",
+                )
+            request_field = self.connector.connection.deactivate_request_ref_field
+            recorded = str(row.get(request_field) or "").strip()
+            if recorded and recorded != request_ref:
+                return ConnectorResult(
+                    ConnectorStatus.FAILED,
+                    error_code="ConflictingExternalRequestIdentity",
+                    error_message="Odoo employee records a different deactivate request",
+                )
+            if recorded == request_ref and not bool(row.get("active", True)):
+                return self._success(employee_id, reconciled=True)
+            written = await self.connector._execute_kw(
+                "hr.employee",
+                "write",
+                [[employee_id], {"active": False, request_field: request_ref}],
+                {},
+            )
+            if written is not True:
+                return ConnectorResult(
+                    ConnectorStatus.FAILED,
+                    error_code="OdooDeactivateRejected",
+                    error_message="Odoo did not confirm the employee update",
+                )
+            return self._success(employee_id)
+        except _TransportUnknown as exc:
+            return _unknown_result(exc)
+        except _ApplicationRejected as exc:
+            return ConnectorResult(
+                ConnectorStatus.FAILED,
+                error_code="OdooApplicationRejected",
+                error_message=str(exc),
+            )
+
+    async def reconcile(self, request_ref: str) -> ConnectorResult | None:
+        try:
+            rows = await self.connector._lookup(
+                self.connector.connection.deactivate_request_ref_field, request_ref
+            )
+            if not rows:
+                return None
+            if len(rows) != 1:
+                return ConnectorResult(
+                    ConnectorStatus.FAILED,
+                    error_code="DuplicateExternalRequestIdentity",
+                    error_message="multiple Odoo employees share the deactivate request_ref",
+                    reconciled=True,
+                )
+            employee_id = int(rows[0]["id"])
+            row = await self._read(employee_id)
+            if row and not bool(row.get("active", True)):
+                return self._success(employee_id, reconciled=True)
+            return ConnectorResult(
+                ConnectorStatus.UNKNOWN,
+                external_operation_ref=f"odoo:hr.employee:{employee_id}",
+                error_code="OdooDeactivateNotObserved",
+                error_message="request identity exists but inactive state is not observed",
+                reconciled=True,
+            )
+        except _TransportUnknown as exc:
+            return _unknown_result(exc, reconciled=True)
+        except _ApplicationRejected as exc:
+            return ConnectorResult(
+                ConnectorStatus.FAILED,
+                error_code="OdooApplicationRejected",
+                error_message=str(exc),
+                reconciled=True,
+            )
+
+    async def _read(self, employee_id: int) -> dict[str, Any]:
+        rows = await self.connector._execute_kw(
+            "hr.employee",
+            "read",
+            [[employee_id]],
+            {
+                "fields": [
+                    "id",
+                    "active",
+                    self.connector.connection.deactivate_request_ref_field,
+                ]
+            },
+        )
+        return rows[0] if isinstance(rows, list) and len(rows) == 1 else {}
+
+    @staticmethod
+    def _success(employee_id: int, *, reconciled: bool = False) -> ConnectorResult:
+        return ConnectorResult(
+            ConnectorStatus.SUCCEEDED,
+            external_operation_ref=f"odoo:hr.employee:{employee_id}",
+            reconciled=reconciled,
+        )
+
+
+class OdooEmployeeDeactivateVerifier:
+    def __init__(self, connector: OdooEmployeeDeactivateConnector) -> None:
+        self.connector = connector
+
+    async def observe(
+        self,
+        *,
+        subject_ref: str,
+        expected_postcondition: dict[str, Any],
+    ) -> ConnectorResult:
+        employee_ref = str(
+            expected_postcondition.get("employee_external_ref") or subject_ref
+        )
+        employee_id = _odoo_numeric_ref(employee_ref, "hr.employee")
+        if employee_id is None:
+            return ConnectorResult(ConnectorStatus.SUCCEEDED, observed_postcondition={})
+        try:
+            row = await self.connector._read(employee_id)
+            observed = (
+                {
+                    "target_system": "hris",
+                    "operation": "employee.deactivate",
+                    "subject_ref": subject_ref,
+                    "active": bool(row.get("active", True)),
+                }
+                if row
+                else {}
+            )
+            return ConnectorResult(
+                ConnectorStatus.SUCCEEDED, observed_postcondition=observed
+            )
+        except (_TransportUnknown, _ApplicationRejected) as exc:
+            return _unavailable_result(exc)
+
+
 @dataclass(frozen=True, slots=True)
 class KeycloakEffectConnection:
     base_url: str
@@ -330,6 +490,10 @@ class KeycloakEffectConnection:
     client_id: str
     credential: CredentialRef
     request_ref_attribute: str = "administrative_request_ref"
+    disable_request_ref_attribute: str = "administrative_disable_request_ref"
+    session_revoke_request_ref_attribute: str = (
+        "administrative_session_revoke_request_ref"
+    )
     subject_ref_attribute: str = "administrative_subject_ref"
     timeout_seconds: float = 10.0
     allow_insecure_http: bool = False
@@ -568,6 +732,223 @@ class KeycloakIdentityEffectConnector:
             raise _TransportUnknown("Keycloak transport/result is ambiguous") from exc
 
 
+class KeycloakIdentityDisableConnector:
+    def __init__(self, connector: KeycloakIdentityEffectConnector) -> None:
+        self.connector = connector
+
+    async def invoke(
+        self,
+        *,
+        request_ref: str,
+        subject_ref: str,
+        parameters: dict[str, Any],
+    ) -> ConnectorResult:
+        del parameters
+        try:
+            user = await _keycloak_subject_user(self.connector, subject_ref)
+            if user is None:
+                return _keycloak_subject_failure(subject_ref)
+            user_id = str(user["id"])
+            marker = self.connector.connection.disable_request_ref_attribute
+            recorded = _first_attribute(_user_attributes(user), marker)
+            if recorded and recorded != request_ref:
+                return ConnectorResult(
+                    ConnectorStatus.FAILED,
+                    error_code="ConflictingExternalRequestIdentity",
+                    error_message="Keycloak user records a different disable request",
+                )
+            if recorded == request_ref and user.get("enabled") is False:
+                return _keycloak_success(user_id, reconciled=True)
+            response = await self.connector._request(
+                "PUT",
+                f"/admin/realms/{self.connector.connection.realm}/users/{user_id}",
+                json_body=_keycloak_user_update(user, marker, request_ref, enabled=False),
+            )
+            return _keycloak_write_result(response, user_id, operation="disable")
+        except _TransportUnknown as exc:
+            return _unknown_result(exc)
+        except _ApplicationRejected as exc:
+            return ConnectorResult(
+                ConnectorStatus.FAILED,
+                error_code="KeycloakApplicationRejected",
+                error_message=str(exc),
+            )
+
+    async def reconcile(self, request_ref: str) -> ConnectorResult | None:
+        try:
+            rows = await self.connector._find_by_attribute(
+                self.connector.connection.disable_request_ref_attribute, request_ref
+            )
+            if not rows:
+                return None
+            if len(rows) != 1 or not rows[0].get("id"):
+                return _keycloak_duplicate_request("disable")
+            user = await self.connector._get_user(str(rows[0]["id"]))
+            if user.get("enabled") is False:
+                return _keycloak_success(str(user["id"]), reconciled=True)
+            return ConnectorResult(
+                ConnectorStatus.UNKNOWN,
+                external_operation_ref=f"keycloak:user:{user['id']}",
+                error_code="KeycloakDisableNotObserved",
+                error_message="disable request identity exists but enabled=false is not observed",
+                reconciled=True,
+            )
+        except _TransportUnknown as exc:
+            return _unknown_result(exc, reconciled=True)
+        except _ApplicationRejected as exc:
+            return ConnectorResult(
+                ConnectorStatus.FAILED,
+                error_code="KeycloakApplicationRejected",
+                error_message=str(exc),
+                reconciled=True,
+            )
+
+
+class KeycloakIdentityDisableVerifier:
+    def __init__(self, connector: KeycloakIdentityEffectConnector) -> None:
+        self.connector = connector
+
+    async def observe(
+        self,
+        *,
+        subject_ref: str,
+        expected_postcondition: dict[str, Any],
+    ) -> ConnectorResult:
+        del expected_postcondition
+        try:
+            user = await _keycloak_subject_user(self.connector, subject_ref)
+            observed = (
+                {
+                    "target_system": "iam",
+                    "operation": "identity.disable",
+                    "subject_ref": subject_ref,
+                    "enabled": bool(user.get("enabled", True)),
+                }
+                if user is not None
+                else {}
+            )
+            return ConnectorResult(
+                ConnectorStatus.SUCCEEDED, observed_postcondition=observed
+            )
+        except (_TransportUnknown, _ApplicationRejected) as exc:
+            return _unavailable_result(exc)
+
+
+class KeycloakSessionRevokeConnector:
+    def __init__(self, connector: KeycloakIdentityEffectConnector) -> None:
+        self.connector = connector
+
+    async def invoke(
+        self,
+        *,
+        request_ref: str,
+        subject_ref: str,
+        parameters: dict[str, Any],
+    ) -> ConnectorResult:
+        del parameters
+        try:
+            user = await _keycloak_subject_user(self.connector, subject_ref)
+            if user is None:
+                return _keycloak_subject_failure(subject_ref)
+            user_id = str(user["id"])
+            marker = self.connector.connection.session_revoke_request_ref_attribute
+            recorded = _first_attribute(_user_attributes(user), marker)
+            if recorded and recorded != request_ref:
+                return ConnectorResult(
+                    ConnectorStatus.FAILED,
+                    error_code="ConflictingExternalRequestIdentity",
+                    error_message="Keycloak user records a different session revoke request",
+                )
+            if recorded != request_ref:
+                marker_response = await self.connector._request(
+                    "PUT",
+                    f"/admin/realms/{self.connector.connection.realm}/users/{user_id}",
+                    json_body=_keycloak_user_update(user, marker, request_ref),
+                )
+                marker_result = _keycloak_write_result(
+                    marker_response, user_id, operation="session marker"
+                )
+                if marker_result.status is not ConnectorStatus.SUCCEEDED:
+                    return marker_result
+            sessions = await _keycloak_sessions(self.connector, user_id)
+            if not sessions:
+                return _keycloak_success(user_id, reconciled=True)
+            response = await self.connector._request(
+                "POST",
+                f"/admin/realms/{self.connector.connection.realm}/users/{user_id}/logout",
+            )
+            return _keycloak_write_result(response, user_id, operation="session revoke")
+        except _TransportUnknown as exc:
+            return _unknown_result(exc)
+        except _ApplicationRejected as exc:
+            return ConnectorResult(
+                ConnectorStatus.FAILED,
+                error_code="KeycloakApplicationRejected",
+                error_message=str(exc),
+            )
+
+    async def reconcile(self, request_ref: str) -> ConnectorResult | None:
+        try:
+            rows = await self.connector._find_by_attribute(
+                self.connector.connection.session_revoke_request_ref_attribute,
+                request_ref,
+            )
+            if not rows:
+                return None
+            if len(rows) != 1 or not rows[0].get("id"):
+                return _keycloak_duplicate_request("session revoke")
+            user_id = str(rows[0]["id"])
+            sessions = await _keycloak_sessions(self.connector, user_id)
+            if not sessions:
+                return _keycloak_success(user_id, reconciled=True)
+            return ConnectorResult(
+                ConnectorStatus.UNKNOWN,
+                external_operation_ref=f"keycloak:user:{user_id}",
+                error_code="KeycloakSessionsStillActive",
+                error_message="session revoke request exists but active sessions remain",
+                reconciled=True,
+            )
+        except _TransportUnknown as exc:
+            return _unknown_result(exc, reconciled=True)
+        except _ApplicationRejected as exc:
+            return ConnectorResult(
+                ConnectorStatus.FAILED,
+                error_code="KeycloakApplicationRejected",
+                error_message=str(exc),
+                reconciled=True,
+            )
+
+
+class KeycloakSessionVerifier:
+    def __init__(self, connector: KeycloakIdentityEffectConnector) -> None:
+        self.connector = connector
+
+    async def observe(
+        self,
+        *,
+        subject_ref: str,
+        expected_postcondition: dict[str, Any],
+    ) -> ConnectorResult:
+        del expected_postcondition
+        try:
+            user = await _keycloak_subject_user(self.connector, subject_ref)
+            if user is None:
+                observed: dict[str, Any] = {}
+            else:
+                sessions = await _keycloak_sessions(self.connector, str(user["id"]))
+                observed = {
+                    "target_system": "iam",
+                    "operation": "sessions.revoke",
+                    "subject_ref": subject_ref,
+                    "active_sessions": len(sessions),
+                }
+            return ConnectorResult(
+                ConnectorStatus.SUCCEEDED, observed_postcondition=observed
+            )
+        except (_TransportUnknown, _ApplicationRejected) as exc:
+            return _unavailable_result(exc)
+
+
 class KeycloakIdentityVerifier:
     def __init__(self, connector: KeycloakIdentityEffectConnector) -> None:
         self.connector = connector
@@ -667,14 +1048,143 @@ def _first_attribute(attributes: dict[str, Any], name: str) -> str | None:
     return None
 
 
+def _user_attributes(user: dict[str, Any]) -> dict[str, Any]:
+    attributes = user.get("attributes")
+    return dict(attributes) if isinstance(attributes, dict) else {}
+
+
+def _keycloak_user_update(
+    user: dict[str, Any],
+    marker: str,
+    request_ref: str,
+    *,
+    enabled: bool | None = None,
+) -> dict[str, Any]:
+    attributes = _user_attributes(user)
+    attributes[marker] = [request_ref]
+    body: dict[str, Any] = {
+        "username": user.get("username"),
+        "enabled": bool(user.get("enabled", True)) if enabled is None else enabled,
+        "attributes": attributes,
+    }
+    for key in ("email", "firstName", "lastName"):
+        if key in user:
+            body[key] = user[key]
+    return body
+
+
+async def _keycloak_subject_user(
+    connector: KeycloakIdentityEffectConnector, subject_ref: str
+) -> dict[str, Any] | None:
+    rows = await connector._find_by_attribute(
+        connector.connection.subject_ref_attribute, subject_ref
+    )
+    if len(rows) != 1 or not rows[0].get("id"):
+        return None
+    return await connector._get_user(str(rows[0]["id"]))
+
+
+async def _keycloak_sessions(
+    connector: KeycloakIdentityEffectConnector, user_id: str
+) -> list[dict[str, Any]]:
+    response = await connector._request(
+        "GET", f"/admin/realms/{connector.connection.realm}/users/{user_id}/sessions"
+    )
+    if response.status_code >= 500:
+        raise _TransportUnknown(
+            f"Keycloak session read returned HTTP {response.status_code}"
+        )
+    if response.status_code != 200:
+        raise _ApplicationRejected(
+            f"Keycloak session read rejected HTTP {response.status_code}"
+        )
+    try:
+        raw = response.json()
+    except ValueError as exc:
+        raise _TransportUnknown("Keycloak session read returned invalid JSON") from exc
+    if not isinstance(raw, list):
+        raise _TransportUnknown("Keycloak session read returned invalid representation")
+    return [item for item in raw if isinstance(item, dict)]
+
+
+def _keycloak_write_result(
+    response: httpx.Response, user_id: str, *, operation: str
+) -> ConnectorResult:
+    if response.status_code >= 500:
+        return ConnectorResult(
+            ConnectorStatus.UNKNOWN,
+            external_operation_ref=f"keycloak:user:{user_id}",
+            error_code="KeycloakServerResultAmbiguous",
+            error_message=f"Keycloak {operation} returned HTTP {response.status_code}",
+        )
+    if response.status_code not in {200, 204}:
+        return ConnectorResult(
+            ConnectorStatus.FAILED,
+            external_operation_ref=f"keycloak:user:{user_id}",
+            error_code="KeycloakOperationRejected",
+            error_message=f"Keycloak {operation} returned HTTP {response.status_code}",
+        )
+    return _keycloak_success(user_id)
+
+
+def _keycloak_success(user_id: str, *, reconciled: bool = False) -> ConnectorResult:
+    return ConnectorResult(
+        ConnectorStatus.SUCCEEDED,
+        external_operation_ref=f"keycloak:user:{user_id}",
+        reconciled=reconciled,
+    )
+
+
+def _keycloak_subject_failure(subject_ref: str) -> ConnectorResult:
+    return ConnectorResult(
+        ConnectorStatus.FAILED,
+        error_code="KeycloakSubjectNotUnique",
+        error_message=f"Keycloak subject is absent or ambiguous: {subject_ref}",
+    )
+
+
+def _keycloak_duplicate_request(operation: str) -> ConnectorResult:
+    return ConnectorResult(
+        ConnectorStatus.FAILED,
+        error_code="DuplicateExternalRequestIdentity",
+        error_message=f"multiple Keycloak users share the {operation} request_ref",
+        reconciled=True,
+    )
+
+
+def _unknown_result(
+    exc: Exception, *, reconciled: bool = False
+) -> ConnectorResult:
+    return ConnectorResult(
+        ConnectorStatus.UNKNOWN,
+        error_code=type(exc.__cause__).__name__ if exc.__cause__ else type(exc).__name__,
+        error_message=str(exc),
+        reconciled=reconciled,
+    )
+
+
+def _unavailable_result(exc: Exception) -> ConnectorResult:
+    return ConnectorResult(
+        ConnectorStatus.UNAVAILABLE,
+        error_code=type(exc.__cause__).__name__ if exc.__cause__ else type(exc).__name__,
+        error_message=str(exc),
+    )
+
+
 __all__ = [
     "ConnectorConfigurationError",
     "ConnectorResult",
     "ConnectorStatus",
     "KeycloakEffectConnection",
+    "KeycloakIdentityDisableConnector",
+    "KeycloakIdentityDisableVerifier",
     "KeycloakIdentityEffectConnector",
     "KeycloakIdentityVerifier",
+    "KeycloakSessionRevokeConnector",
+    "KeycloakSessionVerifier",
     "OdooEffectConnection",
+    "OdooEmployeeDeactivateConnector",
+    "OdooEmployeeDeactivateVerifier",
     "OdooEmployeeEffectConnector",
     "OdooEmployeeVerifier",
 ]
