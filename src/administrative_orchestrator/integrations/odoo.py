@@ -51,6 +51,7 @@ class OdooHRFactSource:
         self.connection = connection
         self.credentials = credentials or EnvironmentCredentialResolver()
         self._client = client
+        self._available_models: dict[str, bool] = {}
 
     def read_employee(self, employee_ref: str) -> AuthoritativeRecord:
         employee_id = _numeric_id(employee_ref, "hr.employee")
@@ -150,6 +151,8 @@ class OdooHRFactSource:
         )
 
     def _latest_contract(self, employee_id: int) -> dict[str, Any] | None:
+        if not self._model_available("hr.contract"):
+            return None
         rows = self._execute_kw(
             "hr.contract",
             "search_read",
@@ -161,6 +164,16 @@ class OdooHRFactSource:
             },
         )
         return rows[0] if rows else None
+
+    def _model_available(self, model: str) -> bool:
+        """Return whether one optional Odoo model is installed."""
+        cached = self._available_models.get(model)
+        if cached is not None:
+            return cached
+        count = self._execute_kw("ir.model", "search_count", [[("model", "=", model)]])
+        available = bool(count)
+        self._available_models[model] = available
+        return available
 
     def _absent(self, model: str, record_id: int) -> AuthoritativeRecord:
         observed_at = utcnow()
