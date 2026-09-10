@@ -37,7 +37,9 @@ def build_hris_source(settings: Settings) -> HRFactSource | None:
                 ),
                 timeout_seconds=settings.connector_timeout_seconds,
                 allow_insecure_http=settings.runtime_profile != "production",
-            )
+            ),
+            termination_status_field=settings.odoo_termination_status_field,
+            termination_effective_at_field=settings.odoo_termination_effective_at_field,
         )
     raise FactAcquisitionError(f"unsupported HRIS source kind {settings.hris_source_kind!r}")
 
@@ -104,6 +106,60 @@ def merge_authoritative_onboarding_facts(
     )
 
 
+def merge_authoritative_offboarding_facts(
+    case: AdministrativeCase,
+    record: AuthoritativeRecord,
+    *,
+    owner: str = "service:administrative-orchestrator",
+) -> FactSnapshot:
+    """Overlay authoritative HRIS termination facts for employee offboarding."""
+    if case.fact_snapshot is None:
+        raise FactAcquisitionError("case has no current fact snapshot")
+    if not record.value.get("present", False):
+        raise FactAcquisitionError("authoritative HRIS reports employee absent")
+
+    facts = dict(case.fact_snapshot.facts)
+    assertions = _existing_assertions(case.fact_snapshot)
+    authoritative_keys = (
+        "employee_ref",
+        "department_ref",
+        "employment_type",
+        "termination_status",
+        "termination_effective_at",
+        "active",
+    )
+    for key in authoritative_keys:
+        if key not in record.value:
+            continue
+        value = record.value[key]
+        if value is None:
+            continue
+        facts[key] = value
+        assertions[key] = FactAssertion(
+            value=value,
+            authority=FactAuthority.AUTHORITATIVE,
+            source=record.source,
+            owner=owner,
+            source_ref=record.source_ref,
+            source_version=record.source_version,
+            observed_at=record.observed_at,
+            digest=_value_digest(value),
+        )
+
+    digest = _snapshot_digest(facts, assertions)
+    return FactSnapshot(
+        source="composite:employee-offboarding",
+        owner=owner,
+        authority=FactAuthority.CLAIM,
+        source_ref=record.source_ref,
+        source_version=record.source_version,
+        observed_at=record.observed_at,
+        facts=facts,
+        assertions=assertions,
+        digest=digest,
+    )
+
+
 class AuthoritativeFactRevalidator:
     """Re-read current HRIS truth before governed execution/completion."""
 
@@ -129,6 +185,8 @@ class AuthoritativeFactRevalidator:
                 "work_email",
                 "active",
                 "employment_state",
+                "termination_status",
+                "termination_effective_at",
             }
         }
         if not expected:

@@ -47,14 +47,29 @@ class OdooHRFactSource:
         *,
         credentials: CredentialResolver | None = None,
         client: httpx.Client | None = None,
+        termination_status_field: str = "x_administrative_termination_status",
+        termination_effective_at_field: str = (
+            "x_administrative_termination_effective_at"
+        ),
     ) -> None:
         self.connection = connection
         self.credentials = credentials or EnvironmentCredentialResolver()
         self._client = client
         self._available_models: dict[str, bool] = {}
+        self._available_fields_cache: dict[str, set[str]] = {}
+        self.termination_status_field = termination_status_field
+        self.termination_effective_at_field = termination_effective_at_field
 
     def read_employee(self, employee_ref: str) -> AuthoritativeRecord:
         employee_id = _numeric_id(employee_ref, "hr.employee")
+        termination_fields = [
+            name
+            for name in (
+                self.termination_status_field,
+                self.termination_effective_at_field,
+            )
+            if name and name in self._available_fields("hr.employee")
+        ]
         rows = self._execute_kw(
             "hr.employee",
             "read",
@@ -68,6 +83,7 @@ class OdooHRFactSource:
                     "work_email",
                     "active",
                     "write_date",
+                    *termination_fields,
                 ]
             },
         )
@@ -94,6 +110,16 @@ class OdooHRFactSource:
             "employment_type": _many2one_name(contract.get("contract_type_id")) if contract else None,
             "start_date": contract.get("date_start") if contract else None,
         }
+        if self.termination_status_field in termination_fields:
+            raw_status = row.get(self.termination_status_field)
+            status = str(raw_status).strip().lower() if raw_status else ""
+            # An empty termination field is the authoritative statement that no
+            # termination is scheduled for this employee.
+            value["termination_status"] = status or "active"
+        if self.termination_effective_at_field in termination_fields:
+            value["termination_effective_at"] = (
+                row.get(self.termination_effective_at_field) or None
+            )
         version = str(row.get("write_date") or "unknown")
         if contract and contract.get("write_date"):
             version = f"{version}|contract:{contract['write_date']}"
@@ -180,6 +206,22 @@ class OdooHRFactSource:
             return False
         self._available_models[model] = True
         return True
+
+    def _available_fields(self, model: str) -> set[str]:
+        """Return the field names this reader can see on one Odoo model."""
+        cached = self._available_fields_cache.get(model)
+        if cached is not None:
+            return cached
+        try:
+            result = self._execute_kw(model, "fields_get", [[], ["string"]])
+        except OdooSourceError:
+            # A reader without field introspection still keeps the base read
+            # path working; optional facts then simply stay absent.
+            self._available_fields_cache[model] = set()
+            return set()
+        available = set(result) if isinstance(result, dict) else set()
+        self._available_fields_cache[model] = available
+        return available
 
     def _absent(self, model: str, record_id: int) -> AuthoritativeRecord:
         observed_at = utcnow()
