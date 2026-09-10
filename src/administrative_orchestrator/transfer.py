@@ -150,6 +150,32 @@ class TransferRequirementRepository:
             )
             return tuple(self._from_row(row) for row in rows)
 
+    def mark_fulfilled(
+        self,
+        requirement_id: UUID,
+        *,
+        successor_principal_id: str,
+    ) -> AdministrativeTransferRequirement:
+        with self.store.sessions.begin() as db:
+            row = db.get(AdministrativeTransferRequirementRow, requirement_id)
+            if row is None:
+                raise TransferError("transfer requirement does not exist")
+            current = self._from_row(row)
+            if current.transfer_mode is not TransferMode.TRANSFER_REQUIRED:
+                raise TransferError("revoke-only requirement cannot be marked transferred")
+            if current.successor_principal_id != successor_principal_id:
+                raise TransferError("transfer fulfillment successor does not match qualification")
+            if current.status is TransferRequirementStatus.FULFILLED:
+                return current
+            if current.status is not TransferRequirementStatus.SUCCESSOR_QUALIFIED:
+                raise TransferError("transfer requirement lacks a qualified successor")
+            row.status = TransferRequirementStatus.FULFILLED.value
+            row.qualification_reason = (
+                "qualified successor role is current in the required organization scope"
+            )
+            db.flush()
+            return self._from_row(row)
+
     @staticmethod
     def _semantics(requirement: AdministrativeTransferRequirement) -> dict[str, object]:
         return requirement.model_dump(mode="json", exclude={"created_at"})
