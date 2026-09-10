@@ -139,11 +139,11 @@ class CandidateOnboardingAdmissionService:
             replayed = self.store.get_latest_policy_evaluation(current.case_id)
             if replayed is None:
                 raise
-                stored = self.store.get_case(current.case_id)
-                if stored is None:
-                    raise OnboardingAdmissionError(
-                        "onboarding policy transition committed without a readable case"
-                    ) from exc
+            stored = self.store.get_case(current.case_id)
+            if stored is None:
+                raise OnboardingAdmissionError(
+                    "onboarding policy transition committed without a readable case"
+                ) from exc
             return OnboardingAdmissionResult(
                 promotion=promotion,
                 case=stored,

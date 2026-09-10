@@ -57,7 +57,8 @@ def test_feishu_http_boundary_only_enqueues_verified_metadata(
     monkeypatch,
 ) -> None:
     store, boundary = _boundary()
-    monkeypatch.setattr(api, "_feishu_intake_boundary", boundary)
+    monkeypatch.setattr(api, "_feishu_intake_boundary", None)
+    api.configure_feishu_intake(boundary)
     client = TestClient(api.app)
 
     response = client.post("/v1/intake/feishu/events", content=_body())

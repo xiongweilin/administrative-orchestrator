@@ -27,12 +27,21 @@ from administrative_orchestrator.intake.repository import (
     IntakeRepository,
     PromotionRecordRow,
 )
-from administrative_orchestrator.onboarding_admission import CandidateOnboardingAdmissionService
-from administrative_orchestrator.persistence import CaseRow, RequestRow, SqlStore
+from administrative_orchestrator.onboarding_admission import (
+    CandidateOnboardingAdmissionService,
+    OnboardingAdmissionError,
+)
+from administrative_orchestrator.persistence import (
+    CaseRow,
+    ConcurrencyConflict,
+    RequestRow,
+    SqlStore,
+)
 from administrative_orchestrator.policy_plane import (
     PolicyRepository,
     default_onboarding_policy_version,
 )
+from administrative_orchestrator.unit_of_work import AdministrativeUnitOfWork
 
 
 def _setup(
@@ -375,6 +384,32 @@ def test_human_admission_enters_existing_onboarding_facts_and_policy_path() -> N
             "candidate_fact_refs": tuple(fact_refs)
         }
     )
+
+
+def _attach_candidate_facts(
+    store: SqlStore,
+    repository: IntakeRepository,
+    candidate: CandidateAdministrativeRequest,
+    facts: list[tuple[str, object]],
+) -> CandidateAdministrativeRequest:
+    refs = []
+    for fact_key, value in facts:
+        fact = repository.append_candidate_fact(
+            CandidateFactAssertion(
+                fact_key=fact_key,
+                value=value,
+                authority=CandidateAuthority.CLAIM,
+                source_refs=candidate.source_refs,
+                no_evidence_reason="test source has no span for this contract fixture",
+            )
+        )
+        refs.append(fact.candidate_fact_id)
+    updated = candidate.model_copy(update={"candidate_fact_refs": tuple(refs)})
+    with store.sessions.begin() as db:
+        row = db.get(CandidateAdministrativeRequestRow, candidate.candidate_id)
+        assert row is not None
+        row.candidate_fact_refs_json = [str(ref) for ref in refs]
+    return updated
     with store.sessions.begin() as db:
         row = db.get(CandidateAdministrativeRequestRow, candidate.candidate_id)
         assert row is not None
@@ -415,3 +450,140 @@ def test_human_admission_enters_existing_onboarding_facts_and_policy_path() -> N
     assert replay.created is False
     assert replay.case.case_id == first.case.case_id
     assert replay.policy_evaluation.policy_ref == first.policy_evaluation.policy_ref
+
+
+def test_onboarding_admission_rejects_missing_or_ambiguous_candidate_inputs() -> None:
+    store, repository, candidate = _setup()
+    assessment = _final_admit(repository, candidate)
+    service = CandidateOnboardingAdmissionService(store, repository)
+
+    with pytest.raises(OnboardingAdmissionError, match="subject_ref"):
+        service.promote_and_evaluate(
+            candidate,
+            assessment,
+            source_system="test-provider",
+            tenant_ref="tenant:test",
+            source_event_id="event:1",
+            requester_principal_id="principal:requester",
+            subject_ref=" ",
+        )
+
+    unknown_store, unknown_repository, unknown_candidate = _setup()
+    unknown_candidate = _attach_candidate_facts(
+        unknown_store,
+        unknown_repository,
+        unknown_candidate,
+        [("unsupported_fact", "value")],
+    )
+    unknown_service = CandidateOnboardingAdmissionService(unknown_store, unknown_repository)
+    with pytest.raises(OnboardingAdmissionError, match="not allowed"):
+        unknown_service._candidate_facts(unknown_candidate, subject_ref="employee:1")
+
+    duplicate_store, duplicate_repository, duplicate_candidate = _setup()
+    duplicate_candidate = _attach_candidate_facts(
+        duplicate_store,
+        duplicate_repository,
+        duplicate_candidate,
+        [("department_ref", "department:one"), ("department_ref", "department:two")],
+    )
+    duplicate_service = CandidateOnboardingAdmissionService(
+        duplicate_store, duplicate_repository
+    )
+    with pytest.raises(OnboardingAdmissionError, match="duplicate"):
+        duplicate_service._candidate_facts(duplicate_candidate, subject_ref="employee:1")
+
+    mismatch_store, mismatch_repository, mismatch_candidate = _setup()
+    mismatch_candidate = _attach_candidate_facts(
+        mismatch_store,
+        mismatch_repository,
+        mismatch_candidate,
+        [("employee_ref", "employee:other")],
+    )
+    mismatch_service = CandidateOnboardingAdmissionService(mismatch_store, mismatch_repository)
+    with pytest.raises(OnboardingAdmissionError, match="does not match"):
+        mismatch_service._candidate_facts(mismatch_candidate, subject_ref="employee:1")
+
+
+def test_onboarding_admission_rejects_invalid_candidate_fact_shape() -> None:
+    store, repository, candidate = _setup()
+    candidate = _attach_candidate_facts(
+        store,
+        repository,
+        candidate,
+        [("department_ref", ["not-a-string"])],
+    )
+    with pytest.raises(OnboardingAdmissionError, match="fact contract"):
+        CandidateOnboardingAdmissionService(store, repository)._candidate_facts(
+            candidate, subject_ref="employee:1"
+        )
+
+
+def test_onboarding_admission_reloads_after_a_policy_commit_race() -> None:
+    store, repository, candidate = _setup()
+    candidate = _attach_candidate_facts(
+        store,
+        repository,
+        candidate,
+        [
+            ("department_ref", "department:engineering"),
+            ("manager_principal_id", "person:manager"),
+            ("start_date", "2026-10-01"),
+            ("employment_type", "full_time"),
+        ],
+    )
+    PolicyRepository(store).put_version(default_onboarding_policy_version())
+    assessment = _final_admit(repository, candidate)
+
+    class _CommitThenRaise:
+        def replace_facts_and_apply_policy(self, before, after, evaluation) -> None:
+            AdministrativeUnitOfWork(store).replace_facts_and_apply_policy(
+                before, after, evaluation
+            )
+            raise ConcurrencyConflict("simulated duplicate worker")
+
+    result = CandidateOnboardingAdmissionService(
+        store,
+        repository,
+        uow=_CommitThenRaise(),
+    ).promote_and_evaluate(
+        candidate,
+        assessment,
+        source_system="test-provider",
+        tenant_ref="tenant:test",
+        source_event_id="event:1",
+        requester_principal_id="principal:requester",
+        subject_ref="employee:1",
+    )
+    assert result.case.status is CaseStatus.AWAITING_DECISION
+    assert result.policy_evaluation.required_decision_roles == ("hr_approver",)
+
+
+def test_onboarding_admission_does_not_hide_a_policy_race_without_commit() -> None:
+    store, repository, candidate = _setup()
+    candidate = _attach_candidate_facts(
+        store,
+        repository,
+        candidate,
+        [("department_ref", "department:engineering")],
+    )
+    PolicyRepository(store).put_version(default_onboarding_policy_version())
+    assessment = _final_admit(repository, candidate)
+
+    class _FailingUow:
+        def replace_facts_and_apply_policy(self, before, after, evaluation) -> None:
+            raise ConcurrencyConflict("simulated lost update")
+
+    with pytest.raises(ConcurrencyConflict, match="lost update"):
+        CandidateOnboardingAdmissionService(
+            store,
+            repository,
+            uow=_FailingUow(),
+        ).promote_and_evaluate(
+            candidate,
+            assessment,
+            source_system="test-provider",
+            tenant_ref="tenant:test",
+            source_event_id="event:1",
+            requester_principal_id="principal:requester",
+            subject_ref="employee:1",
+        )
