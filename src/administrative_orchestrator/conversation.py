@@ -8,9 +8,9 @@ from uuid import UUID, uuid4
 from pydantic import Field, model_validator
 from sqlalchemy import (
     JSON,
+    BigInteger,
     DateTime,
     ForeignKey,
-    Integer,
     String,
     UniqueConstraint,
     Uuid,
@@ -193,7 +193,7 @@ class ConversationRow(Base):
     thread_ref: Mapped[str] = mapped_column(String(1000), nullable=False)
     sender_external_subject: Mapped[str] = mapped_column(String(1000), nullable=False)
     participants_json: Mapped[list[str]] = mapped_column(JSON, nullable=False)
-    last_sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    last_sequence: Mapped[int] = mapped_column(BigInteger, nullable=False)
     last_message_id: Mapped[UUID | None] = mapped_column(Uuid, nullable=True)
     bound_case_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("administrative_case.case_id"), nullable=True
@@ -231,7 +231,7 @@ class ConversationMessageRow(Base):
     sender_external_subject: Mapped[str] = mapped_column(String(1000), nullable=False)
     displayed_sender: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     participants_json: Mapped[list[str]] = mapped_column(JSON, nullable=False)
-    sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    sequence: Mapped[int] = mapped_column(BigInteger, nullable=False)
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     content_digest: Mapped[str | None] = mapped_column(String(128), nullable=True)
     source_refs_json: Mapped[list[str]] = mapped_column(JSON, nullable=False)

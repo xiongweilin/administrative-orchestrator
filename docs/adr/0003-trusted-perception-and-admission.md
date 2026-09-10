@@ -125,7 +125,11 @@ authority credentials and are not Kernel reality-write credentials.
 
 For the Feishu reference slice, the official SDK long connection hands a
 metadata-only envelope through the gateway to the Administrative HTTP
-boundary. The boundary verifies the provider token and then writes a verified
+boundary. The long-connection event does not reliably carry the HTTP callback
+verification token, so the gateway uses a dedicated transport credential for
+this internal handoff. The boundary verifies that credential, and verifies a
+provider token too whenever one is present; direct callback mode continues to
+require the provider token and optional signature. It then writes a verified
 `IntakeReceipt` and `intake.feishu.received` outbox event in one transaction.
 The receipt/outbox job payload contains provider delivery metadata only;
 message body/content is fetched canonically by the asynchronous worker after

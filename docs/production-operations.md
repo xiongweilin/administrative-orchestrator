@@ -80,7 +80,7 @@ That flag is rejected by the production profile and must never be copied into a
 production environment.
 
 When M6 intake is enabled, the deployment must additionally provide
-configuration references for the Feishu long-connection token boundary, the
+configuration references for the Feishu long-connection transport boundary, the
 worker's app credentials for dynamic tenant-token canonical reads, the
 candidate-only model gateway, the durable artifact root, and the current
 Feishu-to-Administrative identity bindings. The app credentials, ingress
@@ -104,6 +104,15 @@ the repository. The helper stores the token in Windows Credential Manager and
 never prints it. Do not pass the token as a CLI argument, place it in chat, or
 commit the materialized file. This token is not the worker's Feishu app
 secret, canonical-read tenant token, gateway HMAC, or control-plane key.
+
+The long-connection reference slice also requires the gateway-to-Administrative
+transport credential `ADMIN_FEISHU_INGRESS_SHARED_SECRET` on the Administrative
+API and `ADMINISTRATIVE_INGRESS_SHARED_SECRET` on the gateway. This is not the
+Feishu callback token and is never stored in a receipt, outbox payload, or
+evidence record. The gateway sends only the metadata envelope plus this
+transport authentication header; a long-connection event may omit the HTTP
+callback token. A direct Feishu callback, if separately enabled, still uses the
+callback token and optional signature path.
 
 Run the static deployment gate before starting the application processes:
 

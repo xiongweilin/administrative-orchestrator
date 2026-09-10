@@ -184,6 +184,59 @@ def test_feishu_ingress_rejects_invalid_token_and_digest_replay() -> None:
         boundary.accept(_event_body(event_id="event-feishu-1", message_id="different"), {})
 
 
+def test_long_connection_handoff_requires_gateway_secret_when_callback_token_is_absent() -> None:
+    store, repository = _repository()
+    verifier = FeishuEventVerifier(
+        "verification-token",
+        gateway_shared_secret="gateway-secret",
+        clock=lambda: EVENT_TIME / 1000,
+    )
+    boundary = FeishuWebhookBoundary(repository, verifier)
+    decoded = json.loads(_event_body())
+    decoded["header"].pop("token")
+    body = json.dumps(decoded, separators=(",", ":")).encode()
+
+    with pytest.raises(FeishuVerificationError):
+        boundary.accept(body, {})
+    with pytest.raises(FeishuVerificationError):
+        boundary.accept(body, {"X-Administrative-Ingress-Token": "wrong"})
+
+    accepted = boundary.accept(body, {"X-Administrative-Ingress-Token": "gateway-secret"})
+    assert isinstance(accepted, FeishuAcceptance)
+    assert accepted.created is True
+
+
+def test_long_connection_handoff_rejects_conflicting_provider_token() -> None:
+    _, repository = _repository()
+    verifier = FeishuEventVerifier(
+        "verification-token",
+        gateway_shared_secret="gateway-secret",
+        clock=lambda: EVENT_TIME / 1000,
+    )
+    boundary = FeishuWebhookBoundary(repository, verifier)
+
+    with pytest.raises(FeishuVerificationError):
+        boundary.accept(
+            _event_body(token="conflicting-token"),
+            {"X-Administrative-Ingress-Token": "gateway-secret"},
+        )
+
+
+def test_long_connection_handoff_gateway_header_alone_is_insufficient() -> None:
+    _, repository = _repository()
+    verifier = FeishuEventVerifier(
+        "verification-token",
+        clock=lambda: EVENT_TIME / 1000,
+    )
+    boundary = FeishuWebhookBoundary(repository, verifier)
+    decoded = json.loads(_event_body())
+    decoded["header"].pop("token")
+    body = json.dumps(decoded, separators=(",", ":")).encode()
+
+    with pytest.raises(FeishuVerificationError):
+        boundary.accept(body, {"X-Administrative-Ingress-Token": "gateway-secret"})
+
+
 def test_feishu_callback_signature_and_challenge_are_verified() -> None:
     _, repository = _repository()
     verifier = _verifier(encrypt_key="encrypt-key")
@@ -310,6 +363,51 @@ def test_feishu_model_failure_retains_source_without_candidate(tmp_path: Path) -
     assert result.candidate is None
     assert repository.list_candidates() == []
     assert result.receipt.artifact_ref == result.artifact.artifact_id
+
+
+def test_feishu_pipeline_retries_invalid_interpretation_append_only(tmp_path: Path) -> None:
+    store, repository = _repository()
+    boundary = FeishuWebhookBoundary(repository, _verifier())
+    body = _event_body(event_id="event-feishu-retry", message_id="om-message-retry")
+    accepted = boundary.accept(body, {})
+    assert isinstance(accepted, FeishuAcceptance)
+    event = _verifier().verify(body, {})
+    assert isinstance(event, FeishuProviderEvent)
+
+    outputs = iter(
+        (
+            "{}",
+            json.dumps(
+                {
+                    "candidate_intent": "onboard employee:1",
+                    "candidate_facts": [],
+                }
+            ),
+        )
+    )
+    pipeline = _pipeline(
+        tmp_path,
+        store,
+        repository,
+        _Fetcher(),
+        gateway=StaticModelGateway(
+            lambda _request: next(outputs),
+            provenance=ModelProvenance(
+                provider="test-model-gateway",
+                model_identity="test-model",
+                model_version="v1",
+            ),
+        ),
+    )
+
+    first = pipeline.process_event(event)
+    assert first.interpretation.status is InterpretationStatus.INVALID
+    assert first.candidate is None
+
+    second = pipeline.process_event(event)
+    assert second.interpretation.status is InterpretationStatus.SUCCEEDED
+    assert second.candidate is not None
+    assert len(repository.list_interpretations(second.artifact.artifact_id)) == 2
 
 
 def test_feishu_pipeline_persists_attachment_evidence_and_candidate_fact(tmp_path: Path) -> None:
@@ -512,6 +610,58 @@ def test_http_feishu_fetcher_reads_canonical_text_without_leaking_token() -> Non
         fetcher.close()
     assert message.content == "canonical text"
     assert requests[0].headers["Authorization"] == "Bearer test-access-token"
+
+
+def test_http_feishu_fetcher_reads_official_sender_id_shape() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        del request
+        return httpx.Response(
+            200,
+            json={
+                "code": 0,
+                "data": {
+                    "items": [
+                        {
+                            "message_id": "om-message-1",
+                            "create_time": str(EVENT_TIME),
+                            "tenant_key": "tenant-feishu",
+                            "sender": {
+                                "id": "ou_alice",
+                                "id_type": "open_id",
+                                "sender_type": "user",
+                                "tenant_key": "tenant-feishu",
+                            },
+                            "msg_type": "text",
+                            "body": {"content": json.dumps({"text": "canonical text"})},
+                        }
+                    ]
+                },
+            },
+        )
+
+    event = FeishuProviderEvent(
+        event_id="event-feishu-1",
+        tenant_ref="tenant-feishu",
+        message_id="om-message-1",
+        thread_ref="om-message-1",
+        sender_external_subject="ou_alice",
+        occurred_at=datetime.fromtimestamp(EVENT_TIME / 1000, tz=UTC),
+        sequence=EVENT_TIME,
+        delivery_digest="a" * 64,
+    )
+    fetcher = HttpFeishuCanonicalFetcher(
+        "https://open.feishu.invalid",
+        lambda: "test-access-token",
+        transport=httpx.MockTransport(handler),
+    )
+    try:
+        message = fetcher.fetch(event)
+    finally:
+        fetcher.close()
+
+    assert message.sender_external_subject == "ou_alice"
+    assert message.thread_ref == "om-message-1"
+    assert message.content == "canonical text"
 
 
 def test_feishu_tenant_token_provider_caches_and_refreshes_near_expiry() -> None:

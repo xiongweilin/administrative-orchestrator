@@ -261,11 +261,11 @@ services:
       ADMIN_FEISHU_APP_SECRET_FILE: ${ADMIN_FEISHU_APP_SECRET_FILE:-/run/feishu-secrets/feishu_app_secret}
       ADMIN_FEISHU_ACCESS_TOKEN: ${ADMIN_FEISHU_ACCESS_TOKEN:-}
       ADMIN_FEISHU_ARTIFACT_ROOT: /var/lib/administrative/intake-artifacts
-      ADMIN_INTAKE_MODEL_URL: ${ADMIN_INTAKE_MODEL_URL:-http://host.docker.internal:4102/v1}
+      ADMIN_INTAKE_MODEL_URL: ${ADMIN_INTAKE_MODEL_URL:-http://host.docker.internal:4100/v1}
       ADMIN_INTAKE_MODEL_API_KEY: ${ADMIN_INTAKE_MODEL_API_KEY:-}
-      ADMIN_INTAKE_MODEL_PROTOCOL: ${ADMIN_INTAKE_MODEL_PROTOCOL:-openai-chat}
-      ADMIN_INTAKE_MODEL_NAME: ${ADMIN_INTAKE_MODEL_NAME:-opencode-go/omen-alpha}
-      ADMIN_INTAKE_MODEL_MAX_TOKENS: ${ADMIN_INTAKE_MODEL_MAX_TOKENS:-2400}
+      ADMIN_INTAKE_MODEL_PROTOCOL: ${ADMIN_INTAKE_MODEL_PROTOCOL:-openai-responses}
+      ADMIN_INTAKE_MODEL_NAME: ${ADMIN_INTAKE_MODEL_NAME:-opencode-go/deepseek-flash}
+      ADMIN_INTAKE_MODEL_MAX_TOKENS: ${ADMIN_INTAKE_MODEL_MAX_TOKENS:-6000}
     volumes:
       - administrative-m6-intake-artifacts:/var/lib/administrative/intake-artifacts
       - feishu_secrets:/run/feishu-secrets:ro

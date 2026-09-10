@@ -190,6 +190,21 @@ def test_conversation_sender_participants_and_delivery_order_are_stable() -> Non
     assert len(service.list_messages(ref)) == 1
 
 
+def test_provider_sequence_accepts_feishu_large_integer() -> None:
+    _, service, ref = _setup()
+    sequence = 1_789_020_305_342
+
+    result = service.accept_message(
+        _message(ref, sequence=sequence, provider_message_id="message:large-sequence")
+    )
+
+    assert result.created is True
+    state = service.get_conversation(ref)
+    assert state is not None
+    assert state.last_sequence == sequence
+    assert service.list_messages(ref)[0].sequence == sequence
+
+
 def test_candidate_supersession_is_explicit_and_same_conversation_only() -> None:
     store, service, ref = _setup()
     repository = IntakeRepository(store)

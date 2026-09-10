@@ -53,6 +53,7 @@ from ..persistence import SqlStore, utcnow
 
 FEISHU_SOURCE_SYSTEM = "feishu"
 FEISHU_INTAKE_EVENT_TYPE = "intake.feishu.received"
+FEISHU_GATEWAY_AUTH_HEADER = "X-Administrative-Ingress-Token"
 _FEISHU_NAMESPACE = uuid5(NAMESPACE_URL, "https://administrative-orchestrator/providers/feishu")
 
 
@@ -344,12 +345,13 @@ def _datetime_from_epoch_millis(value: int) -> datetime:
 
 
 class FeishuEventVerifier:
-    """Verify Feishu callback tokens and optional signed callback headers."""
+    """Verify Feishu callbacks or authenticated long-connection handoffs."""
 
     def __init__(
         self,
         verification_token: str,
         *,
+        gateway_shared_secret: str | None = None,
         encrypt_key: str | None = None,
         max_age_seconds: int = 300,
         clock: Callable[[], float] = time.time,
@@ -359,6 +361,7 @@ class FeishuEventVerifier:
         if max_age_seconds <= 0:
             raise ValueError("max_age_seconds must be positive")
         self._verification_token = verification_token
+        self._gateway_shared_secret = gateway_shared_secret
         self._encrypt_key = encrypt_key
         self._max_age_seconds = max_age_seconds
         self._clock = clock
@@ -366,7 +369,9 @@ class FeishuEventVerifier:
     def verify(self, body: bytes, headers: Mapping[str, str]) -> FeishuChallenge | FeishuProviderEvent:
         if not isinstance(body, bytes) or not body:
             raise FeishuVerificationError("Feishu callback body is empty")
-        self._verify_optional_signature(body, headers)
+        gateway_authenticated = self._gateway_authenticated(headers)
+        if not gateway_authenticated:
+            self._verify_optional_signature(body, headers)
         try:
             decoded = json.loads(body)
         except (TypeError, ValueError) as exc:
@@ -387,7 +392,10 @@ class FeishuEventVerifier:
             envelope = _FeishuEnvelope.model_validate(decoded)
         except ValidationError as exc:
             raise FeishuVerificationError("Feishu callback envelope is invalid") from exc
-        if envelope.header.token is None or not self._same_secret(envelope.header.token):
+        if envelope.header.token is None:
+            if not gateway_authenticated:
+                raise FeishuVerificationError("Feishu callback token is invalid")
+        elif not self._same_secret(envelope.header.token):
             raise FeishuVerificationError("Feishu callback token is invalid")
         sender = envelope.event.sender.sender_id.open_id
         if sender is None or not sender.strip():
@@ -412,6 +420,12 @@ class FeishuEventVerifier:
 
     def _same_secret(self, value: str) -> bool:
         return hmac.compare_digest(value, self._verification_token)
+
+    def _gateway_authenticated(self, headers: Mapping[str, str]) -> bool:
+        if not self._gateway_shared_secret:
+            return False
+        value = _header(headers, FEISHU_GATEWAY_AUTH_HEADER)
+        return value is not None and hmac.compare_digest(value, self._gateway_shared_secret)
 
     def _verify_optional_signature(self, body: bytes, headers: Mapping[str, str]) -> None:
         if self._encrypt_key is None:
@@ -564,9 +578,15 @@ def _canonical_message_from_payload(
     message_id = _text(message.get("message_id"), "message_id")
     tenant_ref = _text(message.get("tenant_key") or message.get("tenant_ref") or event.tenant_ref, "tenant_ref")
     sender_payload = message.get("sender_id") or message.get("sender") or {}
-    if not isinstance(sender_payload, dict):
-        raise TypeError("sender payload must be an object")
-    sender = _text(sender_payload.get("open_id"), "sender open_id")
+    if isinstance(sender_payload, str):
+        sender = _text(sender_payload, "sender open_id")
+    else:
+        if not isinstance(sender_payload, dict):
+            raise TypeError("sender payload must be an object")
+        sender = _text(
+            sender_payload.get("open_id") or sender_payload.get("id"),
+            "sender open_id",
+        )
     body = message.get("body")
     body_content = body.get("content") if isinstance(body, dict) else message.get("content")
     message_type = message.get("msg_type") or message.get("message_type")
@@ -1002,11 +1022,19 @@ class FeishuInboxPipeline:
             for item in self.repository.list_interpretations(artifact.artifact_id)
             if item.interpretation_profile_ref == self.interpretation_profile.profile_ref
         ]
-        if existing:
-            return sorted(existing, key=lambda item: item.interpreted_at)[-1]
+        succeeded = [
+            item for item in existing if item.status is InterpretationStatus.SUCCEEDED
+        ]
+        if succeeded:
+            return sorted(succeeded, key=lambda item: item.interpreted_at)[-1]
+        interpretation_seed = (
+            f"interpretation:{artifact.artifact_id}:{self.interpretation_profile.profile_ref}"
+            if not existing
+            else f"interpretation:{artifact.artifact_id}:{self.interpretation_profile.profile_ref}:retry:{len(existing)}"
+        )
         interpretation_id = uuid5(
             _FEISHU_NAMESPACE,
-            f"interpretation:{artifact.artifact_id}:{self.interpretation_profile.profile_ref}",
+            interpretation_seed,
         )
         interpretation = self.interpretation_client.interpret(
             artifact,

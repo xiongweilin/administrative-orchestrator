@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import timedelta
 from uuid import uuid4
 
 import pytest
@@ -235,6 +236,36 @@ def test_all_candidate_core_records_persist_without_authority_promotion() -> Non
         assert db.get(CandidateAdministrativeRequestRow, candidate.candidate_id) is not None
         assert db.get(CandidateCaseUpdateRow, update.candidate_update_id) is not None
         assert db.get(IntakeAssessmentRow, assessment.assessment_id) is not None
+
+
+def test_candidate_fact_replay_ignores_only_creation_timestamp() -> None:
+    store = SqlStore("sqlite+pysqlite:///:memory:")
+    store.init_schema()
+    repository = IntakeRepository(store)
+    artifact = repository.append_source_artifact(_artifact())
+    span = repository.append_evidence_span(
+        EvidenceSpan(
+            artifact_ref=artifact.artifact_id,
+            representation_digest=artifact.content_digest,
+            locator_kind="message_body",
+            locator={"char_start": 0, "char_end": 12},
+            extractor_ref="test-extractor-v1",
+        )
+    )
+    fact = CandidateFactAssertion(
+        fact_key="employee_ref",
+        value="employee:1",
+        authority=CandidateAuthority.CLAIM,
+        source_refs=(artifact.artifact_id,),
+        evidence_span_refs=(span.evidence_span_id,),
+    )
+    first = repository.append_candidate_fact(fact)
+    replay = repository.append_candidate_fact(
+        fact.model_copy(update={"created_at": fact.created_at + timedelta(seconds=1)})
+    )
+
+    assert replay == first
+    assert repository.get_candidate_fact(first.candidate_fact_id) == first
 
 
 def test_promotion_is_idempotent_per_candidate_and_request() -> None:

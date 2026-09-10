@@ -25,6 +25,7 @@
       ],
       "defaultClientScopes": [
         "openid",
+        "basic",
         "profile",
         "email",
         "administrative-audience"
@@ -66,6 +67,52 @@
   ],
   "clientScopes": [
     {
+      "name": "basic",
+      "description": "OpenID Connect scope for add standard JWT claims: sub, auth_time, acr",
+      "protocol": "openid-connect",
+      "attributes": {
+        "include.in.token.scope": "false",
+        "display.on.consent.screen": "false"
+      },
+      "protocolMappers": [
+        {
+          "name": "sub",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-sub-mapper",
+          "consentRequired": false,
+          "config": {
+            "introspection.token.claim": "true",
+            "access.token.claim": "true"
+          }
+        },
+        {
+          "name": "auth_time",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usersessionmodel-note-mapper",
+          "consentRequired": false,
+          "config": {
+            "user.session.note": "AUTH_TIME",
+            "id.token.claim": "true",
+            "introspection.token.claim": "true",
+            "access.token.claim": "true",
+            "claim.name": "auth_time",
+            "jsonType.label": "long"
+          }
+        },
+        {
+          "name": "acr",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-acr-mapper",
+          "consentRequired": false,
+          "config": {
+            "id.token.claim": "true",
+            "introspection.token.claim": "true",
+            "access.token.claim": "true"
+          }
+        }
+      ]
+    },
+    {
       "name": "administrative-audience",
       "description": "Audience used by the isolated Administrative staging API",
       "protocol": "openid-connect",
@@ -92,6 +139,8 @@
     {
       "id": "m6-reviewer",
       "username": "m6-reviewer",
+      "firstName": "M6",
+      "lastName": "Reviewer",
       "enabled": true,
       "email": "m6-reviewer@staging.invalid",
       "emailVerified": true,
