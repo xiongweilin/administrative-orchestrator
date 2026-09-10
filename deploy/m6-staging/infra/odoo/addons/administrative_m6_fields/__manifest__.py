@@ -1,3 +1,5 @@
+# Odoo loads this module-level mapping as its manifest contract.
+# ruff: noqa: B018
 {
     "name": "Administrative M6 staging fields",
     "version": "19.0.1.0.0",
