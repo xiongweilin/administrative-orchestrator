@@ -356,13 +356,12 @@ Service/process boundaries do not imply repository boundaries. The Administrativ
 - **M3 — administrative correctness:** resource authorization, dependency-scoped GovernanceBasis, obligation-backed completion, reality epistemics, fact-authority distinction, explicit policy lifecycle.
 - **M4 — kernel convergence:** compatibility gate, persistent responsibility/Work admission, administrative business-grant/effect-intent split, HRIS/IAM physical cut-over, unique Kernel RealityBoundary, and canonical ambiguous-result recovery.
 - **M5 — production trust and reality integration:** OIDC/JWKS, field-level authoritative provenance, Odoo/Keycloak read/write/verification contracts, Operations Console, observability, production preflight, DR gates, pinned Kernel baseline plus `agent-kernel/main` recovery canary. **Repository implementation/CI, isolated real-staging Gates A–F, squash merge, and post-merge main CI are complete for the recorded scope.**
-- **M6 — trusted perception and admission:** authenticated non-structured source intake, evidence/provenance, candidate interpretation, identity/conversation semantics, explicit human-confirmed admission, the Feishu durable-ingress reference slice, M5 onboarding bridge, and document attachment foundation. The real staging provider-to-M5 vertical slice and final evidence remain pending; broader Administrative domain expansion remains deferred.
+- **M6 — trusted perception and admission:** authenticated non-structured source intake, evidence/provenance, candidate interpretation, identity/conversation semantics, explicit human-confirmed admission, the Feishu durable-ingress reference slice, M5 onboarding bridge, and document attachment foundation. **The real staging provider-to-M5 vertical slice, attachment path, and artifact restore evidence are complete for the recorded scope** in `docs/acceptance/M6-staging-acceptance.md`; broader Administrative domain expansion remains deferred.
 
 M5 staging acceptance is intentionally external to repository CI. M6 adds the
 same evidence boundary for provider intake and the human-confirmed bridge; the
-no-secrets/no-body record template is
-`docs/acceptance/M6-staging-acceptance-template.md`. Until that record is
-filled with fresh real-staging evidence, M6 remains incomplete.
+no-secrets/no-body record is `docs/acceptance/M6-staging-acceptance.md`, with the
+empty template retained at `docs/acceptance/M6-staging-acceptance-template.md`.
 
 ## 10. Repository and deployment topology
 

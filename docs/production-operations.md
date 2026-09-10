@@ -191,6 +191,10 @@ Before enabling worker traffic:
 
 For M6 intake staging, also verify:
 
+The recorded real-staging acceptance for this boundary is
+`docs/acceptance/M6-staging-acceptance.md` (Gate A–P, attachment, and artifact
+restore evidence).
+
 - the configured Feishu official SDK long connection is active and the
   metadata-only gateway handoff is authenticated against the actual staging
   provider, including a negative token case;

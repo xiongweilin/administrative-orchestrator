@@ -9,3 +9,4 @@ data/
 *.db
 .coverage
 htmlcov/
+deploy/m6-staging/backups/
