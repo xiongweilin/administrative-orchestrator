@@ -52,9 +52,11 @@ class AuthorityLifecycleRepository:
         *,
         actor_principal_id: str,
         reason: str,
+        at: datetime | None = None,
     ) -> AuthorityLifecycleEvent:
         if not reason.strip():
             raise AuthorityError("principal deactivation requires a reason")
+        occurred_at = normalize_datetime(at or utcnow())
         with self.store.sessions.begin() as db:
             row = db.get(PrincipalRow, principal_id)
             if row is None:
@@ -62,11 +64,17 @@ class AuthorityLifecycleRepository:
             if row.active:
                 row.active = False
             event = AuthorityLifecycleEvent(
+                event_id=uuid5(
+                    NAMESPACE_URL,
+                    "administrative:authority-lifecycle:principal.deactivated:"
+                    f"{principal_id}:{occurred_at.isoformat()}",
+                ),
                 event_type="principal.deactivated",
                 actor_principal_id=actor_principal_id,
                 target_ref=f"principal:{principal_id}",
                 reason=reason,
                 payload={"principal_id": principal_id},
+                occurred_at=occurred_at,
             )
             return self._record(db, event)
 

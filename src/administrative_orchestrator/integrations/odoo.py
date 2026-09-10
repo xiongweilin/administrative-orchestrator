@@ -51,6 +51,7 @@ class OdooHRFactSource:
         termination_effective_at_field: str = (
             "x_administrative_termination_effective_at"
         ),
+        employment_episode_field: str = "x_administrative_employment_episode_ref",
     ) -> None:
         self.connection = connection
         self.credentials = credentials or EnvironmentCredentialResolver()
@@ -59,6 +60,7 @@ class OdooHRFactSource:
         self._available_fields_cache: dict[str, set[str]] = {}
         self.termination_status_field = termination_status_field
         self.termination_effective_at_field = termination_effective_at_field
+        self.employment_episode_field = employment_episode_field
 
     def read_employee(self, employee_ref: str) -> AuthoritativeRecord:
         employee_id = _numeric_id(employee_ref, "hr.employee")
@@ -67,6 +69,7 @@ class OdooHRFactSource:
             for name in (
                 self.termination_status_field,
                 self.termination_effective_at_field,
+                self.employment_episode_field,
             )
             if name and name in self._available_fields("hr.employee")
         ]
@@ -119,6 +122,10 @@ class OdooHRFactSource:
         if self.termination_effective_at_field in termination_fields:
             value["termination_effective_at"] = (
                 row.get(self.termination_effective_at_field) or None
+            )
+        if self.employment_episode_field in termination_fields:
+            value["employment_episode_ref"] = (
+                row.get(self.employment_episode_field) or None
             )
         version = str(row.get("write_date") or "unknown")
         if contract and contract.get("write_date"):
