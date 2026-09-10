@@ -252,8 +252,13 @@ services:
   worker:
     <<: *admin-common
     command: ["python", "-m", "administrative_orchestrator.worker"]
+    # The Agent Kernel mutating contract API is local-control only, so the
+    # worker must reach it over loopback: share the kernel network namespace.
+    network_mode: "service:agent-kernel"
     environment:
       <<: *admin-environment
+      ADMIN_KERNEL_BASE_URL: http://127.0.0.1:8020
+      ADMIN_KERNEL_CONTRACT_TIMEOUT_SECONDS: "30"
       ADMIN_WORKER_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-administrative_m6}:${POSTGRES_PASSWORD:-m6-admin-postgres-password}@admin-postgres:5432/${POSTGRES_DB:-administrative_m6}
       ADMIN_DBOS_SYSTEM_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-administrative_m6}:${POSTGRES_PASSWORD:-m6-admin-postgres-password}@admin-postgres:5432/administrative_dbos
       ADMIN_WORKER_POLL_SECONDS: ${ADMIN_WORKER_POLL_SECONDS:-1}
