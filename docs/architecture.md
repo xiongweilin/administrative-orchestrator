@@ -101,7 +101,8 @@ makes the first handoff durable before any provider content is read:
 ```text
 Feishu official SDK long connection
   -> trusted metadata-only gateway handoff
-  -> token verification at the Administrative boundary
+  -> gateway transport authentication at the Administrative boundary
+  -> optional provider callback-token verification when present
   -> IntakeReceipt + intake.feishu.received outbox event (one transaction)
   -> asynchronous canonical message fetch
   -> ArtifactStore + SourceArtifact + EvidenceSpan
@@ -109,6 +110,10 @@ Feishu official SDK long connection
   -> InterpretationRecord -> candidate/conversation records
 ```
 
+The long-connection event does not reliably carry the HTTP callback token, so
+the gateway authenticates this internal handoff with a dedicated transport
+credential. A provider token is still verified whenever it is present, while
+direct callback mode retains its callback-token and optional signature checks.
 The receipt and outbox payload carry delivery metadata only; they do not carry
 the message body or extracted content. The configured runtime builds the
 metadata boundary and worker pipeline from deployment settings, and the relay
