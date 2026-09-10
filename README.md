@@ -99,7 +99,7 @@ The first executable slice is **employee onboarding** because it forces multi-ac
 
 # Current state: M6 accepted; M7 in progress
 
-M0–M4 established the semantic foundation, durable governed execution, organizational authority/policy, administrative correctness, and Agent Kernel convergence/cut-over invariants. M5 makes that reference architecture production-shaped without collapsing those ownership boundaries. M6 added trusted perception and admission and is accepted for the recorded staging scope (`docs/acceptance/M6-staging-acceptance.md`); M7 has not started.
+M0–M4 established the semantic foundation, durable governed execution, organizational authority/policy, administrative correctness, and Agent Kernel convergence/cut-over invariants. M5 makes that reference architecture production-shaped without collapsing those ownership boundaries. M6 added trusted perception and admission and is accepted for the recorded staging scope (`docs/acceptance/M6-staging-acceptance.md`). M7 is in progress on the employee lifecycle responsibility boundary (ADR 0004, `docs/milestones/M7.md`).
 
 The M5 implementation now includes:
 
