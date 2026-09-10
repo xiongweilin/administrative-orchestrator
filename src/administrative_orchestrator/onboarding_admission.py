@@ -92,6 +92,14 @@ class CandidateOnboardingAdmissionService:
                 "employee-onboarding promotion requires a non-blank subject_ref"
             )
 
+        # Validate the candidate facts against the onboarding contract before
+        # any promotion/request/case row exists so a rejected candidate leaves
+        # no partial M5 state behind.
+        facts = self._candidate_facts(
+            candidate,
+            subject_ref=subject_ref,
+        )
+
         promotion = self.promotions.promote(
             candidate,
             assessment,
@@ -117,10 +125,6 @@ class CandidateOnboardingAdmissionService:
                 created=promotion.created,
             )
 
-        facts = self._candidate_facts(
-            candidate,
-            subject_ref=subject_ref,
-        )
         snapshot = self._fact_snapshot(
             candidate,
             assessment,
