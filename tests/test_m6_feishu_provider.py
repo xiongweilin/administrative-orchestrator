@@ -11,6 +11,13 @@ import pytest
 from administrative_orchestrator.authority import AuthorityRepository, IdentityBinding
 from administrative_orchestrator.domain import Principal
 from administrative_orchestrator.intake.artifacts import FilesystemArtifactStore
+from administrative_orchestrator.intake.documents import (
+    DocumentAttachmentProcessor,
+    DocumentEvidenceDraft,
+    DocumentExtraction,
+    DocumentFactDraft,
+    DocumentProcessingStatus,
+)
 from administrative_orchestrator.intake.interpretation import (
     InterpretationClient,
     InterpretationProfile,
@@ -25,6 +32,7 @@ from administrative_orchestrator.persistence import SqlStore
 from administrative_orchestrator.providers.feishu import (
     FEISHU_SOURCE_SYSTEM,
     FeishuAcceptance,
+    FeishuCanonicalAttachment,
     FeishuCanonicalMessage,
     FeishuEventVerifier,
     FeishuInboxPipeline,
@@ -111,6 +119,7 @@ def _pipeline(
     fetcher: _Fetcher,
     *,
     gateway: StaticModelGateway,
+    document_processor: DocumentAttachmentProcessor | None = None,
 ) -> FeishuInboxPipeline:
     authority = AuthorityRepository(store)
     authority.put_principal(Principal(principal_id="person:alice", display_name="Alice"))
@@ -122,10 +131,11 @@ def _pipeline(
             valid_from=datetime(2020, 1, 1, tzinfo=UTC),
         )
     )
+    artifact_store = FilesystemArtifactStore(tmp_path / "artifacts")
     return FeishuInboxPipeline(
         store,
         repository=repository,
-        artifact_store=FilesystemArtifactStore(tmp_path / "artifacts"),
+        artifact_store=artifact_store,
         canonical_fetcher=fetcher,
         interpretation_client=InterpretationClient(gateway, repository),
         interpretation_profile=InterpretationProfile(
@@ -133,6 +143,7 @@ def _pipeline(
             schema_ref="candidate-interpretation-v1",
             instruction="Extract a candidate intent and candidate facts only.",
         ),
+        document_processor=document_processor,
     )
 
 
@@ -298,6 +309,160 @@ def test_feishu_model_failure_retains_source_without_candidate(tmp_path: Path) -
     assert result.candidate is None
     assert repository.list_candidates() == []
     assert result.receipt.artifact_ref == result.artifact.artifact_id
+
+
+def test_feishu_pipeline_persists_attachment_evidence_and_candidate_fact(tmp_path: Path) -> None:
+    store, repository = _repository()
+    boundary = FeishuWebhookBoundary(repository, _verifier())
+    body = _event_body(event_id="event-feishu-attachment", message_id="om-message-attachment")
+    accepted = boundary.accept(body, {})
+    assert isinstance(accepted, FeishuAcceptance)
+    event = _verifier().verify(body, {})
+    assert isinstance(event, FeishuProviderEvent)
+
+    class AttachmentFetcher(_Fetcher):
+        def fetch(self, event: FeishuProviderEvent) -> FeishuCanonicalMessage:
+            self.calls += 1
+            message = _canonical(event)
+            return message.model_copy(
+                update={
+                    "attachments": (
+                        FeishuCanonicalAttachment(
+                            attachment_ref="file-key-1",
+                            filename="employee.txt",
+                            mime_type="text/plain",
+                            content=b"employee_id=employee:1",
+                        ),
+                    )
+                }
+            )
+
+    class AttachmentParser:
+        def parse(self, attachment, content) -> DocumentExtraction:
+            del attachment
+            text = content.decode("utf-8")
+            return DocumentExtraction(
+                representation=text,
+                extractor_ref="test-attachment-parser-v1",
+                evidence=(
+                    DocumentEvidenceDraft(text=text, char_start=0, char_end=len(text)),
+                ),
+                facts=(
+                    DocumentFactDraft(
+                        fact_key="employee_id",
+                        value="employee:1",
+                        evidence_indexes=(0,),
+                    ),
+                ),
+            )
+
+    artifact_store = FilesystemArtifactStore(tmp_path / "artifacts")
+    fetcher = AttachmentFetcher()
+    pipeline = _pipeline(
+        tmp_path,
+        store,
+        repository,
+        fetcher,
+        gateway=StaticModelGateway(
+            json.dumps(
+                {
+                    "candidate_intent": "onboard employee:1",
+                    "candidate_facts": [],
+                    "draft_response": "Review is required before admission.",
+                }
+            ),
+            provenance=ModelProvenance(
+                provider="test-model-gateway",
+                model_identity="test-model",
+                model_version="v1",
+            ),
+        ),
+        document_processor=DocumentAttachmentProcessor(
+            artifact_store,
+            AttachmentParser(),
+            repository,
+        ),
+    )
+
+    result = pipeline.process_event(event)
+
+    assert result.candidate is not None
+    assert result.conversation is not None
+    assert len(result.document_attachments) == 1
+    document = result.document_attachments[0]
+    assert document.status is DocumentProcessingStatus.SUCCEEDED
+    assert document.artifact.source_kind == "message_attachment"
+    assert len(document.evidence_spans) == 1
+    assert len(document.facts) == 1
+    assert document.facts[0].fact_key == "employee_id"
+    assert result.candidate.candidate_fact_refs == (document.facts[0].candidate_fact_id,)
+    assert result.candidate.source_refs == (
+        result.artifact.artifact_id,
+        document.artifact.artifact_id,
+    )
+    assert result.conversation.message.source_refs == result.candidate.source_refs
+
+
+def test_http_feishu_fetcher_reads_file_attachment_resource() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.url.path.endswith("/resources/file-key-1"):
+            return httpx.Response(
+                200,
+                content=b"employee_id=employee:1",
+                headers={"content-type": "text/plain; charset=utf-8"},
+            )
+        return httpx.Response(
+            200,
+            json={
+                "code": 0,
+                "data": {
+                    "items": [
+                        {
+                            "message_id": "om-message-1",
+                            "root_id": "om-message-1",
+                            "create_time": str(EVENT_TIME),
+                            "tenant_key": "tenant-feishu",
+                            "sender_id": {"open_id": "ou_alice"},
+                            "msg_type": "file",
+                            "body": {
+                                "content": json.dumps(
+                                    {"file_key": "file-key-1", "file_name": "employee.txt"}
+                                )
+                            },
+                        }
+                    ]
+                },
+            },
+        )
+
+    event = FeishuProviderEvent(
+        event_id="event-feishu-1",
+        tenant_ref="tenant-feishu",
+        message_id="om-message-1",
+        thread_ref="om-message-1",
+        sender_external_subject="ou_alice",
+        occurred_at=datetime.fromtimestamp(EVENT_TIME / 1000, tz=UTC),
+        sequence=EVENT_TIME,
+        delivery_digest="a" * 64,
+    )
+    fetcher = HttpFeishuCanonicalFetcher(
+        "https://open.feishu.invalid",
+        lambda: "test-access-token",
+        transport=httpx.MockTransport(handler),
+    )
+    try:
+        message = fetcher.fetch(event)
+    finally:
+        fetcher.close()
+
+    assert message.content == "[Feishu attachment: employee.txt]"
+    assert len(message.attachments) == 1
+    assert message.attachments[0].content == b"employee_id=employee:1"
+    assert message.attachments[0].mime_type == "text/plain"
+    assert requests[1].url.params["type"] == "file"
 
 
 def test_http_feishu_fetcher_reads_canonical_text_without_leaking_token() -> None:

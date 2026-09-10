@@ -123,6 +123,16 @@ provider event authenticity
 Provider credentials are perception credentials; they are not Administrative
 authority credentials and are not Kernel reality-write credentials.
 
+For the Feishu reference slice, the HTTP boundary verifies the callback token
+and, when configured, the signed callback headers and freshness window. It
+then writes a verified `IntakeReceipt` and `intake.feishu.received` outbox
+event in one transaction. The receipt/outbox job payload contains provider
+delivery metadata only; message body/content is fetched canonically by the
+asynchronous worker after durable acceptance. A duplicate delivery reuses the
+delivery identity, while a conflicting reuse fails closed. Canonical fetch,
+artifact persistence, identity resolution, interpretation, and candidate
+projection are not part of the webhook response path.
+
 ### 5. Interpretation is historical and non-authoritative
 
 An artifact can have multiple immutable interpretations:
@@ -174,6 +184,26 @@ first reference slice. If enabled later, it must require authenticated source,
 resolved identity, supported intent, complete required fields, no unresolved
 ambiguity, no existing bound case, and an explicit admission policy.
 
+The implemented Operations API exposes this boundary as a separate review and
+promotion sequence. A reviewer with the intake-review permission records a
+final human `IntakeAssessment(ADMIT)`, then may set `bridge_to_m5=true` only
+for `employee-onboarding` and a human-selected non-blank `subject_ref`. The
+bridge uses the existing idempotent promotion service and onboarding policy
+path, creates the normal `PromotionRecord`/`IngressReceipt`/
+`AdministrativeRequest`/case lineage, and preserves every bridged candidate
+fact as `FactAuthority.CLAIM`. It does not mint `FactAuthority.AUTHORITATIVE`,
+create Kernel Work, perform an external effect, or skip M5 verification and
+completion. Replaying the same source identity is idempotent; a different
+requester or conflicting lineage is rejected.
+
+Authoritative refresh is a separate M5 operation. The approved HRIS reader
+may overlay the authoritative onboarding fields and trigger policy
+re-evaluation; request-only intake fields remain claims. Freshness and value
+changes are checked before governed transitions. A stale or changed
+authoritative dependency blocks continuation and uses the existing
+`GOVERNANCE_STALE` reopen/reassessment boundary. Human admission is therefore
+permission to enter the governed M5 path, not proof of external-system truth.
+
 ### 7. Conversation and meeting boundaries
 
 Inbox semantics are conversation-first: provider, tenant, and thread identify
@@ -207,6 +237,15 @@ assessments, and promotion lineage—not raw binary content. Missing objects,
 digest mismatch, corruption, and storage unavailability fail closed without
 fabricating an interpretation or admission.
 
+The current document/attachment work is a foundation rather than a completed
+provider attachment vertical. `FilesystemArtifactStore` is the local/staging
+adapter: it stores bytes as SHA-256 content-addressed objects outside
+PostgreSQL, publishes new objects atomically, and verifies the digest on read.
+`SourceArtifact` retains MIME/size/digest/storage-reference metadata and
+`EvidenceSpan` retains immutable representation locators. No raw document body
+belongs in `IntakeReceipt` or an outbox payload, and no attachment is
+authoritative merely because it was stored or interpreted.
+
 ### 9. Workflow authority map
 
 | Transition | Owner | Evidence / guard |
@@ -239,6 +278,14 @@ gateway change, if necessary, is a separate compatibility PR;
 `agent-kernel`, `meta-controller`, and unrelated repositories are not modified
 for M6 convenience.
 
+The current repository also contains a configurable Feishu runtime that builds
+the webhook boundary, canonical fetcher, model gateway, and artifact store from
+deployment settings and injects the worker processor. Missing processing
+dependencies fail closed. A production Feishu credential, canonical-fetch
+route, model gateway, artifact root, and identity binding still require fresh
+real-staging evidence; this ADR does not assert that those external
+integrations have run successfully.
+
 ### 11. M5 compatibility and replay matrix
 
 M6 is an upstream additive change. The following M5 gates are rerun only when
@@ -267,3 +314,8 @@ that evidence.
 - The Administrative monorepo remains the single semantic/versioning owner.
 - M6 adds durable contracts and tests without creating a second Work runtime,
   authorization system, retry authority, or RealityBoundary.
+
+M6 remains incomplete until the real-staging evidence record proves the
+provider-to-review-to-human-confirmed-M5 path and the applicable M5 external
+system behavior. Repository tests, synthetic fixtures, and configuration
+presence checks are not a substitute for that record.

@@ -58,6 +58,7 @@ from .providers.feishu import (
     FeishuVerificationError,
     FeishuWebhookBoundary,
 )
+from .providers.feishu_runtime import build_feishu_webhook_boundary
 from .service import (
     TransitionError,
     apply_policy_evaluation,
@@ -91,6 +92,9 @@ def configure_feishu_intake(boundary: FeishuWebhookBoundary | None) -> None:
     """Inject the provider verifier without making secrets part of app import."""
     global _feishu_intake_boundary
     _feishu_intake_boundary = boundary
+
+
+configure_feishu_intake(build_feishu_webhook_boundary(_store, _settings))
 
 
 class CreateOnboardingCase(BaseModel):

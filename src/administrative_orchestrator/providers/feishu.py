@@ -23,6 +23,13 @@ from ..conversation import (
     ResolvedProviderIdentity,
 )
 from ..intake.artifacts import ArtifactStore
+from ..intake.documents import (
+    DocumentAttachmentProcessor,
+    DocumentAttachmentResult,
+    DocumentProcessingStatus,
+    MessageAttachment,
+    PlainTextDocumentParser,
+)
 from ..intake.interpretation import (
     InterpretationClient,
     InterpretationProfile,
@@ -152,6 +159,18 @@ class FeishuProviderEvent(BaseModel):
         return self.model_dump(mode="json")
 
 
+class FeishuCanonicalAttachment(BaseModel):
+    """Transient canonical attachment bytes fetched after durable acceptance."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    attachment_ref: str = Field(min_length=1, max_length=512)
+    filename: str = Field(min_length=1, max_length=1000)
+    mime_type: str = Field(min_length=1, max_length=255)
+    content: bytes = Field(min_length=1)
+    source_revision: str = Field(default="provider-v1", min_length=1, max_length=256)
+
+
 class FeishuCanonicalMessage(BaseModel):
     """Canonical provider representation returned after durable acceptance."""
 
@@ -168,6 +187,7 @@ class FeishuCanonicalMessage(BaseModel):
     content: str = Field(min_length=1, max_length=2_000_000)
     mime_type: str = Field(default="text/plain; charset=utf-8", max_length=255)
     source_revision: str = Field(default="provider-v1", min_length=1, max_length=256)
+    attachments: tuple[FeishuCanonicalAttachment, ...] = ()
 
     @model_validator(mode="after")
     def validate_identity(self) -> FeishuCanonicalMessage:
@@ -371,9 +391,43 @@ class HttpFeishuCanonicalFetcher:
             raise FeishuCanonicalFetchError("Feishu canonical message fetch failed") from exc
         try:
             message = _message_payload(payload)
-            return _canonical_message_from_payload(message, event)
+            attachments = self._fetch_attachments(message, event, token)
+            return _canonical_message_from_payload(message, event, attachments=attachments)
         except (TypeError, ValueError, KeyError, ValidationError) as exc:
             raise FeishuCanonicalFetchError("Feishu canonical message response is invalid") from exc
+
+    def _fetch_attachments(
+        self,
+        message: dict[str, Any],
+        event: FeishuProviderEvent,
+        token: str,
+    ) -> tuple[FeishuCanonicalAttachment, ...]:
+        attachments: list[FeishuCanonicalAttachment] = []
+        for descriptor in _attachment_descriptors(message):
+            try:
+                response = self._client.get(
+                    f"{self._base_url}/open-apis/im/v1/messages/"
+                    f"{quote(event.message_id, safe='')}/resources/"
+                    f"{quote(descriptor['attachment_ref'], safe='')}",
+                    headers={"Authorization": f"Bearer {token}"},
+                    params={"type": descriptor["resource_type"]},
+                )
+                response.raise_for_status()
+            except httpx.HTTPError as exc:
+                raise FeishuCanonicalFetchError("Feishu attachment fetch failed") from exc
+            content_type = _header(response.headers, "content-type") or descriptor["mime_type"]
+            attachments.append(
+                FeishuCanonicalAttachment(
+                    attachment_ref=descriptor["attachment_ref"],
+                    filename=descriptor["filename"],
+                    mime_type=content_type.split(";", 1)[0].strip() or descriptor["mime_type"],
+                    content=response.content,
+                    source_revision=(
+                        _optional_text(message.get("update_time")) or "provider-v1"
+                    ),
+                )
+            )
+        return tuple(attachments)
 
     def close(self) -> None:
         self._client.close()
@@ -397,6 +451,8 @@ def _message_payload(payload: Any) -> dict[str, Any]:
 def _canonical_message_from_payload(
     message: dict[str, Any],
     event: FeishuProviderEvent,
+    *,
+    attachments: tuple[FeishuCanonicalAttachment, ...] = (),
 ) -> FeishuCanonicalMessage:
     message_id = _text(message.get("message_id"), "message_id")
     tenant_ref = _text(message.get("tenant_key") or message.get("tenant_ref") or event.tenant_ref, "tenant_ref")
@@ -406,7 +462,12 @@ def _canonical_message_from_payload(
     sender = _text(sender_payload.get("open_id"), "sender open_id")
     body = message.get("body")
     body_content = body.get("content") if isinstance(body, dict) else message.get("content")
-    content = _text_content(body_content, message.get("msg_type") or message.get("message_type"))
+    message_type = message.get("msg_type") or message.get("message_type")
+    content = (
+        _attachment_content(attachments)
+        if attachments
+        else _text_content(body_content, message_type)
+    )
     created_at = _epoch_millis(
         _optional_text(message.get("create_time") or message.get("created_at"))
         or str(event.sequence),
@@ -442,6 +503,7 @@ def _canonical_message_from_payload(
         content=content,
         mime_type="text/plain; charset=utf-8",
         source_revision=_optional_text(message.get("update_time")) or "provider-v1",
+        attachments=attachments,
     )
 
 
@@ -469,6 +531,46 @@ def _text_content(value: Any, message_type: Any) -> str:
     if isinstance(value, dict):
         return _text(value.get("text"), "message text")
     raise ValueError("provider message content is invalid")
+
+
+def _attachment_descriptors(message: dict[str, Any]) -> tuple[dict[str, str], ...]:
+    message_type = message.get("msg_type") or message.get("message_type")
+    if message_type not in ("file", "image"):
+        return ()
+    body = message.get("body")
+    body_content = body.get("content") if isinstance(body, dict) else message.get("content")
+    if isinstance(body_content, str):
+        try:
+            decoded = json.loads(body_content)
+        except ValueError as exc:
+            raise ValueError("provider attachment content is not valid JSON") from exc
+    else:
+        decoded = body_content
+    if not isinstance(decoded, dict):
+        raise ValueError("provider attachment content is invalid")
+    attachment_ref = decoded.get("file_key") or decoded.get("image_key")
+    if not isinstance(attachment_ref, str) or not attachment_ref.strip():
+        raise ValueError("provider attachment reference is missing")
+    filename = (
+        decoded.get("file_name")
+        or decoded.get("fileName")
+        or decoded.get("name")
+        or (f"{attachment_ref}.bin" if message_type == "file" else f"{attachment_ref}.image")
+    )
+    if not isinstance(filename, str) or not filename.strip():
+        raise ValueError("provider attachment filename is missing")
+    return (
+        {
+            "attachment_ref": attachment_ref.strip(),
+            "filename": filename.strip(),
+            "mime_type": "image/*" if message_type == "image" else "application/octet-stream",
+            "resource_type": message_type,
+        },
+    )
+
+
+def _attachment_content(attachments: tuple[FeishuCanonicalAttachment, ...]) -> str:
+    return "\n".join(f"[Feishu attachment: {attachment.filename}]" for attachment in attachments)
 
 
 @dataclass(frozen=True, slots=True)
@@ -525,6 +627,7 @@ class FeishuProcessResult:
     interpretation: InterpretationRecord
     candidate: CandidateAdministrativeRequest | None
     conversation: ConversationMessageResult | None
+    document_attachments: tuple[DocumentAttachmentResult, ...] = ()
 
 
 class FeishuInboxPipeline:
@@ -546,6 +649,7 @@ class FeishuInboxPipeline:
         interpretation_profile: InterpretationProfile,
         conversation_service: ConversationService | None = None,
         projection_service: CandidateProjectionService | None = None,
+        document_processor: DocumentAttachmentProcessor | None = None,
     ) -> None:
         self.store = store
         self.repository = repository
@@ -559,6 +663,11 @@ class FeishuInboxPipeline:
             intake=repository,
         )
         self.projection_service = projection_service or CandidateProjectionService()
+        self.document_processor = document_processor or DocumentAttachmentProcessor(
+            artifact_store,
+            PlainTextDocumentParser(),
+            repository,
+        )
 
     def process_event(self, payload: FeishuProviderEvent | Mapping[str, Any]) -> FeishuProcessResult:
         event = (
@@ -579,6 +688,16 @@ class FeishuInboxPipeline:
         canonical = self.canonical_fetcher.fetch(event)
         self._validate_canonical_identity(event, canonical)
         artifact, span = self._persist_source(event, canonical)
+        document_attachments = self._persist_attachments(event, canonical)
+        attachment_artifacts = tuple(item.artifact for item in document_attachments)
+        source_artifacts = (artifact, *attachment_artifacts)
+        source_refs = tuple(item.artifact_id for item in source_artifacts)
+        document_facts = tuple(
+            fact
+            for item in document_attachments
+            if item.status is DocumentProcessingStatus.SUCCEEDED
+            for fact in item.facts
+        )
         conversation_ref = ConversationRef(
             provider=FEISHU_SOURCE_SYSTEM,
             tenant_ref=canonical.tenant_ref,
@@ -607,15 +726,16 @@ class FeishuInboxPipeline:
                 interpretation=interpretation,
                 candidate=None,
                 conversation=None,
+                document_attachments=document_attachments,
             )
 
         projection = self.projection_service.project(
             interpretation,
             conversation_ref=conversation_ref.canonical_ref,
             candidate_requester=f"feishu:{canonical.sender_external_subject}",
-            source_refs=(artifact.artifact_id,),
+            source_refs=source_refs,
         )
-        facts = tuple(
+        model_facts = tuple(
             fact.model_copy(
                 update={
                     "candidate_fact_id": uuid5(
@@ -626,8 +746,9 @@ class FeishuInboxPipeline:
             )
             for index, fact in enumerate(projection.facts)
         )
-        for fact in facts:
+        for fact in model_facts:
             self.repository.append_candidate_fact(fact)
+        facts = (*document_facts, *model_facts)
         candidate = projection.candidate.model_copy(
             update={
                 "candidate_id": uuid5(
@@ -654,7 +775,7 @@ class FeishuInboxPipeline:
             occurred_at=canonical.occurred_at,
             provider_tenant_ref=canonical.tenant_ref,
             content_digest=artifact.content_digest,
-            source_refs=(artifact.artifact_id,),
+            source_refs=source_refs,
             interpretation_refs=(interpretation.interpretation_id,),
             candidate_fact_refs=tuple(fact.candidate_fact_id for fact in facts),
         )
@@ -677,7 +798,35 @@ class FeishuInboxPipeline:
             interpretation=interpretation,
             candidate=candidate,
             conversation=conversation,
+            document_attachments=document_attachments,
         )
+
+    def _persist_attachments(
+        self,
+        event: FeishuProviderEvent,
+        canonical: FeishuCanonicalMessage,
+    ) -> tuple[DocumentAttachmentResult, ...]:
+        if not canonical.attachments:
+            return ()
+        results: list[DocumentAttachmentResult] = []
+        for attachment in canonical.attachments:
+            result = self.document_processor.process(
+                MessageAttachment(
+                    attachment_ref=attachment.attachment_ref,
+                    message_ref=canonical.message_id,
+                    source_system=FEISHU_SOURCE_SYSTEM,
+                    tenant_ref=canonical.tenant_ref,
+                    source_event_ref=event.event_id,
+                    filename=attachment.filename,
+                    mime_type=attachment.mime_type,
+                    content=attachment.content,
+                    source_revision=attachment.source_revision,
+                    actor_external_identity_ref=canonical.sender_external_subject,
+                    source_timestamp=canonical.occurred_at,
+                )
+            )
+            results.append(result)
+        return tuple(results)
 
     def _persist_source(
         self,
@@ -783,6 +932,7 @@ __all__ = [
     "FEISHU_SOURCE_SYSTEM",
     "FeishuAcceptance",
     "FeishuCanonicalFetchError",
+    "FeishuCanonicalAttachment",
     "FeishuCanonicalFetcher",
     "FeishuCanonicalMessage",
     "FeishuChallenge",

@@ -1,6 +1,10 @@
 # Production operations and disaster recovery
 
-This runbook describes the M5 production-shaped deployment. It preserves the Administrative/Agent Kernel authority split and deliberately treats recovery as reconciliation of durable facts, not as permission to improvise or blindly replay provider writes.
+This runbook describes the M5 production-shaped deployment and the M6 intake
+additions. It preserves the Administrative/Agent Kernel authority split and
+deliberately treats recovery as reconciliation of durable facts, not as
+permission to improvise or blindly replay provider writes. M6 intake is an
+upstream perception path; it does not create another execution authority.
 
 ## Reference topology
 
@@ -34,6 +38,23 @@ Administrative API -------- Operations API / Console
 
 `AdministrativeCase` is business workflow truth. DBOS owns durable wait/replay. Agent Kernel owns physical cut-over execution/recovery semantics. Odoo/Keycloak are external reality systems.
 
+The M6 intake path is adjacent to the trusted-action path:
+
+```text
+Feishu callback
+  -> verified metadata-only durable ingress
+  -> Administrative PostgreSQL receipt/outbox
+  -> worker canonical fetch
+  -> ArtifactStore + source/evidence lineage
+  -> interpretation/candidate/review
+  -> optional human-confirmed bridge_to_m5
+  -> existing IngressReceipt / AdministrativeRequest / M5 case path
+```
+
+The callback does not wait for canonical fetch or model processing. No Feishu
+message body or extracted content belongs in the receipt, outbox payload, or
+ordinary operational logs.
+
 ## Required production properties
 
 The production control plane must satisfy all of these before startup:
@@ -50,6 +71,15 @@ The production control plane must satisfy all of these before startup:
 - writer and verifier identities/secrets are distinct;
 - durable external request-identity fields/attributes are configured;
 - `PORTABLE_RUNTIME_ADMIN_PRODUCTION_STATE_PATH` is an absolute path on durable single-writer storage.
+
+When M6 intake is enabled, the deployment must additionally provide
+configuration references for the Feishu callback verification (and optional
+signed-header) material, the canonical message read credential, the model
+gateway, the durable artifact root, and the current Feishu-to-Administrative
+identity bindings. The worker runtime must inject the configured Feishu
+processor; the relay intentionally fails closed when processing dependencies
+are absent. These are deployment prerequisites, not evidence that the
+external systems have already run successfully.
 
 Run the static deployment gate before starting the application processes:
 
@@ -124,6 +154,21 @@ Before enabling worker traffic:
 - verifier identities can read but cannot perform the writer mutation;
 - the durable Odoo request field and Keycloak request attribute are present and queryable;
 - Prometheus can scrape `/metrics` on the observed Administrative surfaces.
+
+For M6 intake staging, also verify:
+
+- Feishu URL verification and authenticated callback behavior against the
+  actual staging provider, including a negative token/signature case;
+- one accepted callback produces one receipt and one metadata-only outbox
+  event, while a duplicate is idempotent;
+- the asynchronous worker can fetch the canonical message, verify provider
+  tenant/message/sender/thread identity, persist the artifact/evidence digest,
+  and resolve the current Administrative identity binding;
+- the configured artifact root is durable and a digest mismatch, missing
+  object, or unavailable store fails closed;
+- the intake review permission is distinct from read-only operations access;
+- a final human assessment is required before `bridge_to_m5`, and the bridge
+  only enters the supported onboarding path.
 
 For a first cut-over, begin with a bounded staging cohort. A provider or network failure after a write must be treated as execution-unknown and reconciled by durable request identity; it must not trigger an operator retry button.
 
@@ -265,6 +310,34 @@ When recovery points differ, prefer conservative reopen/reconcile over inventing
 - Do not reroute physical writes through the Administrative sandbox/provider path.
 - Restore/restart Kernel and resume from durable Attempt state.
 
+### Feishu callback rejected or canonical fetch unavailable
+
+- Return the authenticated-boundary error for an invalid callback; do not
+  enqueue unverified metadata.
+- Treat a canonical fetch failure as an intake processing failure. Preserve the
+  verified receipt and source lineage, and do not fabricate a candidate or
+  admission.
+- Do not place callback bodies, provider tokens, access tokens, or document
+  content in incident tickets, logs, or the acceptance record.
+
+### Artifact storage unavailable or corrupt
+
+- Keep the source/receipt state pending or failed according to the intake
+  worker contract.
+- Do not reinterpret a missing or digest-mismatched object and do not promote
+  a candidate from incomplete evidence.
+- Restore the artifact store through the platform's approved storage recovery
+  procedure, then re-run the bounded integrity check before resuming intake.
+
+### Candidate bridge or authoritative refresh conflict
+
+- A model suggestion, candidate `CLAIM`, or human confirmation does not become
+  `AUTHORITATIVE`.
+- Use the existing HRIS refresh/revalidation path for authoritative fields.
+- If the current authoritative record is stale or changed, stop the governed
+  transition and handle the case under `GOVERNANCE_STALE`; do not resolve it
+  by editing the candidate or asserting provider success.
+
 ## Safe rollback from a deployment
 
 If a release must be rolled back before any ambiguous provider execution:
@@ -279,7 +352,11 @@ If any effect is execution-unknown, preserve the newer Kernel state until reconc
 
 ## Real staging acceptance
 
-Public CI cannot exercise enterprise credentials. Before production acceptance, execute the staging checklist in `docs/milestones/M5.md` against the actual IdP/Odoo/Keycloak network and least-privilege accounts.
+Public CI cannot exercise enterprise credentials or provider delivery. Before
+production acceptance, execute the M5 checklist in `docs/milestones/M5.md` and
+the M6 record in
+`docs/acceptance/M6-staging-acceptance-template.md` against the actual
+Feishu/IdP/Odoo/Keycloak/Kernel staging topology and least-privilege accounts.
 
 Record at minimum:
 
@@ -293,4 +370,21 @@ Record at minimum:
 - backup/restore exercise timestamps and achieved RPO/RTO;
 - dashboards/log correlation evidence.
 
-Until that record exists, the system is implementation/CI complete but real-staging acceptance remains pending.
+For M6, also record only non-sensitive evidence references for:
+
+- Feishu callback verification, duplicate delivery, canonical fetch, and
+  metadata-only durable ingress;
+- source/artifact/evidence digest lineage and artifact corruption/missing
+  object fail-closed behavior;
+- current identity binding and conversation continuity;
+- human review, `bridge_to_m5` constraints, promotion idempotency, and the
+  resulting candidate `CLAIM` boundary;
+- authoritative HRIS refresh/revalidation, including a changed/stale case
+  handled under `GOVERNANCE_STALE`;
+- the actual provider-to-M5 run, if performed, with external evidence
+  references rather than provider payloads or credentials.
+
+Do not fill the record with invented provider, Odoo, Keycloak, Kernel, or
+model-provider results. Until the real-staging record exists with fresh
+evidence, M6 remains incomplete even if repository implementation and CI are
+green.
