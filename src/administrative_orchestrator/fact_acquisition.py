@@ -159,6 +159,12 @@ class AuthoritativeFactRevalidator:
         self.max_age_seconds = max_age_seconds
 
     def validate(self, case: AdministrativeCase) -> ExternalFactValidation:
+        return self.validate_with_dependencies(case, expected_change_keys=())
+
+    def validate_with_dependencies(
+        self, case: AdministrativeCase, *, expected_change_keys: tuple[str, ...] = ()
+    ) -> ExternalFactValidation:
+        """Re-read current HRIS truth, ignoring facts the approved effects change."""
         snapshot = case.fact_snapshot
         if snapshot is None:
             return ExternalFactValidation(False, ("case has no current fact snapshot",))
@@ -166,6 +172,7 @@ class AuthoritativeFactRevalidator:
             key: assertion
             for key, assertion in snapshot.assertions.items()
             if assertion.authority is FactAuthority.AUTHORITATIVE
+            and key not in expected_change_keys
             and key
             in {
                 "employee_ref",

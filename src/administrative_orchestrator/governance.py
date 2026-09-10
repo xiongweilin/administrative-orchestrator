@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Any
 from uuid import NAMESPACE_URL, UUID, uuid5
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from sqlalchemy import JSON, DateTime, ForeignKey, Integer, String, Uuid, select
 from sqlalchemy.orm import Mapped, Session, mapped_column
 
@@ -47,6 +47,22 @@ class GovernanceBasis(UtcModel):
     authority_digest: str
     basis_digest: str
     created_at: datetime = Field(default_factory=utcnow)
+    fact_dependency_keys: tuple[str, ...] | None = None
+    fact_dependency_values: dict[str, Any] = Field(default_factory=dict)
+    expected_change_keys: tuple[str, ...] = ()
+
+    @model_validator(mode="after")
+    def dependency_scope_is_unambiguous(self) -> GovernanceBasis:
+        if self.fact_dependency_keys is not None:
+            overlap = set(self.fact_dependency_keys).intersection(
+                self.expected_change_keys
+            )
+            if overlap:
+                raise ValueError(
+                    "expected self-induced changes cannot be governance "
+                    "dependencies: " + ", ".join(sorted(overlap))
+                )
+        return self
 
 
 class GovernanceValidation(UtcModel):
@@ -74,6 +90,15 @@ class GovernanceBasisRow(Base):
     authority_digest: Mapped[str] = mapped_column(String(128), nullable=False)
     basis_digest: Mapped[str] = mapped_column(String(128), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    fact_dependency_keys_json: Mapped[list[str] | None] = mapped_column(
+        JSON, nullable=True
+    )
+    fact_dependency_values_json: Mapped[dict[str, Any]] = mapped_column(
+        JSON, nullable=False, default=dict
+    )
+    expected_change_keys_json: Mapped[list[str]] = mapped_column(
+        JSON, nullable=False, default=list
+    )
 
 
 class GovernanceRepository:
@@ -86,6 +111,8 @@ class GovernanceRepository:
         satisfaction: ApprovalSatisfaction,
         *,
         organization_scope: str,
+        fact_dependency_keys: tuple[str, ...] | None = None,
+        expected_change_keys: tuple[str, ...] = (),
         db: Session | None = None,
     ) -> GovernanceBasis:
         if case.fact_snapshot is None or case.policy_ref is None:
@@ -103,6 +130,8 @@ class GovernanceRepository:
                 case,
                 satisfaction,
                 organization_scope=organization_scope,
+                fact_dependency_keys=fact_dependency_keys,
+                expected_change_keys=expected_change_keys,
             )
             return self._put_in_session(db, basis)
         with self.store.sessions.begin() as session:
@@ -111,6 +140,8 @@ class GovernanceRepository:
                 case,
                 satisfaction,
                 organization_scope=organization_scope,
+                fact_dependency_keys=fact_dependency_keys,
+                expected_change_keys=expected_change_keys,
             )
             return self._put_in_session(session, basis)
 
@@ -155,10 +186,20 @@ class GovernanceRepository:
         if case.fact_snapshot is None:
             reasons.append("case no longer has a current fact snapshot")
         else:
-            if case.fact_snapshot.snapshot_id != basis.fact_snapshot_id:
-                reasons.append("current fact snapshot differs from governance basis")
-            if _digest(case.fact_snapshot.facts) != basis.fact_digest:
-                reasons.append("current fact content differs from governance basis")
+            if basis.fact_dependency_keys is None:
+                if case.fact_snapshot.snapshot_id != basis.fact_snapshot_id:
+                    reasons.append("current fact snapshot differs from governance basis")
+                if _digest(case.fact_snapshot.facts) != basis.fact_digest:
+                    reasons.append("current fact content differs from governance basis")
+            else:
+                for key in basis.fact_dependency_keys:
+                    if (
+                        case.fact_snapshot.facts.get(key)
+                        != basis.fact_dependency_values.get(key)
+                    ):
+                        reasons.append(
+                            f"authoritative dependency changed for {key}"
+                        )
         if case.policy_ref is None:
             reasons.append("case no longer has a current policy")
         elif case.policy_ref != basis.policy_ref:
@@ -204,6 +245,8 @@ class GovernanceRepository:
         satisfaction: ApprovalSatisfaction,
         *,
         organization_scope: str,
+        fact_dependency_keys: tuple[str, ...] | None = None,
+        expected_change_keys: tuple[str, ...] = (),
     ) -> GovernanceBasis:
         assert case.fact_snapshot is not None
         assert case.policy_ref is not None
@@ -247,6 +290,14 @@ class GovernanceRepository:
         authority_payload = [item.model_dump(mode="json") for item in qualifications]
         authority_digest = _digest(authority_payload)
         fact_digest = _digest(case.fact_snapshot.facts)
+        dependency_values = (
+            {}
+            if fact_dependency_keys is None
+            else {
+                key: case.fact_snapshot.facts.get(key)
+                for key in fact_dependency_keys
+            }
+        )
         policy_definition_digest = _digest(policy_row.definition_json)
         basis_payload = {
             "case_id": str(case.case_id),
@@ -259,6 +310,9 @@ class GovernanceRepository:
             "approval_satisfaction_id": str(satisfaction.satisfaction_id),
             "authority_digest": authority_digest,
         }
+        if fact_dependency_keys is not None:
+            basis_payload["fact_dependency_keys"] = list(fact_dependency_keys)
+            basis_payload["expected_change_keys"] = list(expected_change_keys)
         basis_digest = _digest(basis_payload)
         basis_id = uuid5(
             NAMESPACE_URL,
@@ -280,6 +334,9 @@ class GovernanceRepository:
             authority_digest=authority_digest,
             basis_digest=basis_digest,
             created_at=at,
+            fact_dependency_keys=fact_dependency_keys,
+            fact_dependency_values=dependency_values,
+            expected_change_keys=expected_change_keys,
         )
 
     @staticmethod
@@ -306,6 +363,13 @@ class GovernanceRepository:
                 authority_digest=basis.authority_digest,
                 basis_digest=basis.basis_digest,
                 created_at=basis.created_at,
+                fact_dependency_keys_json=(
+                    None
+                    if basis.fact_dependency_keys is None
+                    else list(basis.fact_dependency_keys)
+                ),
+                fact_dependency_values_json=dict(basis.fact_dependency_values),
+                expected_change_keys_json=list(basis.expected_change_keys),
             )
         )
         return basis
@@ -329,6 +393,13 @@ class GovernanceRepository:
             authority_digest=row.authority_digest,
             basis_digest=row.basis_digest,
             created_at=row.created_at,
+            fact_dependency_keys=(
+                None
+                if row.fact_dependency_keys_json is None
+                else tuple(row.fact_dependency_keys_json)
+            ),
+            fact_dependency_values=dict(row.fact_dependency_values_json or {}),
+            expected_change_keys=tuple(row.expected_change_keys_json or ()),
         )
 
 
