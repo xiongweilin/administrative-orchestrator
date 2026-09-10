@@ -100,6 +100,48 @@ async def test_keycloak_server_5xx_is_unknown_not_definitive_failure(monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_keycloak_invoke_reconciles_identity_created_for_the_same_subject(monkeypatch):
+    connector = _keycloak_connector()
+    monkeypatch.setattr(
+        connector,
+        "_find_by_attribute",
+        AsyncMock(side_effect=[[], [{"id": "user-77"}]]),
+    )
+    request = AsyncMock()
+    monkeypatch.setattr(connector, "_request", request)
+
+    result = await connector.invoke(
+        request_ref="req-new",
+        subject_ref="employee:42",
+        parameters={"employee_ref": "employee:42"},
+    )
+
+    assert result.status is ConnectorStatus.SUCCEEDED
+    assert result.reconciled is True
+    assert result.external_operation_ref == "keycloak:user:user-77"
+    request.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_keycloak_invoke_rejects_duplicate_subject_identity(monkeypatch):
+    connector = _keycloak_connector()
+    monkeypatch.setattr(
+        connector,
+        "_find_by_attribute",
+        AsyncMock(side_effect=[[], [{"id": "user-1"}, {"id": "user-2"}]]),
+    )
+
+    result = await connector.invoke(
+        request_ref="req-dup",
+        subject_ref="employee:42",
+        parameters={"employee_ref": "employee:42"},
+    )
+
+    assert result.status is ConnectorStatus.FAILED
+    assert result.error_code == "DuplicateExternalSubjectIdentity"
+
+
+@pytest.mark.asyncio
 async def test_keycloak_transport_ambiguity_is_unknown(monkeypatch):
     connector = _keycloak_connector()
     monkeypatch.setattr(

@@ -358,6 +358,25 @@ class KeycloakIdentityEffectConnector:
                     reconciled=True,
                 )
 
+            by_subject = await self._find_by_attribute(
+                self.connection.subject_ref_attribute,
+                subject_ref,
+            )
+            if len(by_subject) > 1:
+                return ConnectorResult(
+                    ConnectorStatus.FAILED,
+                    error_code="DuplicateExternalSubjectIdentity",
+                    error_message="multiple Keycloak users share the same subject_ref",
+                )
+            if by_subject:
+                # An earlier attempt or run already created the identity for
+                # this subject; reconcile instead of creating a duplicate.
+                return ConnectorResult(
+                    ConnectorStatus.SUCCEEDED,
+                    external_operation_ref=f"keycloak:user:{by_subject[0]['id']}",
+                    reconciled=True,
+                )
+
             username = str(
                 parameters.get("username")
                 or parameters.get("work_email")
