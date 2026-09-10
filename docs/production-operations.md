@@ -391,9 +391,10 @@ If any effect is execution-unknown, preserve the newer Kernel state until reconc
 
 ## Real staging acceptance
 
-Public CI cannot exercise enterprise credentials or provider delivery. Before
-production acceptance, execute the M5 checklist in `docs/milestones/M5.md` and
-the M6 record in
+Public CI cannot exercise enterprise credentials or provider delivery. The
+recorded M6 run is `docs/acceptance/M6-staging-acceptance.md`. Before a new
+deployment or a revalidation, execute the M5 checklist in
+`docs/milestones/M5.md` and fill
 `docs/acceptance/M6-staging-acceptance-template.md` against the actual
 Feishu/IdP/Odoo/Keycloak/Kernel staging topology and least-privilege accounts.
 
@@ -426,6 +427,6 @@ For M6, also record only non-sensitive evidence references for:
 For the current Feishu reference topology, URL-verification callbacks and
 signed HTTP callback headers are `N/A`; record them as applicable only when a
 separate callback transport is actually enabled. Do not fill the record with
-invented provider, Odoo, Keycloak, Kernel, or model-provider results. Until the
-real-staging record exists with fresh evidence, M6 remains incomplete even if
-repository implementation and CI are green.
+invented provider, Odoo, Keycloak, Kernel, or model-provider results. The
+recorded M6 run satisfies the evidence condition for its recorded scope; a new
+deployment still requires fresh evidence in the template record.

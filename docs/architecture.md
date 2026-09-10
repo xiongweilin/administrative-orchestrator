@@ -120,8 +120,8 @@ metadata boundary and worker pipeline from deployment settings, and the relay
 fails closed when processing dependencies are absent. URL-verification and
 signed HTTP callback behavior are outside this reference slice unless a
 separate callback transport is enabled. This repository therefore documents
-the durable ingress and runtime boundary, not a claim that a real Feishu
-deployment has already been exercised.
+the durable ingress and runtime boundary; the real Feishu long-connection path
+is recorded in `docs/acceptance/M6-staging-acceptance.md`.
 
 Inbox conversations are keyed by provider, tenant, and provider thread.
 Provider-native sender identity is resolved through the current Administrative
@@ -340,9 +340,10 @@ content-addressed SHA-256 objects, atomic publication, and read/verify digest
 checks; PostgreSQL retains metadata, provenance, storage references, spans,
 and lineage. The Feishu adapter now fetches canonical file/image resources and
 passes them through the same attachment processor, while the production worker
-mounts a named durable artifact volume. This is implementation wiring, not a
-claim that a real provider attachment run, OCR/document interpretation, or
-document-to-Work behavior has been exercised. Missing, corrupted, or
+mounts a named durable artifact volume. A real provider attachment run is
+recorded in `docs/acceptance/M6-staging-acceptance.md`; OCR/document
+interpretation and document-to-Work behavior remain out of scope for that
+slice. Missing, corrupted, or
 unavailable artifacts fail closed without fabricating an interpretation or
 admission.
 
