@@ -32,12 +32,22 @@ class Settings(BaseSettings):
     # Optional M6 Feishu runtime. Secret values are held as SecretStr and are
     # never returned by readiness endpoints or written to intake records.
     feishu_base_url: str = "https://open.feishu.cn"
+    # Worker-only Feishu app credentials used to obtain short-lived tenant
+    # access tokens for canonical reads. They are intentionally separate from
+    # the ingress verification token and the gateway's transport credentials.
+    feishu_app_id: str = ""
+    feishu_app_secret: SecretStr | None = None
     feishu_verification_token: SecretStr | None = None
     feishu_encrypt_key: SecretStr | None = None
+    # Explicit test/manual override. Production/staging should use the app
+    # credential pair above and the dynamic tenant-token provider.
     feishu_access_token: SecretStr | None = None
     feishu_artifact_root: str = "./data/intake-artifacts"
     intake_model_url: str = ""
     intake_model_api_key: SecretStr | None = None
+    intake_model_protocol: Literal["json", "openai-chat"] = "json"
+    intake_model_name: str = ""
+    intake_model_max_tokens: int = 2400
     intake_model_provider: str = "configured-model-gateway"
     intake_model_identity: str = "configured-model"
     intake_model_version: str = "configured"
@@ -125,6 +135,8 @@ class Settings(BaseSettings):
             raise ValueError("connector_timeout_seconds must be positive")
         if self.authoritative_fact_max_age_seconds <= 0:
             raise ValueError("authoritative_fact_max_age_seconds must be positive")
+        if self.intake_model_max_tokens <= 0:
+            raise ValueError("intake_model_max_tokens must be positive")
         if self.kernel_bridge_mode in {"admission", "cutover"} and not (
             self.kernel_responsibility_admission_policy_ref.strip()
         ):

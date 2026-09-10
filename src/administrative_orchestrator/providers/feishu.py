@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import threading
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -229,6 +230,93 @@ class FeishuAccessTokenProvider(Protocol):
         """Return a current provider access token without exposing it to logs."""
 
 
+class FeishuTenantAccessTokenProvider:
+    """Obtain and cache a Feishu tenant token from the official app endpoint.
+
+    The app secret and returned token remain process-local. No token is put in
+    exception text, logs, durable records, or configuration snapshots.
+    """
+
+    def __init__(
+        self,
+        base_url: str,
+        app_id: str,
+        app_secret: str,
+        *,
+        transport: httpx.BaseTransport | None = None,
+        timeout_seconds: float = 10.0,
+        clock: Callable[[], float] = time.time,
+        refresh_skew_seconds: int = 60,
+    ) -> None:
+        if not base_url.strip():
+            raise ValueError("base_url must not be blank")
+        if not app_id.strip() or not app_secret.strip():
+            raise ValueError("Feishu app credentials must not be blank")
+        if timeout_seconds <= 0:
+            raise ValueError("timeout_seconds must be positive")
+        if refresh_skew_seconds < 0:
+            raise ValueError("refresh_skew_seconds must not be negative")
+        self._base_url = base_url.rstrip("/")
+        self._app_id = app_id
+        self._app_secret = app_secret
+        self._clock = clock
+        self._refresh_skew_seconds = refresh_skew_seconds
+        self._client = httpx.Client(
+            timeout=httpx.Timeout(timeout_seconds),
+            transport=transport,
+        )
+        self._token = ""
+        self._expires_at = 0.0
+        self._lock = threading.Lock()
+
+    def __call__(self) -> str:
+        now = self._clock()
+        if self._token and now < self._expires_at:
+            return self._token
+        with self._lock:
+            now = self._clock()
+            if self._token and now < self._expires_at:
+                return self._token
+            try:
+                response = self._client.post(
+                    f"{self._base_url}/open-apis/auth/v3/tenant_access_token/internal",
+                    json={"app_id": self._app_id, "app_secret": self._app_secret},
+                )
+                response.raise_for_status()
+                payload = response.json()
+            except (httpx.HTTPError, ValueError) as exc:
+                raise FeishuCanonicalFetchError("Feishu tenant token refresh failed") from exc
+
+            if not isinstance(payload, dict):
+                raise FeishuCanonicalFetchError("Feishu tenant token response is invalid")
+            token = payload.get("tenant_access_token")
+            expire = payload.get("expire")
+            if (
+                payload.get("code") not in (0, None)
+                or not isinstance(token, str)
+                or not token.strip()
+                or not isinstance(expire, int)
+                or expire <= 0
+            ):
+                raise FeishuCanonicalFetchError("Feishu tenant token response is invalid")
+
+            refresh_margin = min(
+                self._refresh_skew_seconds,
+                max(5, expire // 10),
+            )
+            self._token = token
+            self._expires_at = now + max(1, expire - refresh_margin)
+            return self._token
+
+    def invalidate(self) -> None:
+        with self._lock:
+            self._token = ""
+            self._expires_at = 0.0
+
+    def close(self) -> None:
+        self._client.close()
+
+
 def _header(headers: Mapping[str, str], name: str) -> str | None:
     wanted = name.lower()
     for key, value in headers.items():
@@ -376,45 +464,64 @@ class HttpFeishuCanonicalFetcher:
         )
 
     def fetch(self, event: FeishuProviderEvent) -> FeishuCanonicalMessage:
-        token = self._access_token()
-        if not isinstance(token, str) or not token.strip():
-            raise FeishuCanonicalFetchError("Feishu access token is unavailable")
+        response = self._request(
+            f"{self._base_url}/open-apis/im/v1/messages/{quote(event.message_id, safe='')}",
+            params={"user_id_type": "open_id"},
+        )
         try:
-            response = self._client.get(
-                f"{self._base_url}/open-apis/im/v1/messages/{quote(event.message_id, safe='')}",
-                headers={"Authorization": f"Bearer {token}"},
-                params={"user_id_type": "open_id"},
-            )
-            response.raise_for_status()
             payload = response.json()
-        except (httpx.HTTPError, ValueError) as exc:
+        except ValueError as exc:
             raise FeishuCanonicalFetchError("Feishu canonical message fetch failed") from exc
         try:
             message = _message_payload(payload)
-            attachments = self._fetch_attachments(message, event, token)
+            attachments = self._fetch_attachments(message, event)
             return _canonical_message_from_payload(message, event, attachments=attachments)
         except (TypeError, ValueError, KeyError, ValidationError) as exc:
             raise FeishuCanonicalFetchError("Feishu canonical message response is invalid") from exc
+
+    def _request(
+        self,
+        url: str,
+        *,
+        params: Mapping[str, str],
+    ) -> httpx.Response:
+        for attempt in range(2):
+            token = self._access_token()
+            if not isinstance(token, str) or not token.strip():
+                raise FeishuCanonicalFetchError("Feishu access token is unavailable")
+            try:
+                response = self._client.get(
+                    url,
+                    headers={"Authorization": f"Bearer {token}"},
+                    params=params,
+                )
+            except httpx.HTTPError as exc:
+                raise FeishuCanonicalFetchError("Feishu canonical message fetch failed") from exc
+            if response.status_code == 401 and attempt == 0:
+                invalidate = getattr(self._access_token, "invalidate", None)
+                if callable(invalidate):
+                    invalidate()
+                    continue
+            try:
+                response.raise_for_status()
+            except httpx.HTTPError as exc:
+                raise FeishuCanonicalFetchError("Feishu canonical message fetch failed") from exc
+            return response
+        raise FeishuCanonicalFetchError("Feishu canonical message fetch failed")
 
     def _fetch_attachments(
         self,
         message: dict[str, Any],
         event: FeishuProviderEvent,
-        token: str,
     ) -> tuple[FeishuCanonicalAttachment, ...]:
         attachments: list[FeishuCanonicalAttachment] = []
         for descriptor in _attachment_descriptors(message):
-            try:
-                response = self._client.get(
-                    f"{self._base_url}/open-apis/im/v1/messages/"
-                    f"{quote(event.message_id, safe='')}/resources/"
-                    f"{quote(descriptor['attachment_ref'], safe='')}",
-                    headers={"Authorization": f"Bearer {token}"},
-                    params={"type": descriptor["resource_type"]},
-                )
-                response.raise_for_status()
-            except httpx.HTTPError as exc:
-                raise FeishuCanonicalFetchError("Feishu attachment fetch failed") from exc
+            response = self._request(
+                f"{self._base_url}/open-apis/im/v1/messages/"
+                f"{quote(event.message_id, safe='')}/resources/"
+                f"{quote(descriptor['attachment_ref'], safe='')}",
+                params={"type": descriptor["resource_type"]},
+            )
             content_type = _header(response.headers, "content-type") or descriptor["mime_type"]
             attachments.append(
                 FeishuCanonicalAttachment(
@@ -941,6 +1048,7 @@ __all__ = [
     "FeishuProcessingError",
     "FeishuProcessResult",
     "FeishuProviderEvent",
+    "FeishuTenantAccessTokenProvider",
     "FeishuVerificationError",
     "HttpFeishuCanonicalFetcher",
     "FeishuWebhookBoundary",
