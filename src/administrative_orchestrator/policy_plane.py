@@ -365,6 +365,29 @@ def default_onboarding_policy_version() -> PolicyVersionRecord:
     )
 
 
+def default_offboarding_policy_version() -> PolicyVersionRecord:
+    from .policy import OffboardingPolicy
+
+    baseline = datetime(2026, 1, 1, tzinfo=UTC)
+    return PolicyVersionRecord(
+        policy_id="employee-offboarding",
+        version="v1",
+        owner="administrative-orchestrator",
+        status=PolicyVersionStatus.ACTIVE,
+        effective_from=baseline,
+        definition=OffboardingPolicy.default_definition(),
+        created_at=baseline,
+    )
+
+
+def compile_offboarding_policy(record: PolicyVersionRecord):
+    from .policy import OffboardingPolicy
+
+    if record.policy_id != "employee-offboarding":
+        raise PolicyPlaneError("record is not an employee-offboarding policy")
+    return OffboardingPolicy(record.policy_ref, definition=record.definition)
+
+
 def compile_onboarding_policy(record: PolicyVersionRecord) -> OnboardingPolicy:
     if record.policy_id != "employee-onboarding":
         raise PolicyPlaneError("record is not an employee-onboarding policy")
@@ -380,5 +403,7 @@ __all__ = [
     "PolicyVersionRow",
     "PolicyVersionStatus",
     "compile_onboarding_policy",
+    "compile_offboarding_policy",
     "default_onboarding_policy_version",
+    "default_offboarding_policy_version",
 ]

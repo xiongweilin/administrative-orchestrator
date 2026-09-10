@@ -42,6 +42,34 @@ class OnboardingPolicyDefinition(BaseModel):
     base_effects: tuple[AuthorizedEffectTemplate, ...]
 
 
+# Employee lifecycle termination facts. Termination status and effective time
+# are authoritative HR facts; a request or model extraction may only ever be a
+# claim about them.
+class OffboardingFacts(BaseModel):
+    employee_ref: str
+    termination_status: str | None = None
+    termination_effective_at: str | None = None
+    employment_type: str | None = None
+    department_ref: str | None = None
+    manager_principal_id: str | None = None
+    employment_episode_ref: str | None = None
+    departing_principal_id: str | None = None
+    successor_principal_id: str | None = None
+    requested_termination_date: str | None = None
+    reason: str | None = None
+    requires_privileged_access: bool = False
+
+
+class OffboardingPolicyDefinition(BaseModel):
+    required_authoritative_facts: tuple[str, ...]
+    standard_approval: ApprovalRule
+    privileged_approval: ApprovalRule
+    base_effects: tuple[AuthorizedEffectTemplate, ...]
+    transfer_required_roles: tuple[str, ...] = ("manager",)
+    revoke_only_roles: tuple[str, ...] = ("hr_approver", "access_approver")
+    effective_time_fact: str = "termination_effective_at"
+
+
 class PolicyEvaluation(BaseModel):
     policy_ref: PolicyRef
     disposition: PolicyDisposition
@@ -173,12 +201,121 @@ class OnboardingPolicy:
         )
 
 
+class OffboardingPolicy:
+    # Deterministic evaluator for the employee-offboarding lifecycle.
+
+    def __init__(
+        self,
+        policy_ref: PolicyRef,
+        *,
+        definition: dict[str, Any] | OffboardingPolicyDefinition | None = None,
+    ) -> None:
+        self.policy_ref = policy_ref
+        self.definition = (
+            definition
+            if isinstance(definition, OffboardingPolicyDefinition)
+            else OffboardingPolicyDefinition.model_validate(
+                definition or self.default_definition()
+            )
+        )
+
+    @staticmethod
+    def default_definition() -> dict[str, Any]:
+        return OffboardingPolicyDefinition(
+            required_authoritative_facts=(
+                "employee_ref",
+                "termination_status",
+                "termination_effective_at",
+            ),
+            standard_approval=ApprovalRule(roles=("hr_approver",)),
+            privileged_approval=ApprovalRule(
+                roles=("manager", "access_approver"),
+                require_distinct_principals=True,
+            ),
+            base_effects=(
+                AuthorizedEffectTemplate(
+                    target_system="hris",
+                    operation="employee.deactivate",
+                    authority_class=AuthorityClass.EMPLOYMENT,
+                ),
+                AuthorizedEffectTemplate(
+                    target_system="iam",
+                    operation="identity.disable",
+                    authority_class=AuthorityClass.PRIVILEGED_ACCESS,
+                ),
+                AuthorizedEffectTemplate(
+                    target_system="iam",
+                    operation="sessions.revoke",
+                    authority_class=AuthorityClass.PRIVILEGED_ACCESS,
+                ),
+            ),
+            transfer_required_roles=("manager",),
+            revoke_only_roles=("hr_approver", "access_approver"),
+            effective_time_fact="termination_effective_at",
+        ).model_dump(mode="json")
+
+    def evaluate(self, facts: OffboardingFacts) -> PolicyEvaluation:
+        missing = tuple(
+            name
+            for name in self.definition.required_authoritative_facts
+            if not _fact_present(getattr(facts, name, None))
+        )
+        if missing:
+            return PolicyEvaluation(
+                policy_ref=self.policy_ref,
+                disposition=PolicyDisposition.NEED_MORE_FACTS,
+                reason="authoritative termination facts are missing",
+                missing_facts=missing,
+            )
+        status = str(facts.termination_status or "").strip().lower()
+        if status in {"active", "termination_cancelled"}:
+            return PolicyEvaluation(
+                policy_ref=self.policy_ref,
+                disposition=PolicyDisposition.REOPEN_REQUIRED,
+                reason="the authoritative HR source does not currently schedule a termination",
+                reopen_reason=ReopenReason.GOVERNANCE_STALE,
+            )
+        if status not in {"termination_scheduled", "terminated"}:
+            return PolicyEvaluation(
+                policy_ref=self.policy_ref,
+                disposition=PolicyDisposition.REOPEN_REQUIRED,
+                reason=f"unsupported authoritative termination status: {status!r}",
+                reopen_reason=ReopenReason.REALITY_MISMATCH,
+            )
+
+        rule = (
+            self.definition.privileged_approval
+            if facts.requires_privileged_access
+            else self.definition.standard_approval
+        )
+        reason = (
+            "privileged access offboarding requires the configured multi-party approval rule"
+            if facts.requires_privileged_access
+            else "employment termination requires the configured current approval rule"
+        )
+        return PolicyEvaluation(
+            policy_ref=self.policy_ref,
+            disposition=PolicyDisposition.HUMAN_DECISION_REQUIRED,
+            reason=reason,
+            required_decision_roles=rule.roles,
+            require_distinct_decision_principals=rule.require_distinct_principals,
+            allowed_effects=self.definition.base_effects,
+        )
+
+
+def _fact_present(value: Any) -> bool:
+    return value is not None and bool(str(value).strip())
+
+
 __all__ = [
     "ApprovalRule",
     "AuthorizedEffectTemplate",
     "OnboardingFacts",
     "OnboardingPolicy",
     "OnboardingPolicyDefinition",
+    "OffboardingFacts",
+    "OffboardingPolicy",
+    "OffboardingPolicyDefinition",
     "PolicyDisposition",
     "PolicyEvaluation",
 ]
