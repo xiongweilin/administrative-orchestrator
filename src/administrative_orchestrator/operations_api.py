@@ -109,6 +109,11 @@ class ReasonBody(BaseModel):
     reason: str = Field(min_length=1, max_length=2000)
 
 
+class ExpireAuthorityBody(BaseModel):
+    reason: str = Field(min_length=1, max_length=2000)
+    at: datetime | None = None
+
+
 class IntakeQueueItem(BaseModel):
     candidate_id: UUID
     conversation_ref: str
@@ -541,6 +546,50 @@ def deactivate_principal(
             reason=payload.reason,
         )
     except AuthorityError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.post(
+    "/v1/operations/role-assignments/{assignment_id}/expire",
+    response_model=AuthorityLifecycleEvent,
+)
+def expire_role_assignment(
+    assignment_id: UUID,
+    payload: ExpireAuthorityBody,
+    request: Request,
+) -> AuthorityLifecycleEvent:
+    actor = _actor(request)
+    _require(actor, AdministrativePermission.IDENTITY_MANAGE)
+    try:
+        return _lifecycle.expire_role_assignment(
+            assignment_id,
+            actor_principal_id=actor.principal_id,
+            reason=payload.reason,
+            at=payload.at,
+        )
+    except (AuthorityError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.post(
+    "/v1/operations/delegations/{delegation_id}/expire",
+    response_model=AuthorityLifecycleEvent,
+)
+def expire_delegation(
+    delegation_id: UUID,
+    payload: ExpireAuthorityBody,
+    request: Request,
+) -> AuthorityLifecycleEvent:
+    actor = _actor(request)
+    _require(actor, AdministrativePermission.IDENTITY_MANAGE)
+    try:
+        return _lifecycle.expire_delegation(
+            delegation_id,
+            actor_principal_id=actor.principal_id,
+            reason=payload.reason,
+            at=payload.at,
+        )
+    except (AuthorityError, ValueError) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 

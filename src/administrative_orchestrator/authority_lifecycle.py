@@ -2,13 +2,20 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Any
-from uuid import UUID, uuid4
+from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
 from pydantic import Field
 from sqlalchemy import JSON, DateTime, String, Uuid, select
 from sqlalchemy.orm import Mapped, mapped_column
 
-from .authority import AuthorityError, IdentityBinding, IdentityBindingRow, PrincipalRow
+from .authority import (
+    AuthorityError,
+    DelegationRow,
+    IdentityBinding,
+    IdentityBindingRow,
+    PrincipalRow,
+    RoleAssignmentRow,
+)
 from .domain import UtcModel, normalize_datetime, utcnow
 from .persistence import Base, SqlStore
 
@@ -61,8 +68,7 @@ class AuthorityLifecycleRepository:
                 reason=reason,
                 payload={"principal_id": principal_id},
             )
-            self._record(db, event)
-            return event
+            return self._record(db, event)
 
     def expire_identity_binding(
         self,
@@ -72,31 +78,75 @@ class AuthorityLifecycleRepository:
         reason: str,
         at: datetime | None = None,
     ) -> AuthorityLifecycleEvent:
-        if not reason.strip():
-            raise AuthorityError("identity revocation requires a reason")
-        at = normalize_datetime(at or utcnow())
-        with self.store.sessions.begin() as db:
-            row = db.get(IdentityBindingRow, binding_id)
-            if row is None:
-                raise AuthorityError("identity binding does not exist")
-            if row.valid_until is None or at < normalize_datetime(row.valid_until):
-                row.valid_until = at
-            event = AuthorityLifecycleEvent(
-                event_type="identity_binding.revoked",
-                actor_principal_id=actor_principal_id,
-                target_ref=f"identity-binding:{binding_id}",
-                reason=reason,
-                payload={
-                    "binding_id": str(binding_id),
-                    "provider": row.provider,
-                    "external_subject": row.external_subject,
-                    "principal_id": row.principal_id,
-                    "valid_until": at.isoformat(),
-                },
-                occurred_at=at,
-            )
-            self._record(db, event)
-            return event
+        return self._expire_validity(
+            IdentityBindingRow,
+            binding_id,
+            event_type="identity_binding.revoked",
+            target_prefix="identity-binding",
+            label="identity revocation",
+            actor_principal_id=actor_principal_id,
+            reason=reason,
+            at=at,
+            payload_fields=(
+                "binding_id",
+                "provider",
+                "external_subject",
+                "principal_id",
+            ),
+        )
+
+    def expire_role_assignment(
+        self,
+        assignment_id: UUID,
+        *,
+        actor_principal_id: str,
+        reason: str,
+        at: datetime | None = None,
+    ) -> AuthorityLifecycleEvent:
+        """End a role assignment at the qualified effective time."""
+        return self._expire_validity(
+            RoleAssignmentRow,
+            assignment_id,
+            event_type="role_assignment.expired",
+            target_prefix="role-assignment",
+            label="role assignment expiry",
+            actor_principal_id=actor_principal_id,
+            reason=reason,
+            at=at,
+            payload_fields=(
+                "assignment_id",
+                "principal_id",
+                "role",
+                "organization_scope",
+            ),
+        )
+
+    def expire_delegation(
+        self,
+        delegation_id: UUID,
+        *,
+        actor_principal_id: str,
+        reason: str,
+        at: datetime | None = None,
+    ) -> AuthorityLifecycleEvent:
+        """End a delegation at the qualified effective time."""
+        return self._expire_validity(
+            DelegationRow,
+            delegation_id,
+            event_type="delegation.expired",
+            target_prefix="delegation",
+            label="delegation expiry",
+            actor_principal_id=actor_principal_id,
+            reason=reason,
+            at=at,
+            payload_fields=(
+                "delegation_id",
+                "from_principal_id",
+                "to_principal_id",
+                "role",
+                "organization_scope",
+            ),
+        )
 
     def bind_identity(
         self,
@@ -150,8 +200,7 @@ class AuthorityLifecycleRepository:
                 payload=binding.model_dump(mode="json"),
                 occurred_at=binding.valid_from,
             )
-            self._record(db, event)
-            return event
+            return self._record(db, event)
 
     def list_events(self, *, limit: int = 200) -> list[AuthorityLifecycleEvent]:
         with self.store.sessions() as db:
@@ -177,8 +226,77 @@ class AuthorityLifecycleRepository:
                 for row in rows
             ]
 
+    def _expire_validity(
+        self,
+        row_type: type,
+        row_id: UUID,
+        *,
+        event_type: str,
+        target_prefix: str,
+        label: str,
+        actor_principal_id: str,
+        reason: str,
+        at: datetime | None,
+        payload_fields: tuple[str, ...],
+    ) -> AuthorityLifecycleEvent:
+        """Monotonically end one validity window and append an audit event."""
+        if not reason.strip():
+            raise AuthorityError(f"{label} requires a reason")
+        effective_at = normalize_datetime(at or utcnow())
+        with self.store.sessions.begin() as db:
+            row = db.get(row_type, row_id)
+            if row is None:
+                raise AuthorityError(f"{label} target does not exist")
+            valid_from = normalize_datetime(row.valid_from)
+            if effective_at < valid_from:
+                raise AuthorityError(f"{label} cannot precede its validity start")
+            previous = row.valid_until
+            if previous is None or effective_at < normalize_datetime(previous):
+                row.valid_until = effective_at
+            target_ref = f"{target_prefix}:{row_id}"
+            payload: dict[str, Any] = {}
+            for field in payload_fields:
+                value = getattr(row, field)
+                payload[field] = str(value) if isinstance(value, UUID) else value
+            payload["valid_from"] = valid_from.isoformat()
+            # The event records the resulting window, which the monotonic guard
+            # may have kept earlier than the requested time.
+            payload["valid_until"] = normalize_datetime(row.valid_until).isoformat()
+            event = AuthorityLifecycleEvent(
+                event_id=uuid5(
+                    NAMESPACE_URL,
+                    f"administrative:authority-lifecycle:{event_type}:"
+                    f"{target_ref}:{effective_at.isoformat()}",
+                ),
+                event_type=event_type,
+                actor_principal_id=actor_principal_id,
+                target_ref=target_ref,
+                reason=reason,
+                payload=payload,
+                occurred_at=effective_at,
+            )
+            return self._record(db, event)
+
     @staticmethod
-    def _record(db, event: AuthorityLifecycleEvent) -> None:
+    def _record(
+        db, event: AuthorityLifecycleEvent
+    ) -> AuthorityLifecycleEvent:
+        existing = db.get(AuthorityLifecycleEventRow, event.event_id)
+        if existing is not None:
+            stored = AuthorityLifecycleEvent(
+                event_id=existing.event_id,
+                event_type=existing.event_type,
+                actor_principal_id=existing.actor_principal_id,
+                target_ref=existing.target_ref,
+                reason=existing.reason,
+                payload=dict(existing.payload_json),
+                occurred_at=existing.occurred_at,
+            )
+            if stored != event:
+                raise AuthorityError(
+                    "authority lifecycle event id already exists with different semantics"
+                )
+            return stored
         db.add(
             AuthorityLifecycleEventRow(
                 event_id=event.event_id,
@@ -190,6 +308,7 @@ class AuthorityLifecycleRepository:
                 occurred_at=event.occurred_at,
             )
         )
+        return event
 
 
 def _windows_overlap(left: IdentityBinding, right: IdentityBinding) -> bool:
