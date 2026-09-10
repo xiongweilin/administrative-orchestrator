@@ -246,8 +246,10 @@ def build_feishu_webhook_boundary(
 
 def build_feishu_runtime(store: SqlStore, settings: Settings) -> FeishuRuntime | None:
     boundary = build_feishu_webhook_boundary(store, settings)
-    app_id = settings.feishu_app_id.strip()
-    app_secret = _secret(settings.feishu_app_secret)
+    app_id = settings.feishu_app_id.strip() or _read_secret_file(settings.feishu_app_id_file)
+    app_secret = _secret(settings.feishu_app_secret) or _read_secret_file(
+        settings.feishu_app_secret_file
+    )
     access_token = _secret(settings.feishu_access_token)
     model_url = settings.intake_model_url.strip()
     if not settings.feishu_base_url.strip() or not model_url:
@@ -328,6 +330,21 @@ def _secret(value: Any) -> str:
     if get_secret_value is not None:
         value = get_secret_value()
     return value.strip() if isinstance(value, str) else ""
+
+
+def _read_secret_file(path: str) -> str:
+    if not path.strip():
+        return ""
+    secret_path = Path(path)
+    if not secret_path.is_file() or secret_path.is_symlink():
+        raise RuntimeError("configured Feishu credential file is unavailable")
+    try:
+        value = secret_path.read_text(encoding="utf-8").strip()
+    except OSError as exc:
+        raise RuntimeError("configured Feishu credential file is unavailable") from exc
+    if not value:
+        raise RuntimeError("configured Feishu credential file is empty")
+    return value
 
 
 def _raw_output(decoded: Any) -> str:

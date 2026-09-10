@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import os
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 from uuid import uuid4
 
@@ -57,14 +58,25 @@ def restore_kernel_state(backup: Path, destination: Path, *, force: bool = False
         raise KernelStateRecoveryError("Kernel state restore destination must differ from backup")
     digest = verify_kernel_state_backup(backup)
     _require_parent(destination)
-    if destination.exists() and not force:
+    destination_existed = destination.exists()
+    if destination_existed and not force:
         raise KernelStateRecoveryError("Kernel state restore destination already exists")
 
     temporary = _temporary_path(destination)
     try:
         _sqlite_backup(backup, temporary)
         _quick_check(temporary)
-        os.replace(temporary, destination)
+        try:
+            os.replace(temporary, destination)
+        except PermissionError:
+            # Windows cannot atomically replace a file that another SQLite
+            # handle still has open.  A forced restore is explicitly allowed
+            # to overwrite that target, so fall back to SQLite's own backup
+            # semantics while preserving the temporary validation step.
+            if not force or not destination_existed:
+                raise
+            _sqlite_backup(backup, destination)
+            _quick_check(destination)
     finally:
         temporary.unlink(missing_ok=True)
     return digest
@@ -74,11 +86,12 @@ def _sqlite_backup(source: Path, destination: Path) -> None:
     source_uri = f"{source.as_uri()}?mode=ro"
     try:
         with (
-            sqlite3.connect(source_uri, uri=True, timeout=30.0) as source_db,
-            sqlite3.connect(destination, timeout=30.0) as destination_db,
+            closing(sqlite3.connect(source_uri, uri=True, timeout=30.0)) as source_db,
+            closing(sqlite3.connect(destination, timeout=30.0)) as destination_db,
         ):
             source_db.backup(destination_db)
             destination_db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            destination_db.commit()
     except sqlite3.Error as exc:
         raise KernelStateRecoveryError(f"SQLite backup failed: {exc}") from exc
 
@@ -86,7 +99,7 @@ def _sqlite_backup(source: Path, destination: Path) -> None:
 def _quick_check(path: Path) -> None:
     uri = f"{path.as_uri()}?mode=ro"
     try:
-        with sqlite3.connect(uri, uri=True, timeout=30.0) as db:
+        with closing(sqlite3.connect(uri, uri=True, timeout=30.0)) as db:
             rows = [str(row[0]) for row in db.execute("PRAGMA quick_check").fetchall()]
     except sqlite3.Error as exc:
         raise KernelStateRecoveryError(f"SQLite integrity check failed: {exc}") from exc

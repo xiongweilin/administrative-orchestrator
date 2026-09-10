@@ -36,7 +36,9 @@ class Settings(BaseSettings):
     # access tokens for canonical reads. They are intentionally separate from
     # the ingress verification token and the gateway's transport credentials.
     feishu_app_id: str = ""
+    feishu_app_id_file: str = ""
     feishu_app_secret: SecretStr | None = None
+    feishu_app_secret_file: str = ""
     feishu_verification_token: SecretStr | None = None
     feishu_encrypt_key: SecretStr | None = None
     # Explicit test/manual override. Production/staging should use the app
@@ -58,7 +60,7 @@ class Settings(BaseSettings):
         "Never authorize, execute, or communicate on behalf of the system."
     )
 
-    runtime_profile: Literal["test", "development", "governed", "production"] = "development"
+    runtime_profile: Literal["test", "development", "governed", "staging", "production"] = "development"
 
     # Kernel convergence is capability-scoped and already supports physical
     # cutover. Production pins a supported revision/tag while CI may run a
@@ -127,7 +129,7 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def fail_closed_profiles(self) -> Settings:
-        if self.runtime_profile in {"governed", "production"}:
+        if self.runtime_profile in {"governed", "staging", "production"}:
             object.__setattr__(self, "authority_enforcement_enabled", True)
         if self.kernel_contract_timeout_seconds <= 0:
             raise ValueError("kernel_contract_timeout_seconds must be positive")
@@ -143,15 +145,19 @@ class Settings(BaseSettings):
             raise ValueError(
                 "kernel_responsibility_admission_policy_ref is required in admission mode and cutover mode"
             )
-        if self.runtime_profile == "production":
+        if self.runtime_profile in {"staging", "production"}:
             if self.auth_mode != "oidc":
-                raise ValueError("production runtime requires ADMIN_AUTH_MODE=oidc")
+                raise ValueError(f"{self.runtime_profile} runtime requires ADMIN_AUTH_MODE=oidc")
             if not self.oidc_issuer.strip() or not self.oidc_audience.strip():
-                raise ValueError("production OIDC issuer and audience are required")
-            if self.oidc_allow_insecure_http:
-                raise ValueError("production OIDC cannot allow insecure HTTP")
-            if not self.oidc_issuer.startswith("https://"):
+                raise ValueError(f"{self.runtime_profile} OIDC issuer and audience are required")
+            if self.runtime_profile == "production" and not self.oidc_issuer.startswith("https://"):
                 raise ValueError("production OIDC issuer must use HTTPS")
+            if self.runtime_profile == "production" and self.oidc_allow_insecure_http:
+                raise ValueError("production OIDC cannot allow insecure HTTP")
+            if self.oidc_issuer.startswith("http://") and not self.oidc_allow_insecure_http:
+                raise ValueError(
+                    f"{self.runtime_profile} OIDC HTTP requires ADMIN_OIDC_ALLOW_INSECURE_HTTP=true"
+                )
             disallowed = set(self.oidc_algorithms) - {"RS256", "ES256"}
             if disallowed or not self.oidc_algorithms:
                 raise ValueError("production OIDC algorithms are restricted to RS256/ES256")

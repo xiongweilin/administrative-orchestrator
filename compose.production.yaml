@@ -165,6 +165,8 @@ services:
       # separate from this provider read identity.
       ADMIN_FEISHU_APP_ID: ${ADMIN_FEISHU_APP_ID:-}
       ADMIN_FEISHU_APP_SECRET: ${ADMIN_FEISHU_APP_SECRET:-}
+      ADMIN_FEISHU_APP_ID_FILE: ${ADMIN_FEISHU_APP_ID_FILE:-}
+      ADMIN_FEISHU_APP_SECRET_FILE: ${ADMIN_FEISHU_APP_SECRET_FILE:-}
       # Explicit test/manual compatibility override; leave empty in staging
       # and production when the app credential pair is configured.
       ADMIN_FEISHU_ACCESS_TOKEN: ${ADMIN_FEISHU_ACCESS_TOKEN:-}

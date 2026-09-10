@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo noupdate="1">
+  <record id="user_administrative_reader" model="res.users">
+    <field name="name">Administrative staging reader</field>
+    <field name="login">administrative-reader</field>
+    <field name="password">m6-odoo-reader-secret</field>
+    <field name="group_ids" eval="[(6, 0, [ref('base.group_user'), ref('hr.group_hr_user')])]"/>
+  </record>
+  <record id="user_administrative_kernel_writer" model="res.users">
+    <field name="name">Administrative staging Kernel writer</field>
+    <field name="login">administrative-kernel-writer</field>
+    <field name="password">m6-odoo-writer-secret</field>
+    <field name="group_ids" eval="[(6, 0, [ref('base.group_user'), ref('hr.group_hr_user')])]"/>
+  </record>
+  <record id="user_administrative_kernel_verifier" model="res.users">
+    <field name="name">Administrative staging Kernel verifier</field>
+    <field name="login">administrative-kernel-verifier</field>
+    <field name="password">m6-odoo-verifier-secret</field>
+    <field name="group_ids" eval="[(6, 0, [ref('base.group_user'), ref('hr.group_hr_user')])]"/>
+  </record>
+</odoo>

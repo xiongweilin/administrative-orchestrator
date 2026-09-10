@@ -264,8 +264,10 @@ def _repeat_safe() -> ReconciliationRepeatabilityConfiguration:
 
 def build() -> tuple[Runtime, BoundedDomainEffectExecutionService]:
     settings = get_settings()
-    if settings.runtime_profile != "production":
-        raise RuntimeError("production Kernel stack requires ADMIN_RUNTIME_PROFILE=production")
+    if settings.runtime_profile not in {"staging", "production"}:
+        raise RuntimeError(
+            "production Kernel stack requires ADMIN_RUNTIME_PROFILE=staging or production"
+        )
     state_path = os.getenv("PORTABLE_RUNTIME_ADMIN_PRODUCTION_STATE_PATH", "").strip()
     if not state_path:
         raise RuntimeError("PORTABLE_RUNTIME_ADMIN_PRODUCTION_STATE_PATH is required")
@@ -288,6 +290,7 @@ def build() -> tuple[Runtime, BoundedDomainEffectExecutionService]:
             credential=CredentialRef("odoo:hris-writer", settings.odoo_writer_secret_env),
             request_ref_field=settings.odoo_request_ref_field,
             timeout_seconds=settings.connector_timeout_seconds,
+            allow_insecure_http=settings.oidc_allow_insecure_http,
         )
     )
     odoo_verifier_connector = OdooEmployeeEffectConnector(
@@ -298,6 +301,7 @@ def build() -> tuple[Runtime, BoundedDomainEffectExecutionService]:
             credential=CredentialRef("odoo:hris-verifier", settings.odoo_verifier_secret_env),
             request_ref_field=settings.odoo_request_ref_field,
             timeout_seconds=settings.connector_timeout_seconds,
+            allow_insecure_http=settings.oidc_allow_insecure_http,
         )
     )
     keycloak_writer = KeycloakIdentityEffectConnector(
@@ -308,6 +312,7 @@ def build() -> tuple[Runtime, BoundedDomainEffectExecutionService]:
             credential=CredentialRef("keycloak:iam-writer", settings.keycloak_writer_secret_env),
             request_ref_attribute=settings.keycloak_request_ref_attribute,
             timeout_seconds=settings.connector_timeout_seconds,
+            allow_insecure_http=settings.oidc_allow_insecure_http,
         )
     )
     keycloak_verifier_connector = KeycloakIdentityEffectConnector(
@@ -318,6 +323,7 @@ def build() -> tuple[Runtime, BoundedDomainEffectExecutionService]:
             credential=CredentialRef("keycloak:iam-verifier", settings.keycloak_verifier_secret_env),
             request_ref_attribute=settings.keycloak_request_ref_attribute,
             timeout_seconds=settings.connector_timeout_seconds,
+            allow_insecure_http=settings.oidc_allow_insecure_http,
         )
     )
 

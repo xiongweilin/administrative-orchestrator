@@ -4,7 +4,7 @@ param(
     [ValidateSet('store', 'materialize', 'store-and-materialize')]
     [string]$Command = 'materialize',
 
-    [string]$OutputPath = 'D:\infrastructure\compose\administrative-m6-staging\.env.m6-secrets',
+    [string]$OutputPath = 'D:\infrastructure\compose\administrative-orchestrator\deploy\m6-staging\.env.m6-secrets',
 
     [switch]$Force
 )
