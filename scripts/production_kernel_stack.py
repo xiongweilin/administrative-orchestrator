@@ -24,9 +24,6 @@ from portable_runtime.public_contracts.domain_effect import (
     BoundedDomainEffectExecutionService,
 )
 from portable_runtime.records.open_validation import ClosedVerificationResult
-from portable_runtime.responsibility.domain_effect_authorization import (
-    ADMINISTRATIVE_HRIS_EMPLOYEE_CREATE,
-)
 from portable_runtime.responsibility.domain_effect_verified_outcome import (
     domain_effect_verification_capability,
 )
@@ -36,18 +33,31 @@ from portable_runtime.stores.bounded_domain_effect_recovery import (
 
 from administrative_orchestrator.config import get_settings
 from administrative_orchestrator.integrations.credentials import CredentialRef
+from administrative_orchestrator.integrations.kernel.capabilities import (
+    ADMINISTRATIVE_HRIS_EMPLOYEE_CREATE,
+    ADMINISTRATIVE_HRIS_EMPLOYEE_DEACTIVATE,
+    ADMINISTRATIVE_IAM_IDENTITY_CREATE,
+    ADMINISTRATIVE_IAM_IDENTITY_DISABLE,
+    ADMINISTRATIVE_IAM_SESSIONS_REVOKE,
+)
 from administrative_orchestrator.integrations.production_effects import (
     ConnectorResult,
     ConnectorStatus,
     KeycloakEffectConnection,
+    KeycloakIdentityDisableConnector,
+    KeycloakIdentityDisableVerifier,
     KeycloakIdentityEffectConnector,
     KeycloakIdentityVerifier,
+    KeycloakSessionRevokeConnector,
+    KeycloakSessionVerifier,
     OdooEffectConnection,
+    OdooEmployeeDeactivateConnector,
+    OdooEmployeeDeactivateVerifier,
     OdooEmployeeEffectConnector,
     OdooEmployeeVerifier,
 )
 
-IAM_CAPABILITY = "administrative.iam.identity.create.v1"
+IAM_CAPABILITY = ADMINISTRATIVE_IAM_IDENTITY_CREATE
 
 
 class ProductionEffectProvider:
@@ -62,6 +72,7 @@ class ProductionEffectProvider:
         credential_configuration_ref: str,
         network_domain: str,
         connector,
+        reversibility: str = "compensatable",
     ) -> None:
         self.connector = connector
         self._descriptor = ProviderDescriptor(
@@ -71,7 +82,7 @@ class ProductionEffectProvider:
             capabilities=[capability],
             effect_semantics="reconcilable",
             side_effect_class="reconcilable",
-            reversibility="compensatable",
+            reversibility=reversibility,
             provider_family=family,
             operator="administrative-production",
             execution_domain=execution_domain,
@@ -237,12 +248,14 @@ def _capability_result(
     )
 
 
-def _iam_contract() -> CapabilityContract:
+def _remote_contract(
+    capability: str, *, reversibility: str = "compensatable"
+) -> CapabilityContract:
     return CapabilityContract(
-        capability=IAM_CAPABILITY,
+        capability=capability,
         minimum_impact_class="write-remote",
         effect_semantics="reconcilable",
-        reversibility="compensatable",
+        reversibility=reversibility,
         authorization_requirement="required",
         minimum_procedure_profile="standard",
         resource_required=True,
@@ -277,7 +290,23 @@ def build() -> tuple[Runtime, BoundedDomainEffectExecutionService]:
     runtime = Runtime(
         store=store,
         registry=registry,
-        contract_registry=CapabilityContractRegistry(contracts=[_iam_contract()]),
+        contract_registry=CapabilityContractRegistry(
+            contracts=[
+                _remote_contract(IAM_CAPABILITY),
+                _remote_contract(
+                    ADMINISTRATIVE_HRIS_EMPLOYEE_DEACTIVATE,
+                    reversibility="irreversible",
+                ),
+                _remote_contract(
+                    ADMINISTRATIVE_IAM_IDENTITY_DISABLE,
+                    reversibility="irreversible",
+                ),
+                _remote_contract(
+                    ADMINISTRATIVE_IAM_SESSIONS_REVOKE,
+                    reversibility="irreversible",
+                ),
+            ]
+        ),
         reliability=ReliabilityControls(cooldown_seconds=0),
         runtime_id="runtime:administrative-production",
     )
@@ -289,6 +318,7 @@ def build() -> tuple[Runtime, BoundedDomainEffectExecutionService]:
             username=settings.odoo_writer_username,
             credential=CredentialRef("odoo:hris-writer", settings.odoo_writer_secret_env),
             request_ref_field=settings.odoo_request_ref_field,
+            deactivate_request_ref_field=settings.odoo_deactivate_request_ref_field,
             timeout_seconds=settings.connector_timeout_seconds,
             allow_insecure_http=settings.oidc_allow_insecure_http,
         )
@@ -300,6 +330,7 @@ def build() -> tuple[Runtime, BoundedDomainEffectExecutionService]:
             username=settings.odoo_verifier_username,
             credential=CredentialRef("odoo:hris-verifier", settings.odoo_verifier_secret_env),
             request_ref_field=settings.odoo_request_ref_field,
+            deactivate_request_ref_field=settings.odoo_deactivate_request_ref_field,
             timeout_seconds=settings.connector_timeout_seconds,
             allow_insecure_http=settings.oidc_allow_insecure_http,
         )
@@ -311,6 +342,10 @@ def build() -> tuple[Runtime, BoundedDomainEffectExecutionService]:
             client_id=settings.keycloak_writer_client_id,
             credential=CredentialRef("keycloak:iam-writer", settings.keycloak_writer_secret_env),
             request_ref_attribute=settings.keycloak_request_ref_attribute,
+            disable_request_ref_attribute=settings.keycloak_disable_request_ref_attribute,
+            session_revoke_request_ref_attribute=(
+                settings.keycloak_session_revoke_request_ref_attribute
+            ),
             timeout_seconds=settings.connector_timeout_seconds,
             allow_insecure_http=settings.oidc_allow_insecure_http,
         )
@@ -322,6 +357,10 @@ def build() -> tuple[Runtime, BoundedDomainEffectExecutionService]:
             client_id=settings.keycloak_verifier_client_id,
             credential=CredentialRef("keycloak:iam-verifier", settings.keycloak_verifier_secret_env),
             request_ref_attribute=settings.keycloak_request_ref_attribute,
+            disable_request_ref_attribute=settings.keycloak_disable_request_ref_attribute,
+            session_revoke_request_ref_attribute=(
+                settings.keycloak_session_revoke_request_ref_attribute
+            ),
             timeout_seconds=settings.connector_timeout_seconds,
             allow_insecure_http=settings.oidc_allow_insecure_http,
         )
@@ -365,12 +404,80 @@ def build() -> tuple[Runtime, BoundedDomainEffectExecutionService]:
         network_domain=_host(settings.keycloak_base_url),
         verifier=KeycloakIdentityVerifier(keycloak_verifier_connector),
     )
+    hris_deactivate_provider = ProductionEffectProvider(
+        provider_id="provider:administrative-production:odoo-deactivate-writer",
+        name="Administrative Odoo employee deactivate writer",
+        capability=ADMINISTRATIVE_HRIS_EMPLOYEE_DEACTIVATE,
+        family="odoo",
+        execution_domain="odoo:hris",
+        credential_configuration_ref="odoo:hris-writer",
+        network_domain=_host(settings.odoo_base_url),
+        connector=OdooEmployeeDeactivateConnector(odoo_writer),
+        reversibility="irreversible",
+    )
+    hris_deactivate_verifier = ProductionReadbackVerifier(
+        provider_id="provider:administrative-production:odoo-deactivate-verifier",
+        name="Administrative Odoo employee deactivate verifier",
+        effect_capability=ADMINISTRATIVE_HRIS_EMPLOYEE_DEACTIVATE,
+        family="odoo-readback",
+        credential_configuration_ref="odoo:hris-verifier",
+        network_domain=_host(settings.odoo_base_url),
+        verifier=OdooEmployeeDeactivateVerifier(
+            OdooEmployeeDeactivateConnector(odoo_verifier_connector)
+        ),
+    )
+    iam_disable_provider = ProductionEffectProvider(
+        provider_id="provider:administrative-production:keycloak-disable-writer",
+        name="Administrative Keycloak identity disable writer",
+        capability=ADMINISTRATIVE_IAM_IDENTITY_DISABLE,
+        family="keycloak",
+        execution_domain="keycloak:iam",
+        credential_configuration_ref="keycloak:iam-writer",
+        network_domain=_host(settings.keycloak_base_url),
+        connector=KeycloakIdentityDisableConnector(keycloak_writer),
+        reversibility="irreversible",
+    )
+    iam_disable_verifier = ProductionReadbackVerifier(
+        provider_id="provider:administrative-production:keycloak-disable-verifier",
+        name="Administrative Keycloak identity disable verifier",
+        effect_capability=ADMINISTRATIVE_IAM_IDENTITY_DISABLE,
+        family="keycloak-readback",
+        credential_configuration_ref="keycloak:iam-verifier",
+        network_domain=_host(settings.keycloak_base_url),
+        verifier=KeycloakIdentityDisableVerifier(keycloak_verifier_connector),
+    )
+    session_revoke_provider = ProductionEffectProvider(
+        provider_id="provider:administrative-production:keycloak-session-revoke-writer",
+        name="Administrative Keycloak session revoke writer",
+        capability=ADMINISTRATIVE_IAM_SESSIONS_REVOKE,
+        family="keycloak",
+        execution_domain="keycloak:iam",
+        credential_configuration_ref="keycloak:iam-writer",
+        network_domain=_host(settings.keycloak_base_url),
+        connector=KeycloakSessionRevokeConnector(keycloak_writer),
+        reversibility="irreversible",
+    )
+    session_revoke_verifier = ProductionReadbackVerifier(
+        provider_id="provider:administrative-production:keycloak-session-revoke-verifier",
+        name="Administrative Keycloak session revoke verifier",
+        effect_capability=ADMINISTRATIVE_IAM_SESSIONS_REVOKE,
+        family="keycloak-readback",
+        credential_configuration_ref="keycloak:iam-verifier",
+        network_domain=_host(settings.keycloak_base_url),
+        verifier=KeycloakSessionVerifier(keycloak_verifier_connector),
+    )
 
     registrations = (
         (hris_provider, "odoo-writer", _repeat_safe()),
         (hris_verifier, "odoo-verifier", None),
         (iam_provider, "keycloak-writer", _repeat_safe()),
         (iam_verifier, "keycloak-verifier", None),
+        (hris_deactivate_provider, "odoo-deactivate-writer", _repeat_safe()),
+        (hris_deactivate_verifier, "odoo-deactivate-verifier", None),
+        (iam_disable_provider, "keycloak-disable-writer", _repeat_safe()),
+        (iam_disable_verifier, "keycloak-disable-verifier", None),
+        (session_revoke_provider, "keycloak-session-revoke-writer", _repeat_safe()),
+        (session_revoke_verifier, "keycloak-session-revoke-verifier", None),
     )
     for provider, configured_name, repeatability in registrations:
         registry.register(
@@ -393,6 +500,39 @@ def build() -> tuple[Runtime, BoundedDomainEffectExecutionService]:
                 id="semantic:administrative-production:odoo-employee-create",
                 version="1",
                 provider_id=hris_provider.descriptor.id,
+            ),
+            lease_owner="kernel:administrative-production",
+        ),
+        BoundedDomainEffectExecutionProfile(
+            capability=ADMINISTRATIVE_HRIS_EMPLOYEE_DEACTIVATE,
+            provider_id=hris_deactivate_provider.descriptor.id,
+            verifier_provider_id=hris_deactivate_verifier.descriptor.id,
+            semantic_contract=ProviderSemanticContract(
+                id="semantic:administrative-production:odoo-employee-deactivate",
+                version="1",
+                provider_id=hris_deactivate_provider.descriptor.id,
+            ),
+            lease_owner="kernel:administrative-production",
+        ),
+        BoundedDomainEffectExecutionProfile(
+            capability=ADMINISTRATIVE_IAM_IDENTITY_DISABLE,
+            provider_id=iam_disable_provider.descriptor.id,
+            verifier_provider_id=iam_disable_verifier.descriptor.id,
+            semantic_contract=ProviderSemanticContract(
+                id="semantic:administrative-production:keycloak-identity-disable",
+                version="1",
+                provider_id=iam_disable_provider.descriptor.id,
+            ),
+            lease_owner="kernel:administrative-production",
+        ),
+        BoundedDomainEffectExecutionProfile(
+            capability=ADMINISTRATIVE_IAM_SESSIONS_REVOKE,
+            provider_id=session_revoke_provider.descriptor.id,
+            verifier_provider_id=session_revoke_verifier.descriptor.id,
+            semantic_contract=ProviderSemanticContract(
+                id="semantic:administrative-production:keycloak-sessions-revoke",
+                version="1",
+                provider_id=session_revoke_provider.descriptor.id,
             ),
             lease_owner="kernel:administrative-production",
         ),

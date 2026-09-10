@@ -111,6 +111,9 @@ class Settings(BaseSettings):
     odoo_verifier_username: str = ""
     odoo_verifier_secret_env: str = "ADMIN_ODOO_VERIFIER_SECRET"
     odoo_request_ref_field: str = "x_administrative_request_ref"
+    odoo_deactivate_request_ref_field: str = (
+        "x_administrative_deactivate_request_ref"
+    )
     odoo_termination_status_field: str = "x_administrative_termination_status"
     odoo_termination_effective_at_field: str = (
         "x_administrative_termination_effective_at"
@@ -126,6 +129,12 @@ class Settings(BaseSettings):
     keycloak_verifier_client_id: str = ""
     keycloak_verifier_secret_env: str = "ADMIN_KEYCLOAK_VERIFIER_SECRET"
     keycloak_request_ref_attribute: str = "administrative_request_ref"
+    keycloak_disable_request_ref_attribute: str = (
+        "administrative_disable_request_ref"
+    )
+    keycloak_session_revoke_request_ref_attribute: str = (
+        "administrative_session_revoke_request_ref"
+    )
 
     connector_timeout_seconds: float = 10.0
     authoritative_fact_max_age_seconds: int = 300
