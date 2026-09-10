@@ -195,6 +195,10 @@ The recorded real-staging acceptance for this boundary is
 `docs/acceptance/M6-staging-acceptance.md` (Gate A–P, attachment, and artifact
 restore evidence).
 
+Employee-lifecycle staging (offboarding) uses its own isolated topology and
+records evidence in `docs/acceptance/M7-staging-acceptance.md` from the template
+`docs/acceptance/M7-staging-acceptance-template.md`.
+
 - the configured Feishu official SDK long connection is active and the
   metadata-only gateway handoff is authenticated against the actual staging
   provider, including a negative token case;

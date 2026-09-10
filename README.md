@@ -97,7 +97,7 @@ Planned vertical slices:
 
 The first executable slice is **employee onboarding** because it forces multi-actor coordination, long-lived state, identity, policy, approvals, multiple external systems, semantic verification, and bounded completion.
 
-# Current state: M6 accepted — next milestone M7 not started
+# Current state: M6 accepted; M7 in progress
 
 M0–M4 established the semantic foundation, durable governed execution, organizational authority/policy, administrative correctness, and Agent Kernel convergence/cut-over invariants. M5 makes that reference architecture production-shaped without collapsing those ownership boundaries. M6 added trusted perception and admission and is accepted for the recorded staging scope (`docs/acceptance/M6-staging-acceptance.md`); M7 has not started.
 
@@ -158,10 +158,13 @@ See:
 - `docs/adr/0002-repository-and-deployment-boundaries.md` for why service/process separation does not currently imply more repositories;
 - `docs/milestones/M5.md` for milestone acceptance evidence, staging checklist, and SLO targets;
 - `docs/milestones/M6.md` for the Trusted Perception & Admission delivery plan and gates;
+- `docs/milestones/M7.md` for the Employee Lifecycle Responsibility plan and gates;
 - `docs/adr/0003-trusted-perception-and-admission.md` for the intake, candidate, and admission boundary;
+- `docs/adr/0004-employee-lifecycle-responsibility.md` for the offboarding lifecycle, effective-time, transfer, and responsibility-discharge boundary;
 - `docs/production-operations.md` for deployment, observability, backup/restore, incident, and staging procedures.
 - `docs/acceptance/M6-staging-acceptance.md` for the recorded real-staging evidence.
 - `docs/acceptance/M6-staging-acceptance-template.md` for the no-secrets/no-body template.
+- `docs/acceptance/M7-staging-acceptance-template.md` for the employee-lifecycle staging evidence record.
 
 ## Development principles
 
