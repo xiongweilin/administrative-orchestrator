@@ -20,6 +20,7 @@ from administrative_orchestrator.intake.interpretation import (
     ModelTimeoutError,
 )
 from administrative_orchestrator.intake.models import SourceArtifact
+from administrative_orchestrator.onboarding_admission import CandidateOnboardingAdmissionService
 from administrative_orchestrator.persistence import SqlStore
 from administrative_orchestrator.providers.feishu_runtime import (
     HttpJsonModelGateway,
@@ -632,3 +633,13 @@ def test_feishu_secret_file_reader_fails_closed(tmp_path: Path, monkeypatch: pyt
     monkeypatch.setattr(Path, "read_text", lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("denied")))
     with pytest.raises(RuntimeError, match="unavailable"):
         _read_secret_file(str(readable))
+
+
+def test_default_intake_instruction_names_every_onboarding_fact_key() -> None:
+    instruction = Settings().intake_model_instruction
+    missing = sorted(
+        key
+        for key in CandidateOnboardingAdmissionService._FACT_KEYS
+        if key not in instruction
+    )
+    assert missing == []
