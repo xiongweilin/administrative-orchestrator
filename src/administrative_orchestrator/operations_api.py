@@ -38,8 +38,12 @@ from .intake.models import (
 )
 from .intake.repository import AssessmentConflict, IntakeRepository
 from .obligations import ObligationRepository
+from .onboarding_admission import (
+    CandidateOnboardingAdmissionService,
+    OnboardingAdmissionError,
+)
 from .persistence import CaseRow, ConcurrencyConflict, SqlStore
-from .policy import OnboardingFacts
+from .policy import OnboardingFacts, PolicyEvaluation
 from .policy_plane import PolicyPlaneError, PolicyRepository, compile_onboarding_policy
 from .service import TransitionError, apply_policy_evaluation, start_policy_evaluation
 from .unit_of_work import AdministrativeUnitOfWork
@@ -127,6 +131,7 @@ class IntakePromotionBody(BaseModel):
     channel: str = Field(default="intake", min_length=1, max_length=64)
     case_kind: str = Field(default="intake", min_length=1, max_length=128)
     subject_ref: str | None = Field(default=None, max_length=512)
+    bridge_to_m5: bool = False
     promotion_policy_ref: str = Field(
         default="m6-human-confirmed-v1", min_length=1, max_length=512
     )
@@ -137,6 +142,7 @@ class IntakePromotionResponse(BaseModel):
     request: AdministrativeRequest
     case: AdministrativeCase
     created: bool
+    policy_evaluation: PolicyEvaluation | None = None
 
 
 def _actor(request: Request) -> AuthenticatedPrincipal:
@@ -335,25 +341,58 @@ def promote_intake_candidate(
     if assessment is None or assessment.candidate_ref != candidate_id:
         raise HTTPException(status_code=404, detail="intake assessment not found")
     try:
-        result = _intake_promotions.promote(
-            candidate,
-            assessment,
-            source_system=payload.source_system,
-            tenant_ref=payload.tenant_ref,
-            source_event_id=payload.source_event_id,
-            requester_principal_id=payload.requester_principal_id,
-            channel=payload.channel,
-            case_kind=payload.case_kind,
-            subject_ref=payload.subject_ref,
-            promotion_policy_ref=payload.promotion_policy_ref,
-        )
-    except (AdmissionConflict, AdmissionRejected, ValueError) as exc:
+        if payload.bridge_to_m5:
+            if payload.case_kind != "employee-onboarding":
+                raise OnboardingAdmissionError(
+                    "bridge_to_m5 requires case_kind=employee-onboarding"
+                )
+            if payload.subject_ref is None:
+                raise OnboardingAdmissionError(
+                    "employee-onboarding promotion requires subject_ref"
+                )
+            onboarding = CandidateOnboardingAdmissionService(
+                _store,
+                _intake,
+                _intake_promotions,
+                policies=_policies,
+                uow=_uow,
+            ).promote_and_evaluate(
+                candidate,
+                assessment,
+                source_system=payload.source_system,
+                tenant_ref=payload.tenant_ref,
+                source_event_id=payload.source_event_id,
+                requester_principal_id=payload.requester_principal_id,
+                subject_ref=payload.subject_ref,
+                channel=payload.channel,
+                promotion_policy_ref=payload.promotion_policy_ref,
+            )
+            result = onboarding.promotion
+            promoted_case = onboarding.case
+            policy_evaluation = onboarding.policy_evaluation
+        else:
+            result = _intake_promotions.promote(
+                candidate,
+                assessment,
+                source_system=payload.source_system,
+                tenant_ref=payload.tenant_ref,
+                source_event_id=payload.source_event_id,
+                requester_principal_id=payload.requester_principal_id,
+                channel=payload.channel,
+                case_kind=payload.case_kind,
+                subject_ref=payload.subject_ref,
+                promotion_policy_ref=payload.promotion_policy_ref,
+            )
+            promoted_case = result.case
+            policy_evaluation = None
+    except (AdmissionConflict, AdmissionRejected, OnboardingAdmissionError, ValueError) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return IntakePromotionResponse(
         promotion=result.promotion,
         request=result.request,
-        case=result.case,
+        case=promoted_case,
         created=result.created,
+        policy_evaluation=policy_evaluation,
     )
 
 

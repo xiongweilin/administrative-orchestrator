@@ -10,8 +10,11 @@ from administrative_orchestrator.admission import (
     IntakeAssessmentService,
     IntakePromotionService,
 )
+from administrative_orchestrator.domain import CaseStatus, FactAuthority
 from administrative_orchestrator.intake.models import (
     CandidateAdministrativeRequest,
+    CandidateAuthority,
+    CandidateFactAssertion,
     CandidateStatus,
     IntakeAssessment,
     IntakeDisposition,
@@ -20,10 +23,16 @@ from administrative_orchestrator.intake.models import (
 )
 from administrative_orchestrator.intake.repository import (
     AssessmentConflict,
+    CandidateAdministrativeRequestRow,
     IntakeRepository,
     PromotionRecordRow,
 )
+from administrative_orchestrator.onboarding_admission import CandidateOnboardingAdmissionService
 from administrative_orchestrator.persistence import CaseRow, RequestRow, SqlStore
+from administrative_orchestrator.policy_plane import (
+    PolicyRepository,
+    default_onboarding_policy_version,
+)
 
 
 def _setup(
@@ -337,3 +346,72 @@ def test_promotion_requires_verified_receipt_and_matching_artifact() -> None:
             source_event_id="event:1",
             requester_principal_id="principal:requester",
         )
+
+
+def test_human_admission_enters_existing_onboarding_facts_and_policy_path() -> None:
+    store, repository, candidate = _setup()
+    PolicyRepository(store).put_version(default_onboarding_policy_version())
+    fact_refs = []
+    for fact_key, value in (
+        ("department_ref", "department:engineering"),
+        ("manager_principal_id", "person:manager"),
+        ("start_date", "2026-10-01"),
+        ("employment_type", "full_time"),
+        ("requested_systems", ["google-workspace"]),
+        ("requires_privileged_access", False),
+    ):
+        fact = repository.append_candidate_fact(
+            CandidateFactAssertion(
+                fact_key=fact_key,
+                value=value,
+                authority=CandidateAuthority.CLAIM,
+                source_refs=candidate.source_refs,
+                no_evidence_reason="test source has no span for this contract fixture",
+            )
+        )
+        fact_refs.append(fact.candidate_fact_id)
+    candidate = candidate.model_copy(
+        update={
+            "candidate_fact_refs": tuple(fact_refs)
+        }
+    )
+    with store.sessions.begin() as db:
+        row = db.get(CandidateAdministrativeRequestRow, candidate.candidate_id)
+        assert row is not None
+        row.candidate_fact_refs_json = [str(ref) for ref in candidate.candidate_fact_refs]
+
+    assessment = _final_admit(repository, candidate)
+    first = CandidateOnboardingAdmissionService(store, repository).promote_and_evaluate(
+        candidate,
+        assessment,
+        source_system="test-provider",
+        tenant_ref="tenant:test",
+        source_event_id="event:1",
+        requester_principal_id="principal:requester",
+        subject_ref="employee:1",
+    )
+
+    assert first.created is True
+    assert first.case.case_kind == "employee-onboarding"
+    assert first.case.status is CaseStatus.AWAITING_DECISION
+    assert first.policy_evaluation.required_decision_roles == ("hr_approver",)
+    assert first.case.fact_snapshot is not None
+    assert first.case.fact_snapshot.authority is FactAuthority.CLAIM
+    assert first.case.fact_snapshot.facts["employee_ref"] == "employee:1"
+    assert all(
+        assertion.authority is FactAuthority.CLAIM
+        for assertion in first.case.fact_snapshot.assertions.values()
+    )
+
+    replay = CandidateOnboardingAdmissionService(store, repository).promote_and_evaluate(
+        candidate,
+        assessment,
+        source_system="test-provider",
+        tenant_ref="tenant:test",
+        source_event_id="event:1",
+        requester_principal_id="principal:requester",
+        subject_ref="employee:1",
+    )
+    assert replay.created is False
+    assert replay.case.case_id == first.case.case_id
+    assert replay.policy_evaluation.policy_ref == first.policy_evaluation.policy_ref
