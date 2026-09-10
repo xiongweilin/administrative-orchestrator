@@ -17,6 +17,7 @@ class AdministrativePermission(StrEnum):
     POLICY_MANAGE = "policy.manage"
     AUDIT_READ = "audit.read"
     OPERATIONS_READ = "operations.read"
+    INTAKE_REVIEW = "intake.review"
     IDENTITY_MANAGE = "identity.manage"
     DEAD_LETTER_READ = "dead_letter.read"
     DEAD_LETTER_REPLAY = "dead_letter.replay"
@@ -55,6 +56,7 @@ _OPERATIONS_READ_ROLES = {
     "platform_operator",
     "administrative_admin",
 }
+_INTAKE_REVIEW_ROLES = {"administrative_operator", "administrative_admin"}
 _IDENTITY_MANAGE_ROLES = {"administrative_admin"}
 _PLATFORM_OPS_ROLES = {"platform_operator", "administrative_admin"}
 
@@ -122,6 +124,8 @@ class AdministrativeAccessPolicy:
             return bool(roles.intersection(_AUDIT_READ_ROLES))
         if permission == AdministrativePermission.OPERATIONS_READ:
             return bool(roles.intersection(_OPERATIONS_READ_ROLES))
+        if permission == AdministrativePermission.INTAKE_REVIEW:
+            return bool(roles.intersection(_INTAKE_REVIEW_ROLES))
         if permission == AdministrativePermission.IDENTITY_MANAGE:
             return bool(roles.intersection(_IDENTITY_MANAGE_ROLES))
         if permission in {
