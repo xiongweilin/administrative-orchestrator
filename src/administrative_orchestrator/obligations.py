@@ -1,19 +1,33 @@
 from __future__ import annotations
 
+from datetime import datetime
+from enum import StrEnum
 from typing import Any
 from uuid import NAMESPACE_URL, UUID, uuid5
 
 from pydantic import Field
-from sqlalchemy import JSON, Boolean, ForeignKey, Integer, String, Uuid, select
+from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Integer, String, Uuid, select
 from sqlalchemy.orm import Mapped, Session, mapped_column
 
-from .domain import AdministrativeCase, AuthorityClass, EffectRecord, UtcModel
+from .domain import AdministrativeCase, AuthorityClass, EffectRecord, UtcModel, utcnow
 from .persistence import Base, SqlStore
 from .policy import PolicyEvaluation
 
 
 class ObligationError(RuntimeError):
     pass
+
+
+class ObligationFulfillmentKind(StrEnum):
+    """How one required obligation can be proven complete.
+
+    External reality is proven by a Kernel-owned effect plus independent
+    verification; Administrative domain state is proven inside the
+    Administrative model. The two are never simulated as each other.
+    """
+
+    EXTERNAL_EFFECT_VERIFIED = "external_effect_verified"
+    DOMAIN_STATE_VERIFIED = "domain_state_verified"
 
 
 class AdministrativeObligation(UtcModel):
@@ -28,9 +42,10 @@ class AdministrativeObligation(UtcModel):
     expected_postcondition: dict[str, Any] = Field(default_factory=dict)
     authority_class: AuthorityClass
     required: bool = True
+    fulfillment_kind: ObligationFulfillmentKind = ObligationFulfillmentKind.EXTERNAL_EFFECT_VERIFIED
 
 
-class OnboardingObligationSet(UtcModel):
+class AdministrativeObligationSet(UtcModel):
     requirement_id: UUID
     case_id: UUID
     authority_epoch: int
@@ -38,10 +53,37 @@ class OnboardingObligationSet(UtcModel):
     obligations: tuple[AdministrativeObligation, ...]
 
 
+# Compatibility alias kept for M5/M6 callers and stored API shapes.
+OnboardingObligationSet = AdministrativeObligationSet
+
+
 class EffectObligationLink(UtcModel):
     effect_id: UUID
     obligation_id: UUID
     governance_basis_id: UUID
+
+
+class ObligationDomainStateFulfillment(UtcModel):
+    """Verified Administrative domain state that fulfils one obligation.
+
+    Used only for DOMAIN_STATE_VERIFIED obligations. It is deliberately not
+    an EffectRecord/ConfirmedOutcome pair: internal Administrative state
+    changes must not be dressed up as remote provider effects.
+    """
+
+    fulfillment_id: UUID
+    obligation_id: UUID
+    case_id: UUID
+    authority_epoch: int
+    governance_basis_id: UUID
+    fulfillment_kind: ObligationFulfillmentKind = (
+        ObligationFulfillmentKind.DOMAIN_STATE_VERIFIED
+    )
+    verified_by: str
+    reason: str
+    observed_state_digest: str
+    evidence_ref: str | None = None
+    observed_at: datetime = Field(default_factory=utcnow)
 
 
 class ObligationSetRow(Base):
@@ -74,6 +116,12 @@ class ObligationRow(Base):
     expected_postcondition_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
     authority_class: Mapped[str] = mapped_column(String(64), nullable=False)
     required: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    fulfillment_kind: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+        default=ObligationFulfillmentKind.EXTERNAL_EFFECT_VERIFIED.value,
+        server_default=ObligationFulfillmentKind.EXTERNAL_EFFECT_VERIFIED.value,
+    )
 
 
 class EffectObligationLinkRow(Base):
@@ -86,6 +134,28 @@ class EffectObligationLinkRow(Base):
         ForeignKey("administrative_obligation.obligation_id"), nullable=False, unique=True
     )
     governance_basis_id: Mapped[UUID] = mapped_column(Uuid, nullable=False)
+
+
+class ObligationDomainStateFulfillmentRow(Base):
+    __tablename__ = "administrative_obligation_fulfillment"
+
+    fulfillment_id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
+    obligation_id: Mapped[UUID] = mapped_column(
+        ForeignKey("administrative_obligation.obligation_id"),
+        nullable=False,
+        unique=True,
+    )
+    case_id: Mapped[UUID] = mapped_column(
+        ForeignKey("administrative_case.case_id"), nullable=False
+    )
+    authority_epoch: Mapped[int] = mapped_column(Integer, nullable=False)
+    governance_basis_id: Mapped[UUID] = mapped_column(Uuid, nullable=False)
+    fulfillment_kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    verified_by: Mapped[str] = mapped_column(String(255), nullable=False)
+    reason: Mapped[str] = mapped_column(String(2000), nullable=False)
+    observed_state_digest: Mapped[str] = mapped_column(String(128), nullable=False)
+    evidence_ref: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
 class ObligationRepository:
@@ -135,6 +205,7 @@ class ObligationRepository:
                     expected_postcondition_json=dict(item.expected_postcondition),
                     authority_class=item.authority_class.value,
                     required=item.required,
+                    fulfillment_kind=item.fulfillment_kind.value,
                 )
             )
         return obligation_set
@@ -253,9 +324,127 @@ class ObligationRepository:
                     expected_postcondition=dict(item.expected_postcondition_json),
                     authority_class=AuthorityClass(item.authority_class),
                     required=item.required,
+                    fulfillment_kind=ObligationFulfillmentKind(
+                        item.fulfillment_kind
+                        or ObligationFulfillmentKind.EXTERNAL_EFFECT_VERIFIED.value
+                    ),
                 )
                 for item in obligation_rows
             ),
+        )
+
+    def record_domain_state_fulfillment(
+        self, fulfillment: ObligationDomainStateFulfillment
+    ) -> ObligationDomainStateFulfillment:
+        with self.store.sessions.begin() as db:
+            obligation_row = db.get(ObligationRow, fulfillment.obligation_id)
+            if obligation_row is None:
+                raise ObligationError("domain-state fulfillment requires a persisted obligation")
+            if obligation_row.case_id != fulfillment.case_id:
+                raise ObligationError("fulfillment and obligation belong to different cases")
+            if obligation_row.authority_epoch != fulfillment.authority_epoch:
+                raise ObligationError(
+                    "fulfillment and obligation belong to different authority epochs"
+                )
+            if (
+                obligation_row.fulfillment_kind
+                != ObligationFulfillmentKind.DOMAIN_STATE_VERIFIED.value
+            ):
+                raise ObligationError(
+                    "only domain-state obligations accept a domain-state fulfillment"
+                )
+            existing = db.get(
+                ObligationDomainStateFulfillmentRow, fulfillment.fulfillment_id
+            )
+            if existing is not None:
+                restored = self._fulfillment_from_row(existing)
+                if _fulfillment_semantics(restored) != _fulfillment_semantics(fulfillment):
+                    raise ObligationError(
+                        "fulfillment identity was reused with different semantics"
+                    )
+                return restored
+            existing_for_obligation = (
+                db.execute(
+                    select(ObligationDomainStateFulfillmentRow).where(
+                        ObligationDomainStateFulfillmentRow.obligation_id
+                        == fulfillment.obligation_id
+                    )
+                )
+                .scalars()
+                .first()
+            )
+            if existing_for_obligation is not None:
+                raise ObligationError(
+                    "obligation already has a different domain-state fulfillment"
+                )
+            db.add(
+                ObligationDomainStateFulfillmentRow(
+                    fulfillment_id=fulfillment.fulfillment_id,
+                    obligation_id=fulfillment.obligation_id,
+                    case_id=fulfillment.case_id,
+                    authority_epoch=fulfillment.authority_epoch,
+                    governance_basis_id=fulfillment.governance_basis_id,
+                    fulfillment_kind=fulfillment.fulfillment_kind.value,
+                    verified_by=fulfillment.verified_by,
+                    reason=fulfillment.reason,
+                    observed_state_digest=fulfillment.observed_state_digest,
+                    evidence_ref=fulfillment.evidence_ref,
+                    observed_at=fulfillment.observed_at,
+                )
+            )
+            db.flush()
+        return fulfillment
+
+    def get_domain_state_fulfillment(
+        self, obligation_id: UUID
+    ) -> ObligationDomainStateFulfillment | None:
+        with self.store.sessions() as db:
+            row = (
+                db.execute(
+                    select(ObligationDomainStateFulfillmentRow).where(
+                        ObligationDomainStateFulfillmentRow.obligation_id == obligation_id
+                    )
+                )
+                .scalars()
+                .first()
+            )
+            return None if row is None else self._fulfillment_from_row(row)
+
+    def list_domain_state_fulfillments(
+        self, case_id: UUID, authority_epoch: int
+    ) -> list[ObligationDomainStateFulfillment]:
+        with self.store.sessions() as db:
+            rows = (
+                db.execute(
+                    select(ObligationDomainStateFulfillmentRow)
+                    .where(
+                        ObligationDomainStateFulfillmentRow.case_id == case_id,
+                        ObligationDomainStateFulfillmentRow.authority_epoch
+                        == authority_epoch,
+                    )
+                    .order_by(ObligationDomainStateFulfillmentRow.obligation_id)
+                )
+                .scalars()
+                .all()
+            )
+            return [self._fulfillment_from_row(row) for row in rows]
+
+    @staticmethod
+    def _fulfillment_from_row(
+        row: ObligationDomainStateFulfillmentRow,
+    ) -> ObligationDomainStateFulfillment:
+        return ObligationDomainStateFulfillment(
+            fulfillment_id=row.fulfillment_id,
+            obligation_id=row.obligation_id,
+            case_id=row.case_id,
+            authority_epoch=row.authority_epoch,
+            governance_basis_id=row.governance_basis_id,
+            fulfillment_kind=ObligationFulfillmentKind(row.fulfillment_kind),
+            verified_by=row.verified_by,
+            reason=row.reason,
+            observed_state_digest=row.observed_state_digest,
+            evidence_ref=row.evidence_ref,
+            observed_at=row.observed_at,
         )
 
     @staticmethod
@@ -342,14 +531,46 @@ def derive_onboarding_obligations(
     )
 
 
+def _fulfillment_semantics(
+    fulfillment: ObligationDomainStateFulfillment,
+) -> dict[str, Any]:
+    """Immutable fulfillment fields used for replay idempotency."""
+    return fulfillment.model_dump(mode="json", exclude={"created_at"})
+
+
+def derive_administrative_obligations(
+    case: AdministrativeCase,
+    evaluation: PolicyEvaluation,
+    *,
+    governance_basis_id: UUID,
+) -> AdministrativeObligationSet:
+    """Dispatch obligation derivation by case kind.
+
+    Only case kinds with a registered, evidence-backed derivation are accepted;
+    an unknown kind fails closed instead of inventing obligations.
+    """
+    if case.case_kind == "employee-onboarding":
+        return derive_onboarding_obligations(
+            case, evaluation, governance_basis_id=governance_basis_id
+        )
+    raise ObligationError(
+        f"no obligation derivation is registered for case kind {case.case_kind!r}"
+    )
+
+
 __all__ = [
     "AdministrativeObligation",
+    "AdministrativeObligationSet",
     "EffectObligationLink",
     "EffectObligationLinkRow",
     "ObligationError",
+    "ObligationDomainStateFulfillment",
+    "ObligationDomainStateFulfillmentRow",
+    "ObligationFulfillmentKind",
     "ObligationRepository",
     "ObligationRow",
     "ObligationSetRow",
     "OnboardingObligationSet",
+    "derive_administrative_obligations",
     "derive_onboarding_obligations",
 ]
