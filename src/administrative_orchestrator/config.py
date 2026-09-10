@@ -40,6 +40,11 @@ class Settings(BaseSettings):
     feishu_app_secret: SecretStr | None = None
     feishu_app_secret_file: str = ""
     feishu_verification_token: SecretStr | None = None
+    # Secret used only by the trusted gateway-to-Administrative metadata
+    # handoff. Feishu's official long connection does not provide the HTTP
+    # callback token on every event, so this transport credential is separate
+    # from the callback verification material.
+    feishu_ingress_shared_secret: SecretStr | None = None
     feishu_encrypt_key: SecretStr | None = None
     # Explicit test/manual override. Production/staging should use the app
     # credential pair above and the dynamic tenant-token provider.
@@ -47,7 +52,7 @@ class Settings(BaseSettings):
     feishu_artifact_root: str = "./data/intake-artifacts"
     intake_model_url: str = ""
     intake_model_api_key: SecretStr | None = None
-    intake_model_protocol: Literal["json", "openai-chat"] = "json"
+    intake_model_protocol: Literal["json", "openai-chat", "openai-responses"] = "json"
     intake_model_name: str = ""
     intake_model_max_tokens: int = 2400
     intake_model_provider: str = "configured-model-gateway"

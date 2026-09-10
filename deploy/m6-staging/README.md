@@ -52,6 +52,24 @@ task-scoped `.env.m6-secrets` file under this directory; it never prints the
 value. The gateway app ID and app secret are read in-process from the existing
 external `feishu_secrets` volume.
 
+The long-connection handoff also uses a separate internal transport secret.
+Materialize it with the companion helper; it stores a task-scoped Credential
+Manager entry, adds `ADMIN_FEISHU_INGRESS_SHARED_SECRET` to the task-scoped
+API environment file, and writes the corresponding `600`-mode file into the
+external `feishu_secrets` volume without displaying the value:
+
+```powershell
+pwsh -File ..\windows\Set-AdministrativeM6FeishuIngressSharedSecret.ps1 `
+  -Command generate-and-materialize -Force
+```
+
+The gateway reads that file as
+`/run/secrets/administrative_ingress_shared_secret` through
+`ADMINISTRATIVE_INGRESS_SHARED_SECRET_FILE`. It is deliberately separate from
+the Feishu callback verification token: the callback token remains required
+for direct HTTP callbacks, while the official long connection uses the
+gateway-to-Admin transport credential for the metadata-only handoff.
+
 ## Runtime checks
 
 ```powershell
@@ -64,8 +82,16 @@ Invoke-WebRequest http://127.0.0.1:18089/web/database/selector
 ```
 
 The model route is the already-running host LiteLLM process at
-`127.0.0.1:4102`. Do not stop or restart LiteLLM during this staging run. The
-container reaches it through `host.docker.internal:4102`.
+`127.0.0.1:4100`, using the OpenAI-compatible Responses protocol and the
+`opencode-go/deepseek-flash` route. Do not stop or restart LiteLLM during this
+staging run. The container reaches it through `host.docker.internal:4100`.
+
+The Operations Console OIDC client (`administrative-operations-console`) must
+carry the standard Keycloak `basic` client scope so access tokens include the
+OIDC `sub` claim. `infra/keycloak/m6-realm.json` declares that scope and adds
+it to the client's default scopes; a long-lived staging realm that predates the
+definition must be updated through the Keycloak Admin API, because
+`--import-realm` skips an existing realm.
 
 After the staging API is healthy, set the live gateway's local
 `ADMINISTRATIVE_INGRESS_BASE_URL` to `http://host.docker.internal:18086`, keep

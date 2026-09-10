@@ -24,6 +24,7 @@ from administrative_orchestrator.persistence import SqlStore
 from administrative_orchestrator.providers.feishu_runtime import (
     HttpJsonModelGateway,
     OpenAICompatibleChatModelGateway,
+    OpenAICompatibleResponsesModelGateway,
     _read_secret_file,
     build_feishu_runtime,
 )
@@ -146,6 +147,210 @@ def test_openai_chat_gateway_sends_candidate_only_contract_and_reads_assistant_j
     assert "Grant" not in json.dumps(sent)
     assert "Kernel" not in json.dumps(sent)
     assert "AUTHORITATIVE" not in json.dumps(sent)
+
+
+def test_openai_chat_gateway_normalizes_bounded_provider_candidate_aliases() -> None:
+    gateway, _ = _openai_gateway(
+        lambda _: httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": json.dumps(
+                                {
+                                    "intent": "onboard employee:1",
+                                    "facts": [{"key": "employee_ref", "value": "employee:1"}],
+                                }
+                            ),
+                        }
+                    }
+                ]
+            },
+        )
+    )
+    try:
+        response = gateway.complete(_request(), timeout_seconds=1)
+    finally:
+        gateway.close()
+
+    normalized = json.loads(response.raw_output)
+    assert normalized == {
+        "candidate_intent": "onboard employee:1",
+        "candidate_facts": [{"fact_key": "employee_ref", "value": "employee:1"}],
+    }
+
+
+def test_openai_responses_gateway_reads_message_output_text_and_normalizes_facts() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "output": [
+                    {"type": "reasoning", "summary": []},
+                    {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "output_text",
+                                "text": json.dumps(
+                                    {
+                                        "candidate_intent": "onboard employee:1",
+                                        "candidate_facts": ["employee_ref=employee:1"],
+                                    }
+                                ),
+                            }
+                        ],
+                    },
+                ]
+            },
+        )
+
+    gateway = OpenAICompatibleResponsesModelGateway(
+        "https://model.invalid/v1",
+        "opencode-go/deepseek-flash",
+        ModelProvenance(
+            provider="litellm",
+            model_identity="opencode-go/deepseek-flash",
+            model_version="v1",
+        ),
+        api_key="test-key",
+        max_tokens=6000,
+        transport=httpx.MockTransport(handler),
+    )
+    try:
+        response = gateway.complete(_request(), timeout_seconds=1)
+    finally:
+        gateway.close()
+
+    normalized = json.loads(response.raw_output)
+    assert normalized == {
+        "candidate_intent": "onboard employee:1",
+        "candidate_facts": [
+            {"fact_key": "model_fact_0", "value": "employee_ref=employee:1"}
+        ],
+    }
+    sent = json.loads(requests[0].content)
+    assert requests[0].url.path == "/v1/responses"
+    assert requests[0].headers["Authorization"] == "Bearer test-key"
+    assert sent["model"] == "opencode-go/deepseek-flash"
+    assert sent["reasoning"] == {"effort": "low"}
+    assert sent["text"] == {"format": {"type": "json_object"}}
+
+
+def test_openai_responses_gateway_normalizes_mapping_facts() -> None:
+    gateway = OpenAICompatibleResponsesModelGateway(
+        "https://model.invalid/v1",
+        "opencode-go/deepseek-flash",
+        ModelProvenance(
+            provider="litellm",
+            model_identity="opencode-go/deepseek-flash",
+            model_version="v1",
+        ),
+        transport=httpx.MockTransport(
+            lambda _: httpx.Response(
+                200,
+                json={
+                    "output": [
+                        {
+                            "type": "message",
+                            "role": "assistant",
+                            "content": [
+                                {
+                                    "type": "output_text",
+                                    "text": json.dumps(
+                                        {
+                                            "candidate_intent": "onboard employee:1",
+                                            "candidate_facts": {
+                                                "employee_ref": "employee:1",
+                                                "start_date": "2026-09-15",
+                                            },
+                                        }
+                                    ),
+                                }
+                            ],
+                        }
+                    ]
+                },
+            )
+        ),
+    )
+    try:
+        response = gateway.complete(_request(), timeout_seconds=1)
+    finally:
+        gateway.close()
+
+    assert json.loads(response.raw_output) == {
+        "candidate_intent": "onboard employee:1",
+        "candidate_facts": [
+            {"fact_key": "employee_ref", "value": "employee:1"},
+            {"fact_key": "start_date", "value": "2026-09-15"},
+        ],
+    }
+
+
+def test_openai_responses_gateway_normalizes_bounded_rdf_candidate_shape() -> None:
+    gateway = OpenAICompatibleResponsesModelGateway(
+        "https://model.invalid/v1",
+        "opencode-go/deepseek-flash",
+        ModelProvenance(
+            provider="litellm",
+            model_identity="opencode-go/deepseek-flash",
+            model_version="v1",
+        ),
+        transport=httpx.MockTransport(
+            lambda _: httpx.Response(
+                200,
+                json={
+                    "output": [
+                        {
+                            "type": "message",
+                            "role": "assistant",
+                            "content": [
+                                {
+                                    "type": "output_text",
+                                    "text": json.dumps(
+                                        {
+                                            "candidate_intent": {
+                                                "action": "onboard",
+                                                "subject": "employee:1",
+                                            },
+                                            "candidate_facts": [
+                                                {
+                                                    "subject": "employee:1",
+                                                    "predicate": "department_ref",
+                                                    "object": "department:1",
+                                                }
+                                            ],
+                                        }
+                                    ),
+                                }
+                            ],
+                        }
+                    ]
+                },
+            )
+        ),
+    )
+    try:
+        response = gateway.complete(_request(), timeout_seconds=1)
+    finally:
+        gateway.close()
+
+    assert json.loads(response.raw_output) == {
+        "candidate_intent": '{"action":"onboard","subject":"employee:1"}',
+        "candidate_facts": [
+            {
+                "fact_key": "department_ref",
+                "value": {"subject": "employee:1", "object": "department:1"},
+            }
+        ],
+    }
 
 
 @pytest.mark.parametrize("status_code", [400, 422, 500, 503])
