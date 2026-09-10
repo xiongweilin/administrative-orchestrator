@@ -123,15 +123,18 @@ provider event authenticity
 Provider credentials are perception credentials; they are not Administrative
 authority credentials and are not Kernel reality-write credentials.
 
-For the Feishu reference slice, the HTTP boundary verifies the callback token
-and, when configured, the signed callback headers and freshness window. It
-then writes a verified `IntakeReceipt` and `intake.feishu.received` outbox
-event in one transaction. The receipt/outbox job payload contains provider
-delivery metadata only; message body/content is fetched canonically by the
-asynchronous worker after durable acceptance. A duplicate delivery reuses the
-delivery identity, while a conflicting reuse fails closed. Canonical fetch,
-artifact persistence, identity resolution, interpretation, and candidate
-projection are not part of the webhook response path.
+For the Feishu reference slice, the official SDK long connection hands a
+metadata-only envelope through the gateway to the Administrative HTTP
+boundary. The boundary verifies the provider token and then writes a verified
+`IntakeReceipt` and `intake.feishu.received` outbox event in one transaction.
+The receipt/outbox job payload contains provider delivery metadata only;
+message body/content is fetched canonically by the asynchronous worker after
+durable acceptance. A duplicate delivery reuses the delivery identity, while
+a conflicting reuse fails closed. URL-verification and signed HTTP callback
+headers are not part of this long-connection reference slice unless a
+separate callback transport is enabled. Canonical fetch, artifact persistence,
+identity resolution, interpretation, and candidate projection are not part of
+the metadata handoff response path.
 
 ### 5. Interpretation is historical and non-authoritative
 
