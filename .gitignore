@@ -4,6 +4,7 @@ __pycache__/
 .ruff_cache/
 *.pyc
 .env
+*.env.m6-secrets
 data/
 *.db
 .coverage

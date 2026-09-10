@@ -37,6 +37,7 @@ from administrative_orchestrator.providers.feishu import (
     FeishuEventVerifier,
     FeishuInboxPipeline,
     FeishuProviderEvent,
+    FeishuTenantAccessTokenProvider,
     FeishuVerificationError,
     FeishuWebhookBoundary,
     HttpFeishuCanonicalFetcher,
@@ -511,3 +512,109 @@ def test_http_feishu_fetcher_reads_canonical_text_without_leaking_token() -> Non
         fetcher.close()
     assert message.content == "canonical text"
     assert requests[0].headers["Authorization"] == "Bearer test-access-token"
+
+
+def test_feishu_tenant_token_provider_caches_and_refreshes_near_expiry() -> None:
+    requests: list[httpx.Request] = []
+    now = [1_000.0]
+    issued = iter(("tenant-token-1", "tenant-token-2"))
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "code": 0,
+                "tenant_access_token": next(issued),
+                "expire": 100,
+            },
+        )
+
+    provider = FeishuTenantAccessTokenProvider(
+        "https://open.feishu.invalid",
+        "app-id",
+        "app-secret",
+        transport=httpx.MockTransport(handler),
+        clock=lambda: now[0],
+    )
+    try:
+        assert provider() == "tenant-token-1"
+        assert provider() == "tenant-token-1"
+        now[0] = 1_091.0
+        assert provider() == "tenant-token-2"
+    finally:
+        provider.close()
+
+    assert len(requests) == 2
+    assert requests[0].url.path.endswith("/tenant_access_token/internal")
+
+
+def test_http_feishu_fetcher_invalidates_and_retries_dynamic_token_after_401() -> None:
+    requests: list[httpx.Request] = []
+    issued = iter(("tenant-token-1", "tenant-token-2"))
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.url.path.endswith("/tenant_access_token/internal"):
+            return httpx.Response(
+                200,
+                json={
+                    "code": 0,
+                    "tenant_access_token": next(issued),
+                    "expire": 3_600,
+                },
+            )
+        if request.headers["Authorization"] == "Bearer tenant-token-1":
+            return httpx.Response(401)
+        return httpx.Response(
+            200,
+            json={
+                "code": 0,
+                "data": {
+                    "items": [
+                        {
+                            "message_id": "om-message-1",
+                            "root_id": "om-message-1",
+                            "create_time": str(EVENT_TIME),
+                            "tenant_key": "tenant-feishu",
+                            "sender_id": {"open_id": "ou_alice"},
+                            "msg_type": "text",
+                            "body": {"content": json.dumps({"text": "canonical text"})},
+                        }
+                    ]
+                },
+            },
+        )
+
+    event = FeishuProviderEvent(
+        event_id="event-feishu-1",
+        tenant_ref="tenant-feishu",
+        message_id="om-message-1",
+        thread_ref="om-message-1",
+        sender_external_subject="ou_alice",
+        occurred_at=datetime.fromtimestamp(EVENT_TIME / 1000, tz=UTC),
+        sequence=EVENT_TIME,
+        delivery_digest="a" * 64,
+    )
+    provider = FeishuTenantAccessTokenProvider(
+        "https://open.feishu.invalid",
+        "app-id",
+        "app-secret",
+        transport=httpx.MockTransport(handler),
+    )
+    fetcher = HttpFeishuCanonicalFetcher(
+        "https://open.feishu.invalid",
+        provider,
+        transport=httpx.MockTransport(handler),
+    )
+    try:
+        message = fetcher.fetch(event)
+    finally:
+        fetcher.close()
+        provider.close()
+
+    assert message.content == "canonical text"
+    assert [request.headers.get("Authorization") for request in requests if request.url.path.endswith("/messages/om-message-1")] == [
+        "Bearer tenant-token-1",
+        "Bearer tenant-token-2",
+    ]
