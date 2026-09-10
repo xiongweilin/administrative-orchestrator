@@ -25,6 +25,7 @@ from .models import (
     CandidateAdministrativeRequest,
     CandidateCaseUpdate,
     CandidateFactAssertion,
+    CandidateStatus,
     EvidenceSpan,
     IntakeAssessment,
     IntakeReceipt,
@@ -596,6 +597,23 @@ class IntakeRepository:
         with self.store.sessions() as db:
             row = db.get(CandidateAdministrativeRequestRow, candidate_ref)
             return None if row is None else _candidate_from_row(row)
+
+    def list_candidates(
+        self,
+        *,
+        status: CandidateStatus | None = None,
+        limit: int = 200,
+    ) -> list[CandidateAdministrativeRequest]:
+        with self.store.sessions() as db:
+            statement = select(CandidateAdministrativeRequestRow).order_by(
+                CandidateAdministrativeRequestRow.created_at.desc()
+            )
+            if status is not None:
+                statement = statement.where(
+                    CandidateAdministrativeRequestRow.status == status.value
+                )
+            rows = db.execute(statement.limit(limit)).scalars().all()
+            return [_candidate_from_row(row) for row in rows]
 
     def append_case_update(self, update: CandidateCaseUpdate) -> CandidateCaseUpdate:
         with self.store.sessions.begin() as db:

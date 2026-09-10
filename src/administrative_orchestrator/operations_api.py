@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Any
 from uuid import UUID
 
 from fastapi import FastAPI, HTTPException, Query, Request
@@ -9,11 +9,18 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 
 from .access_policy import AccessDenied, AdministrativeAccessPolicy, AdministrativePermission
+from .admission import (
+    AdmissionConflict,
+    AdmissionRejected,
+    IntakeAssessmentService,
+    IntakePromotionService,
+)
 from .auth import AuthenticatedPrincipal, Authenticator
 from .authority import AuthorityError, AuthorityRepository, IdentityBinding
 from .authority_lifecycle import AuthorityLifecycleEvent, AuthorityLifecycleRepository
 from .config import get_settings
-from .domain import AdministrativeCase, CaseStatus, utcnow
+from .conversation import ConversationMessageRow, ConversationRow
+from .domain import AdministrativeCase, AdministrativeRequest, CaseStatus, utcnow
 from .execution_repository import ExecutionRepository
 from .fact_acquisition import (
     FactAcquisitionError,
@@ -22,6 +29,14 @@ from .fact_acquisition import (
 )
 from .fact_transitions import replace_facts_for_reevaluation
 from .governance import GovernanceRepository
+from .intake.models import (
+    CandidateAdministrativeRequest,
+    CandidateStatus,
+    IntakeAssessment,
+    IntakeDisposition,
+    PromotionRecord,
+)
+from .intake.repository import AssessmentConflict, IntakeRepository
 from .obligations import ObligationRepository
 from .persistence import CaseRow, ConcurrencyConflict, SqlStore
 from .policy import OnboardingFacts
@@ -42,6 +57,10 @@ _governance = GovernanceRepository(_store)
 _obligations = ObligationRepository(_store)
 _policies = PolicyRepository(_store)
 _uow = AdministrativeUnitOfWork(_store)
+_intake = IntakeRepository(_store)
+_intake_assessments = IntakeAssessmentService(_intake)
+_intake_promotions = IntakePromotionService(_store, _intake)
+_CONVERSATION_SCHEMA = (ConversationRow, ConversationMessageRow)
 if _settings.auto_create_schema:
     _store.init_schema()
 
@@ -78,6 +97,48 @@ class ReasonBody(BaseModel):
     reason: str = Field(min_length=1, max_length=2000)
 
 
+class IntakeQueueItem(BaseModel):
+    candidate_id: UUID
+    conversation_ref: str
+    candidate_requester: str
+    candidate_intent: str
+    status: CandidateStatus
+    created_at: datetime
+    latest_assessment: IntakeAssessment | None = None
+
+
+class IntakeCandidateDetail(BaseModel):
+    candidate: CandidateAdministrativeRequest
+    assessments: list[IntakeAssessment]
+    promotion: PromotionRecord | None = None
+
+
+class IntakeAssessmentBody(BaseModel):
+    disposition: IntakeDisposition
+    basis: dict[str, Any] = Field(default_factory=dict)
+
+
+class IntakePromotionBody(BaseModel):
+    assessment_id: UUID
+    source_system: str = Field(min_length=1, max_length=128)
+    tenant_ref: str = Field(min_length=1, max_length=512)
+    source_event_id: str = Field(min_length=1, max_length=512)
+    requester_principal_id: str = Field(min_length=1, max_length=255)
+    channel: str = Field(default="intake", min_length=1, max_length=64)
+    case_kind: str = Field(default="intake", min_length=1, max_length=128)
+    subject_ref: str | None = Field(default=None, max_length=512)
+    promotion_policy_ref: str = Field(
+        default="m6-human-confirmed-v1", min_length=1, max_length=512
+    )
+
+
+class IntakePromotionResponse(BaseModel):
+    promotion: PromotionRecord
+    request: AdministrativeRequest
+    case: AdministrativeCase
+    created: bool
+
+
 def _actor(request: Request) -> AuthenticatedPrincipal:
     return _authenticator.authenticate(request)
 
@@ -97,6 +158,10 @@ def _require(
         )
     except AccessDenied as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+
+def _require_intake_review(actor: AuthenticatedPrincipal) -> None:
+    _require(actor, AdministrativePermission.INTAKE_REVIEW)
 
 
 @app.get("/healthz")
@@ -183,6 +248,113 @@ def case_detail(case_id: UUID, request: Request) -> dict:
         ],
         "audit": audit,
     }
+
+
+@app.get("/v1/operations/intake/candidates", response_model=list[IntakeQueueItem])
+def intake_candidate_queue(
+    request: Request,
+    status_filter: Annotated[CandidateStatus | None, Query(alias="status")] = CandidateStatus.ACTIVE,
+    limit: Annotated[int, Query(ge=1, le=1000)] = 200,
+) -> list[IntakeQueueItem]:
+    actor = _actor(request)
+    _require(actor, AdministrativePermission.OPERATIONS_READ)
+    candidates = _intake.list_candidates(status=status_filter, limit=limit)
+    result: list[IntakeQueueItem] = []
+    for candidate in candidates:
+        assessments = _intake.list_assessments(candidate.candidate_id)
+        result.append(
+            IntakeQueueItem(
+                candidate_id=candidate.candidate_id,
+                conversation_ref=candidate.conversation_ref,
+                candidate_requester=candidate.candidate_requester,
+                candidate_intent=candidate.candidate_intent,
+                status=candidate.status,
+                created_at=candidate.created_at,
+                latest_assessment=assessments[-1] if assessments else None,
+            )
+        )
+    return result
+
+
+@app.get(
+    "/v1/operations/intake/candidates/{candidate_id}",
+    response_model=IntakeCandidateDetail,
+)
+def intake_candidate_detail(candidate_id: UUID, request: Request) -> IntakeCandidateDetail:
+    actor = _actor(request)
+    candidate = _intake.get_candidate(candidate_id)
+    if candidate is None:
+        raise HTTPException(status_code=404, detail="intake candidate not found")
+    _require(actor, AdministrativePermission.OPERATIONS_READ)
+    return IntakeCandidateDetail(
+        candidate=candidate,
+        assessments=_intake.list_assessments(candidate_id),
+        promotion=_intake.get_promotion(candidate_id),
+    )
+
+
+@app.post(
+    "/v1/operations/intake/candidates/{candidate_id}/assessments",
+    response_model=IntakeAssessment,
+)
+def finalize_intake_assessment(
+    candidate_id: UUID,
+    payload: IntakeAssessmentBody,
+    request: Request,
+) -> IntakeAssessment:
+    actor = _actor(request)
+    _require_intake_review(actor)
+    if _intake.get_candidate(candidate_id) is None:
+        raise HTTPException(status_code=404, detail="intake candidate not found")
+    try:
+        return _intake_assessments.finalize_human(
+            candidate_id,
+            payload.disposition,
+            reviewer_principal_id=actor.principal_id,
+            basis=payload.basis,
+        )
+    except (AdmissionRejected, AssessmentConflict, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.post(
+    "/v1/operations/intake/candidates/{candidate_id}/promote",
+    response_model=IntakePromotionResponse,
+)
+def promote_intake_candidate(
+    candidate_id: UUID,
+    payload: IntakePromotionBody,
+    request: Request,
+) -> IntakePromotionResponse:
+    actor = _actor(request)
+    _require_intake_review(actor)
+    candidate = _intake.get_candidate(candidate_id)
+    if candidate is None:
+        raise HTTPException(status_code=404, detail="intake candidate not found")
+    assessment = _intake.get_assessment(payload.assessment_id)
+    if assessment is None or assessment.candidate_ref != candidate_id:
+        raise HTTPException(status_code=404, detail="intake assessment not found")
+    try:
+        result = _intake_promotions.promote(
+            candidate,
+            assessment,
+            source_system=payload.source_system,
+            tenant_ref=payload.tenant_ref,
+            source_event_id=payload.source_event_id,
+            requester_principal_id=payload.requester_principal_id,
+            channel=payload.channel,
+            case_kind=payload.case_kind,
+            subject_ref=payload.subject_ref,
+            promotion_policy_ref=payload.promotion_policy_ref,
+        )
+    except (AdmissionConflict, AdmissionRejected, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return IntakePromotionResponse(
+        promotion=result.promotion,
+        request=result.request,
+        case=result.case,
+        created=result.created,
+    )
 
 
 @app.post(

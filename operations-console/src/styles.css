@@ -28,12 +28,15 @@ h3 { margin-bottom: 12px; font-size: 14px; }
 .eyebrow { font-size: 11px; letter-spacing: 0.09em; text-transform: uppercase; color: #657180; margin-bottom: 5px; }
 .muted { color: #6c7785; font-size: 12px; }
 
-.session, .actions, .panel-heading, .queue-row, .detail-heading {
+.session, .actions, .panel-heading, .queue-row, .detail-heading, .topbar-right, .view-tabs {
   display: flex;
   align-items: center;
   gap: 10px;
 }
 .session, .actions { justify-content: flex-end; }
+.topbar-right { flex-wrap: wrap; justify-content: flex-end; }
+.view-tabs button { border-radius: 999px; padding: 6px 10px; }
+.view-tabs button.active { background: #315d78; color: #ffffff; border-color: #315d78; }
 .panel-heading, .detail-heading { justify-content: space-between; align-items: flex-start; }
 
 button {
@@ -66,6 +69,21 @@ button:hover:not(:disabled) { border-color: #7c8795; background: #f7f8fa; }
 
 .cards { display: grid; gap: 14px; margin-top: 18px; }
 .card { background: #ffffff; border: 1px solid #d9dee5; border-radius: 9px; padding: 16px; overflow: hidden; }
+label { display: block; margin: 12px 0 6px; color: #44515f; font-size: 12px; font-weight: 600; }
+input, select, textarea {
+  width: 100%;
+  border: 1px solid #c7ced7;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #19222c;
+  padding: 8px;
+  font: inherit;
+}
+textarea { resize: vertical; font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.card > button { margin-top: 14px; }
+.form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 12px; }
+.field { margin: 0; }
+.field span { display: block; margin: 12px 0 6px; }
 pre {
   margin: 0;
   max-height: 390px;
@@ -87,13 +105,14 @@ footer { padding: 10px 20px; border-top: 1px solid #d9dee5; color: #697583; font
   .layout { grid-template-columns: 1fr; }
   .queue-panel { border-right: 0; border-bottom: 1px solid #d9dee5; }
   .topbar, .detail-heading { flex-direction: column; align-items: stretch; }
-  .session, .actions { justify-content: flex-start; }
+  .topbar-right, .session, .actions { justify-content: flex-start; }
+  .form-grid { grid-template-columns: 1fr; }
 }
 
 @media (prefers-color-scheme: dark) {
   :root { color: #e7ebef; background: #10151a; }
   .topbar, .queue-panel, .card, footer { background: #161c22; border-color: #2d3741; }
-  button { background: #1c242c; color: #e7ebef; border-color: #3a4652; }
+  button, input, select, textarea { background: #1c242c; color: #e7ebef; border-color: #3a4652; }
   button:hover:not(:disabled) { background: #222c35; border-color: #607080; }
   pre { background: #10161b; }
   .muted, .eyebrow, .empty, footer { color: #9aa6b2; }
