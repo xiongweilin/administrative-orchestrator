@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import Any
 
 from .authority import ApprovalSatisfaction
 from .domain import (
@@ -14,6 +15,7 @@ from .domain import (
     EffectReversibility,
     EvidenceRef,
     ExecutionAuthorization,
+    FactAuthority,
     FactSnapshot,
     ReopenReason,
 )
@@ -322,6 +324,98 @@ def explicit_reopen(case: AdministrativeCase) -> AdministrativeCase:
         update={
             "status": CaseStatus.GATHERING_FACTS,
             "reopen_reason": None,
+            "version": case.version + 1,
+            "updated_at": utcnow(),
+        }
+    )
+
+
+def _parse_effective_at(value: Any) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
+
+
+def authoritative_effective_time(case: AdministrativeCase) -> datetime | None:
+    """Return the authoritative termination effective time, if one exists."""
+    snapshot = case.fact_snapshot
+    if snapshot is None:
+        return None
+    assertion = snapshot.assertions.get("termination_effective_at")
+    if assertion is None or assertion.authority is not FactAuthority.AUTHORITATIVE:
+        return None
+    return _parse_effective_at(assertion.value)
+
+
+def begin_waiting_for_effective_time(
+    case: AdministrativeCase,
+    *,
+    now: datetime | None = None,
+) -> AdministrativeCase:
+    """Persist the qualified wait for an offboarding effective time.
+
+    DBOS owns waking the workflow; this transition only records that the case is
+    """
+    if case.case_kind != "employee-offboarding":
+        raise TransitionError(
+            "only employee-offboarding cases wait for an effective time"
+        )
+    if case.status != CaseStatus.AUTHORIZED:
+        raise TransitionError(
+            f"cannot wait for an effective time from status {case.status}"
+        )
+    effective_at = authoritative_effective_time(case)
+    if effective_at is None:
+        raise TransitionError(
+            "effective-time waiting requires an authoritative "
+            "termination_effective_at"
+        )
+    current = now or utcnow()
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=UTC)
+    if effective_at <= current.astimezone(UTC):
+        raise TransitionError(
+            "effective time has already passed; revalidate instead of waiting"
+        )
+    return case.model_copy(
+        update={
+            "status": CaseStatus.WAITING,
+            "version": case.version + 1,
+            "updated_at": utcnow(),
+        }
+    )
+
+
+def resume_from_waiting(
+    case: AdministrativeCase,
+    *,
+    now: datetime | None = None,
+) -> AdministrativeCase:
+    """Leave WAITING only after the effective time has been reached."""
+    if case.status != CaseStatus.WAITING:
+        raise TransitionError(f"cannot resume from status {case.status}")
+    effective_at = authoritative_effective_time(case)
+    if effective_at is None:
+        raise TransitionError("waiting case lost its authoritative termination time")
+    current = now or utcnow()
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=UTC)
+    if effective_at > current.astimezone(UTC):
+        raise TransitionError("effective time has not been reached")
+    return case.model_copy(
+        update={
+            "status": CaseStatus.AUTHORIZED,
             "version": case.version + 1,
             "updated_at": utcnow(),
         }
