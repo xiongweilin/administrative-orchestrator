@@ -37,15 +37,19 @@ def build_hris_source(settings: Settings) -> HRFactSource | None:
                 ),
                 timeout_seconds=settings.connector_timeout_seconds,
                 allow_insecure_http=settings.runtime_profile != "production",
-            )
+            ),
+            termination_status_field=settings.odoo_termination_status_field,
+            termination_effective_at_field=settings.odoo_termination_effective_at_field,
         )
     raise FactAcquisitionError(f"unsupported HRIS source kind {settings.hris_source_kind!r}")
 
 
-def merge_authoritative_onboarding_facts(
+def _merge_authoritative_facts(
     case: AdministrativeCase,
     record: AuthoritativeRecord,
     *,
+    source: str,
+    authoritative_keys: tuple[str, ...],
     owner: str = "service:administrative-orchestrator",
 ) -> FactSnapshot:
     """Overlay authoritative HRIS fields without promoting request-only inputs."""
@@ -57,16 +61,6 @@ def merge_authoritative_onboarding_facts(
 
     facts = dict(case.fact_snapshot.facts)
     assertions = _existing_assertions(case.fact_snapshot)
-    authoritative_keys = (
-        "employee_ref",
-        "department_ref",
-        "start_date",
-        "employment_type",
-        "manager_ref",
-        "work_email",
-        "active",
-        "employment_state",
-    )
     for key in authoritative_keys:
         if key not in record.value:
             continue
@@ -90,7 +84,7 @@ def merge_authoritative_onboarding_facts(
 
     digest = _snapshot_digest(facts, assertions)
     return FactSnapshot(
-        source="composite:employee-onboarding",
+        source=source,
         owner=owner,
         # Conservative compatibility aggregate: mixed snapshots are never
         # globally promoted above their least-authoritative constituent.
@@ -101,6 +95,59 @@ def merge_authoritative_onboarding_facts(
         facts=facts,
         assertions=assertions,
         digest=digest,
+    )
+
+
+_ONBOARDING_AUTHORITATIVE_KEYS = (
+    "employee_ref",
+    "department_ref",
+    "start_date",
+    "employment_type",
+    "manager_ref",
+    "work_email",
+    "active",
+    "employment_state",
+)
+
+_OFFBOARDING_AUTHORITATIVE_KEYS = (
+    "employee_ref",
+    "department_ref",
+    "employment_type",
+    "termination_status",
+    "termination_effective_at",
+    "active",
+)
+
+
+def merge_authoritative_onboarding_facts(
+    case: AdministrativeCase,
+    record: AuthoritativeRecord,
+    *,
+    owner: str = "service:administrative-orchestrator",
+) -> FactSnapshot:
+    """Overlay authoritative HRIS fields without promoting request-only inputs."""
+    return _merge_authoritative_facts(
+        case,
+        record,
+        source="composite:employee-onboarding",
+        authoritative_keys=_ONBOARDING_AUTHORITATIVE_KEYS,
+        owner=owner,
+    )
+
+
+def merge_authoritative_offboarding_facts(
+    case: AdministrativeCase,
+    record: AuthoritativeRecord,
+    *,
+    owner: str = "service:administrative-orchestrator",
+) -> FactSnapshot:
+    """Overlay authoritative HRIS termination facts for employee offboarding."""
+    return _merge_authoritative_facts(
+        case,
+        record,
+        source="composite:employee-offboarding",
+        authoritative_keys=_OFFBOARDING_AUTHORITATIVE_KEYS,
+        owner=owner,
     )
 
 
@@ -129,6 +176,8 @@ class AuthoritativeFactRevalidator:
                 "work_email",
                 "active",
                 "employment_state",
+                "termination_status",
+                "termination_effective_at",
             }
         }
         if not expected:
