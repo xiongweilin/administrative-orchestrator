@@ -22,7 +22,7 @@ x-admin-common: &admin-common
     ADMIN_EXTERNAL_EFFECTS_ENABLED: "true"
     ADMIN_KERNEL_BRIDGE_MODE: cutover
     ADMIN_KERNEL_BASE_URL: http://agent-kernel:8020
-    ADMIN_KERNEL_SUPPORTED_REVISION: ${AGENT_KERNEL_REF:-d3a95e0a430458636671a797354fceb6fc2c8982}
+    ADMIN_KERNEL_SUPPORTED_REVISION: ${AGENT_KERNEL_REF:-76361406d4f38ad41a4f77ef434d5da74c115a84}
     ADMIN_HRIS_SOURCE_KIND: odoo
     ADMIN_ODOO_BASE_URL: ${ADMIN_ODOO_BASE_URL:-http://odoo:8069}
     ADMIN_ODOO_DATABASE: ${ADMIN_ODOO_DATABASE:-m7_odoo}
@@ -192,7 +192,7 @@ services:
       context: ../..
       dockerfile: Dockerfile.kernel
       args:
-        AGENT_KERNEL_REF: ${AGENT_KERNEL_REF:-d3a95e0a430458636671a797354fceb6fc2c8982}
+        AGENT_KERNEL_REF: ${AGENT_KERNEL_REF:-76361406d4f38ad41a4f77ef434d5da74c115a84}
     image: administrative-agent-kernel:m7-staging
     restart: unless-stopped
     environment:
