@@ -49,6 +49,15 @@ class KernelCutoverEffectProvider:
         projection = self._projection(effect)
         status = projection.kernel_execution_status if projection is not None else None
         provider_ref = self._provider_ref(projection)
+        if projection is not None and projection.status is KernelProjectionStatus.REJECTED:
+            admission_status = getattr(projection, "kernel_work_admission_status", None)
+            rejection = getattr(admission_status, "value", admission_status) or "unknown"
+            return ProviderExecutionResult(
+                status=ProviderExecutionStatus.FAILED,
+                provider_ref=provider_ref,
+                error=f"Kernel Work admission rejected: {rejection}",
+                retryable=False,
+            )
         if status is KernelExecutionStatus.COMPLETED:
             return ProviderExecutionResult(
                 status=ProviderExecutionStatus.SUCCEEDED,
