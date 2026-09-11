@@ -290,6 +290,13 @@ async function promoteIntakeCandidate(): Promise<void> {
     requester_principal_id: value("intake-requester"),
     case_kind: value("intake-case-kind") || "intake",
     subject_ref: value("intake-subject") || null,
+    bridge_to_m5: ["employee-onboarding", "employee-offboarding"].includes(
+      value("intake-case-kind"),
+    ),
+    promotion_policy_ref:
+      value("intake-case-kind") === "employee-offboarding"
+        ? "m7-human-confirmed-v1"
+        : "m6-human-confirmed-v1",
   };
   if (!payload.source_system || !payload.tenant_ref || !payload.source_event_id || !payload.requester_principal_id) {
     errorMessage = "Source system, tenant, source event, and requester principal are required.";
