@@ -416,6 +416,28 @@ class KernelBridgeRepository:
             )
             return [self._projection_from_row(row) for row in rows]
 
+    def list_projections_for_case(self, case_id: UUID) -> list[KernelShadowProjection]:
+        """Return every persisted Kernel projection, including superseded epochs.
+
+        M7 discharge must audit historical responsibility identities as well as
+        the current epoch. A current-epoch-only query could incorrectly hide an
+        older active responsibility after a case reopen or fact revision.
+        """
+        with self.store.sessions() as db:
+            rows = (
+                db.execute(
+                    select(KernelBridgeProjectionRow)
+                    .where(KernelBridgeProjectionRow.case_id == case_id)
+                    .order_by(
+                        KernelBridgeProjectionRow.authority_epoch,
+                        KernelBridgeProjectionRow.projection_id,
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            return [self._projection_from_row(row) for row in rows]
+
     @staticmethod
     def _work_admission_refs(projection: KernelShadowProjection) -> tuple[object, ...]:
         return (

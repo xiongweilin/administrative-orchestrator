@@ -123,7 +123,7 @@ The M5 implementation now includes:
 The supported Agent Kernel revision is currently:
 
 ```text
-fe4b3f4bf2e376bd7105caf7d15d77e2483c7197
+1f8497087b6a95632b1ae179d9ffd6c3e8fe6bb8
 ```
 
 M5 has an explicit acceptance boundary: repository CI can prove code, migration, restart, cut-over, DR, ambiguity semantics, and static/security quality gates, while the external checklist proves enterprise OIDC/Odoo/Keycloak credentials and network behavior. The isolated real-staging checklist, final exact-head CI, squash merge, and post-merge main CI now pass on the supported Kernel revision `fe4b3f4bf2e376bd7105caf7d15d77e2483c7197`; M5 is **complete for the recorded scope**.
