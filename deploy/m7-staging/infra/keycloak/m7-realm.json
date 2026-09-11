@@ -151,6 +151,57 @@
           "temporary": false
         }
       ]
+    },
+    {
+      "id": "m7-subject",
+      "username": "m7-subject",
+      "firstName": "M7",
+      "lastName": "Subject",
+      "enabled": true,
+      "email": "m7-subject@staging.invalid",
+      "emailVerified": true,
+      "credentials": [
+        {
+          "type": "password",
+          "value": "m7-subject-password",
+          "temporary": false
+        }
+      ]
+    },
+    {
+      "username": "service-account-administrative-reader",
+      "serviceAccountClientId": "administrative-reader",
+      "clientRoles": {
+        "realm-management": [
+          "view-realm",
+          "query-users",
+          "view-users"
+        ]
+      }
+    },
+    {
+      "username": "service-account-administrative-kernel-writer",
+      "serviceAccountClientId": "administrative-kernel-writer",
+      "clientRoles": {
+        "realm-management": [
+          "view-realm",
+          "manage-users",
+          "query-users",
+          "view-users"
+        ]
+      }
+    },
+    {
+      "username": "service-account-administrative-kernel-verifier",
+      "serviceAccountClientId": "administrative-kernel-verifier",
+      "clientRoles": {
+        "realm-management": [
+          "view-realm",
+          "manage-users",
+          "query-users",
+          "view-users"
+        ]
+      }
     }
   ]
 }
