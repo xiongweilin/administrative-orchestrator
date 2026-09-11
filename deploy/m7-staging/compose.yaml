@@ -12,9 +12,11 @@ x-admin-common: &admin-common
     ADMIN_AUTO_CREATE_SCHEMA: "false"
     ADMIN_RUNTIME_PROFILE: staging
     ADMIN_AUTH_MODE: oidc
-    ADMIN_OIDC_ISSUER: ${ADMIN_OIDC_ISSUER:-http://host.docker.internal:18095/realms/m7}
+    ADMIN_OIDC_ISSUER: ${ADMIN_OIDC_ISSUER:-http://127.0.0.1:18093/realms/m7}
     ADMIN_OIDC_AUDIENCE: ${ADMIN_OIDC_AUDIENCE:-administrative-operations-console}
     ADMIN_OIDC_ALLOWED_ALGORITHMS: RS256,ES256
+    ADMIN_OIDC_METADATA_URL: ${ADMIN_OIDC_METADATA_URL:-http://keycloak:8080/realms/m7/.well-known/openid-configuration}
+    ADMIN_OIDC_JWKS_URL: ${ADMIN_OIDC_JWKS_URL:-http://keycloak:8080/realms/m7/protocol/openid-connect/certs}
     ADMIN_OIDC_ALLOW_INSECURE_HTTP: ${ADMIN_OIDC_ALLOW_INSECURE_HTTP:-true}
     ADMIN_AUTHORITY_ENFORCEMENT_ENABLED: "true"
     ADMIN_EXTERNAL_EFFECTS_ENABLED: "true"
@@ -92,7 +94,7 @@ services:
       ADMIN_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-administrative_m7}:${POSTGRES_PASSWORD:-m7-admin-postgres-password}@admin-postgres:5432/${POSTGRES_DB:-administrative_m7}
       ADMIN_AUTO_CREATE_SCHEMA: "false"
       ADMIN_BOOTSTRAP_AUTHORITY_JSON: >-
-        {"principals":[{"principal_id":"person:m7-reviewer","display_name":"M7 staging reviewer"},{"principal_id":"person:m7-subject","display_name":"M7 departing subject"},{"principal_id":"person:m7-successor","display_name":"M7 qualified successor"}],"identity_bindings":[{"provider":"http://host.docker.internal:18095/realms/m7","external_subject":"m7-reviewer","principal_id":"person:m7-reviewer"},{"provider":"http://host.docker.internal:18095/realms/m7","external_subject":"m7-subject","principal_id":"person:m7-subject"}],"role_assignments":[{"principal_id":"person:m7-reviewer","role":"administrative_admin","organization_scope":"*"},{"principal_id":"person:m7-reviewer","role":"hr_approver","organization_scope":"*"},{"principal_id":"person:m7-subject","role":"manager","organization_scope":"*"},{"principal_id":"person:m7-successor","role":"administrative_operator","organization_scope":"*"}]}
+        {"principals":[{"principal_id":"person:m7-reviewer","display_name":"M7 staging reviewer"},{"principal_id":"person:m7-subject","display_name":"M7 departing subject"},{"principal_id":"person:m7-successor","display_name":"M7 qualified successor"}],"identity_bindings":[{"provider":"http://127.0.0.1:18093/realms/m7","external_subject":"m7-reviewer","principal_id":"person:m7-reviewer"},{"provider":"http://127.0.0.1:18093/realms/m7","external_subject":"m7-subject","principal_id":"person:m7-subject"}],"role_assignments":[{"principal_id":"person:m7-reviewer","role":"administrative_admin","organization_scope":"*"},{"principal_id":"person:m7-reviewer","role":"hr_approver","organization_scope":"*"},{"principal_id":"person:m7-subject","role":"manager","organization_scope":"*"},{"principal_id":"person:m7-successor","role":"administrative_operator","organization_scope":"*"}]}
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -106,7 +108,7 @@ services:
       KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-m7-keycloak-admin-password}
       KC_HTTP_PORT: "8080"
       KC_HTTP_ENABLED: "true"
-      KC_HOSTNAME: ${KEYCLOAK_HOSTNAME:-http://host.docker.internal:18095}
+      KC_HOSTNAME: ${KEYCLOAK_HOSTNAME:-http://127.0.0.1:18093}
       KC_HOSTNAME_STRICT: "false"
       KC_HOSTNAME_STRICT_HTTPS: "false"
     ports:
@@ -195,7 +197,7 @@ services:
     environment:
       ADMIN_RUNTIME_PROFILE: staging
       ADMIN_AUTH_MODE: oidc
-      ADMIN_OIDC_ISSUER: ${ADMIN_OIDC_ISSUER:-http://host.docker.internal:18095/realms/m7}
+      ADMIN_OIDC_ISSUER: ${ADMIN_OIDC_ISSUER:-http://127.0.0.1:18093/realms/m7}
       ADMIN_OIDC_AUDIENCE: ${ADMIN_OIDC_AUDIENCE:-administrative-operations-console}
       ADMIN_OIDC_ALLOWED_ALGORITHMS: RS256,ES256
       ADMIN_OIDC_ALLOW_INSECURE_HTTP: ${ADMIN_OIDC_ALLOW_INSECURE_HTTP:-true}
@@ -289,9 +291,9 @@ services:
       context: ../../operations-console
       args:
         VITE_OPERATIONS_API_BASE_URL: /api
-        VITE_OIDC_AUTHORITY: ${ADMIN_OIDC_ISSUER:-http://host.docker.internal:18095/realms/m7}
+        VITE_OIDC_AUTHORITY: ${ADMIN_OIDC_ISSUER:-http://127.0.0.1:18093/realms/m7}
         VITE_OIDC_CLIENT_ID: ${ADMIN_OPERATIONS_OIDC_CLIENT_ID:-administrative-operations-console}
-        VITE_OIDC_SCOPE: ${ADMIN_OPERATIONS_OIDC_SCOPE:-openid profile email administrative-audience}
+        VITE_OIDC_SCOPE: ${ADMIN_OPERATIONS_OIDC_SCOPE:-openid}
     image: administrative-operations-console:m7-staging
     restart: unless-stopped
     ports:

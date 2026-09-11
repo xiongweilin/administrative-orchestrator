@@ -1,4 +1,7 @@
 from datetime import UTC, datetime
+from uuid import uuid4
+
+import pytest
 
 from administrative_orchestrator.domain import (
     AdministrativeRequest,
@@ -8,9 +11,13 @@ from administrative_orchestrator.domain import (
 )
 from administrative_orchestrator.messaging import (
     OUTBOX_DISPATCHED,
+    OUTBOX_FAILED,
+    OUTBOX_PENDING,
+    OutboxEventNotFailed,
     OutboxEventRow,
     claim_outbox,
     mark_dispatched,
+    replay_failed_outbox,
 )
 from administrative_orchestrator.persistence import SqlStore
 from administrative_orchestrator.policy import OnboardingFacts, OnboardingPolicy
@@ -94,3 +101,32 @@ def test_policy_and_decision_commit_workflow_wake_events() -> None:
         first = db.get(OutboxEventRow, events[0].event_id)
         assert first is not None
         assert first.status == OUTBOX_DISPATCHED
+
+
+def test_failed_outbox_replay_starts_one_fresh_bounded_attempt_window() -> None:
+    store = SqlStore("sqlite+pysqlite:///:memory:")
+    store.init_schema()
+    event_id = uuid4()
+    with store.sessions.begin() as db:
+        db.add(
+            OutboxEventRow(
+                event_id=event_id,
+                event_type="intake.feishu.received",
+                aggregate_id=str(event_id),
+                payload_json={"event_id": str(event_id)},
+                status=OUTBOX_FAILED,
+                attempts=10,
+                last_error="provider sender is not bound",
+                created_at=datetime.now(UTC),
+            )
+        )
+
+    replayed = replay_failed_outbox(store, event_id, reason="identity binding repaired")
+
+    assert replayed.event_id == event_id
+    assert replayed.status == OUTBOX_PENDING
+    assert replayed.attempts == 0
+    claimed = claim_outbox(store)
+    assert [item.event_id for item in claimed] == [event_id]
+    with pytest.raises(OutboxEventNotFailed):
+        replay_failed_outbox(store, event_id, reason="duplicate replay")
