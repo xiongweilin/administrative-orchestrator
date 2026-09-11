@@ -32,6 +32,7 @@ class _Resolver:
 _TERMINATION_FIELDS = {
     'x_administrative_termination_status',
     'x_administrative_termination_effective_at',
+    'x_administrative_principal_id',
 }
 
 
@@ -61,6 +62,7 @@ def _odoo_source(*, available_fields: set[str]) -> OdooHRFactSource:
                 'write_date': '2026-09-10 09:00:00',
                 'x_administrative_termination_status': 'termination_scheduled',
                 'x_administrative_termination_effective_at': '2026-10-01T18:00:00Z',
+                'x_administrative_principal_id': 'person:departing',
             }
             return [{key: row.get(key) for key in kwargs['fields']}]
         if model == 'hr.contract' and method == 'search_count':
@@ -90,6 +92,7 @@ def test_odoo_reader_reads_configured_termination_fields() -> None:
     assert record.value['present'] is True
     assert record.value['termination_status'] == 'termination_scheduled'
     assert record.value['termination_effective_at'] == '2026-10-01T18:00:00Z'
+    assert record.value['departing_principal_id'] == 'person:departing'
     assert record.value['department_ref'] == 'odoo:hr.department:7'
 
 

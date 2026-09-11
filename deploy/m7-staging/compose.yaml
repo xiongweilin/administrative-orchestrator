@@ -1,0 +1,307 @@
+name: administrative-m7-staging
+
+x-admin-common: &admin-common
+  build:
+    context: ../..
+  image: administrative-orchestrator:m7-staging
+  restart: unless-stopped
+  environment: &admin-environment
+    ADMIN_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-administrative_m7}:${POSTGRES_PASSWORD:-m7-admin-postgres-password}@admin-postgres:5432/${POSTGRES_DB:-administrative_m7}
+    ADMIN_WORKER_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-administrative_m7}:${POSTGRES_PASSWORD:-m7-admin-postgres-password}@admin-postgres:5432/${POSTGRES_DB:-administrative_m7}
+    ADMIN_DBOS_SYSTEM_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-administrative_m7}:${POSTGRES_PASSWORD:-m7-admin-postgres-password}@admin-postgres:5432/administrative_dbos
+    ADMIN_AUTO_CREATE_SCHEMA: "false"
+    ADMIN_RUNTIME_PROFILE: staging
+    ADMIN_AUTH_MODE: oidc
+    ADMIN_OIDC_ISSUER: ${ADMIN_OIDC_ISSUER:-http://host.docker.internal:18095/realms/m7}
+    ADMIN_OIDC_AUDIENCE: ${ADMIN_OIDC_AUDIENCE:-administrative-operations-console}
+    ADMIN_OIDC_ALLOWED_ALGORITHMS: RS256,ES256
+    ADMIN_OIDC_ALLOW_INSECURE_HTTP: ${ADMIN_OIDC_ALLOW_INSECURE_HTTP:-true}
+    ADMIN_AUTHORITY_ENFORCEMENT_ENABLED: "true"
+    ADMIN_EXTERNAL_EFFECTS_ENABLED: "true"
+    ADMIN_KERNEL_BRIDGE_MODE: cutover
+    ADMIN_KERNEL_BASE_URL: http://agent-kernel:8020
+    ADMIN_HRIS_SOURCE_KIND: odoo
+    ADMIN_ODOO_BASE_URL: ${ADMIN_ODOO_BASE_URL:-http://odoo:8069}
+    ADMIN_ODOO_DATABASE: ${ADMIN_ODOO_DATABASE:-m7_odoo}
+    ADMIN_ODOO_READER_USERNAME: ${ADMIN_ODOO_READER_USERNAME:-administrative-reader}
+    ADMIN_ODOO_READER_SECRET: ${ADMIN_ODOO_READER_SECRET:-m7-odoo-reader-secret}
+    ADMIN_ODOO_DEACTIVATE_REQUEST_REF_FIELD: ${ADMIN_ODOO_DEACTIVATE_REQUEST_REF_FIELD:-x_administrative_deactivate_request_ref}
+    ADMIN_ODOO_TERMINATION_STATUS_FIELD: ${ADMIN_ODOO_TERMINATION_STATUS_FIELD:-x_administrative_termination_status}
+    ADMIN_ODOO_TERMINATION_EFFECTIVE_AT_FIELD: ${ADMIN_ODOO_TERMINATION_EFFECTIVE_AT_FIELD:-x_administrative_termination_effective_at}
+    ADMIN_ODOO_EMPLOYMENT_EPISODE_FIELD: ${ADMIN_ODOO_EMPLOYMENT_EPISODE_FIELD:-x_administrative_employment_episode_ref}
+    ADMIN_IAM_SOURCE_KIND: keycloak
+    ADMIN_KEYCLOAK_BASE_URL: ${ADMIN_KEYCLOAK_BASE_URL:-http://keycloak:8080}
+    ADMIN_KEYCLOAK_REALM: ${ADMIN_KEYCLOAK_REALM:-m7}
+    ADMIN_KEYCLOAK_READER_CLIENT_ID: ${ADMIN_KEYCLOAK_READER_CLIENT_ID:-administrative-reader}
+    ADMIN_KEYCLOAK_READER_SECRET: ${ADMIN_KEYCLOAK_READER_SECRET:-m7-keycloak-reader-secret}
+    ADMIN_AUTHORITATIVE_FACT_MAX_AGE_SECONDS: ${ADMIN_AUTHORITATIVE_FACT_MAX_AGE_SECONDS:-300}
+    ADMIN_CONNECTOR_TIMEOUT_SECONDS: ${ADMIN_CONNECTOR_TIMEOUT_SECONDS:-10}
+    ADMIN_FEISHU_BASE_URL: ${ADMIN_FEISHU_BASE_URL:-https://open.feishu.cn}
+    ADMIN_FEISHU_ENCRYPT_KEY: ${ADMIN_FEISHU_ENCRYPT_KEY:-}
+    ADMIN_ODOO_PRINCIPAL_ID_FIELD: ${ADMIN_ODOO_PRINCIPAL_ID_FIELD:-x_administrative_principal_id}
+  depends_on:
+    migrate:
+      condition: service_completed_successfully
+    agent-kernel:
+      condition: service_healthy
+    odoo:
+      condition: service_healthy
+    keycloak:
+      condition: service_started
+
+services:
+  admin-postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-administrative_m7}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-m7-admin-postgres-password}
+      POSTGRES_DB: ${POSTGRES_DB:-administrative_m7}
+    volumes:
+      - administrative-m7-postgres:/var/lib/postgresql/data
+      - ../../infra/postgres/init.sql:/docker-entrypoint-initdb.d/10-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-administrative_m7} -d ${POSTGRES_DB:-administrative_m7}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  migrate:
+    build:
+      context: ../..
+    image: administrative-orchestrator:m7-staging
+    restart: "no"
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      ADMIN_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-administrative_m7}:${POSTGRES_PASSWORD:-m7-admin-postgres-password}@admin-postgres:5432/${POSTGRES_DB:-administrative_m7}
+      ADMIN_AUTO_CREATE_SCHEMA: "false"
+    depends_on:
+      admin-postgres:
+        condition: service_healthy
+
+  foundation-bootstrap:
+    profiles: ["bootstrap"]
+    build:
+      context: ../..
+    image: administrative-orchestrator:m7-staging
+    restart: "no"
+    command: ["python", "-m", "administrative_orchestrator.bootstrap_foundation"]
+    environment:
+      ADMIN_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-administrative_m7}:${POSTGRES_PASSWORD:-m7-admin-postgres-password}@admin-postgres:5432/${POSTGRES_DB:-administrative_m7}
+      ADMIN_AUTO_CREATE_SCHEMA: "false"
+      ADMIN_BOOTSTRAP_AUTHORITY_JSON: >-
+        {"principals":[{"principal_id":"person:m7-reviewer","display_name":"M7 staging reviewer"},{"principal_id":"person:m7-subject","display_name":"M7 departing subject"},{"principal_id":"person:m7-successor","display_name":"M7 qualified successor"}],"identity_bindings":[{"provider":"http://host.docker.internal:18095/realms/m7","external_subject":"m7-reviewer","principal_id":"person:m7-reviewer"},{"provider":"http://host.docker.internal:18095/realms/m7","external_subject":"m7-subject","principal_id":"person:m7-subject"}],"role_assignments":[{"principal_id":"person:m7-reviewer","role":"administrative_admin","organization_scope":"*"},{"principal_id":"person:m7-reviewer","role":"hr_approver","organization_scope":"*"},{"principal_id":"person:m7-subject","role":"manager","organization_scope":"*"},{"principal_id":"person:m7-successor","role":"administrative_operator","organization_scope":"*"}]}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.3.3
+    restart: unless-stopped
+    command: ["start-dev", "--import-realm"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN:-m7-admin}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-m7-keycloak-admin-password}
+      KC_HTTP_PORT: "8080"
+      KC_HTTP_ENABLED: "true"
+      KC_HOSTNAME: ${KEYCLOAK_HOSTNAME:-http://host.docker.internal:18095}
+      KC_HOSTNAME_STRICT: "false"
+      KC_HOSTNAME_STRICT_HTTPS: "false"
+    ports:
+      - "127.0.0.1:${KEYCLOAK_PORT:-18095}:8080"
+    volumes:
+      - administrative-m7-keycloak:/opt/keycloak/data
+      - ./infra/keycloak/m7-realm.json:/opt/keycloak/data/import/m7-realm.json:ro
+
+  odoo-postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${ODOO_POSTGRES_USER:-odoo}
+      POSTGRES_PASSWORD: ${ODOO_POSTGRES_PASSWORD:-m7-odoo-postgres-password}
+      POSTGRES_DB: postgres
+    volumes:
+      - administrative-m7-odoo-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${ODOO_POSTGRES_USER:-odoo} -d postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  odoo-bootstrap:
+    image: odoo:19.0-20260630
+    restart: "no"
+    environment:
+      HOST: odoo-postgres
+      PORT: "5432"
+      USER: ${ODOO_POSTGRES_USER:-odoo}
+      PASSWORD: ${ODOO_POSTGRES_PASSWORD:-m7-odoo-postgres-password}
+    command:
+      - odoo
+      - -d
+      - ${ADMIN_ODOO_DATABASE:-m7_odoo}
+      - -i
+      - base,hr,administrative_m7_fields
+      - --without-demo=true
+      - --stop-after-init
+      - --addons-path=/usr/lib/python3/dist-packages/odoo/addons,/mnt/extra-addons
+    volumes:
+      - ./infra/odoo/addons:/mnt/extra-addons:ro
+    depends_on:
+      odoo-postgres:
+        condition: service_healthy
+
+  odoo:
+    image: odoo:19.0-20260630
+    restart: unless-stopped
+    environment:
+      HOST: odoo-postgres
+      PORT: "5432"
+      USER: ${ODOO_POSTGRES_USER:-odoo}
+      PASSWORD: ${ODOO_POSTGRES_PASSWORD:-m7-odoo-postgres-password}
+    command:
+      - odoo
+      - -d
+      - ${ADMIN_ODOO_DATABASE:-m7_odoo}
+      - --without-demo=true
+      - --addons-path=/usr/lib/python3/dist-packages/odoo/addons,/mnt/extra-addons
+    ports:
+      - "127.0.0.1:${ODOO_PORT:-18094}:8069"
+    volumes:
+      - administrative-m7-odoo-data:/var/lib/odoo
+      - ./infra/odoo/addons:/mnt/extra-addons:ro
+    depends_on:
+      odoo-bootstrap:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8069/web/database/selector', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 18
+      start_period: 30s
+
+  agent-kernel:
+    build:
+      context: ../..
+      dockerfile: Dockerfile.kernel
+      args:
+        AGENT_KERNEL_REF: ${AGENT_KERNEL_REF:-1f8497087b6a95632b1ae179d9ffd6c3e8fe6bb8}
+    image: administrative-agent-kernel:m7-staging
+    restart: unless-stopped
+    environment:
+      ADMIN_RUNTIME_PROFILE: staging
+      ADMIN_AUTH_MODE: oidc
+      ADMIN_OIDC_ISSUER: ${ADMIN_OIDC_ISSUER:-http://host.docker.internal:18095/realms/m7}
+      ADMIN_OIDC_AUDIENCE: ${ADMIN_OIDC_AUDIENCE:-administrative-operations-console}
+      ADMIN_OIDC_ALLOWED_ALGORITHMS: RS256,ES256
+      ADMIN_OIDC_ALLOW_INSECURE_HTTP: ${ADMIN_OIDC_ALLOW_INSECURE_HTTP:-true}
+      ADMIN_ODOO_BASE_URL: ${ADMIN_ODOO_BASE_URL:-http://odoo:8069}
+      ADMIN_ODOO_DATABASE: ${ADMIN_ODOO_DATABASE:-m7_odoo}
+      ADMIN_ODOO_WRITER_USERNAME: ${ADMIN_ODOO_WRITER_USERNAME:-administrative-kernel-writer}
+      ADMIN_ODOO_WRITER_SECRET: ${ADMIN_ODOO_WRITER_SECRET:-m7-odoo-writer-secret}
+      ADMIN_ODOO_VERIFIER_USERNAME: ${ADMIN_ODOO_VERIFIER_USERNAME:-administrative-kernel-verifier}
+      ADMIN_ODOO_VERIFIER_SECRET: ${ADMIN_ODOO_VERIFIER_SECRET:-m7-odoo-verifier-secret}
+      ADMIN_ODOO_REQUEST_REF_FIELD: ${ADMIN_ODOO_REQUEST_REF_FIELD:-x_administrative_request_ref}
+      ADMIN_KEYCLOAK_BASE_URL: ${ADMIN_KEYCLOAK_BASE_URL:-http://keycloak:8080}
+      ADMIN_KEYCLOAK_REALM: ${ADMIN_KEYCLOAK_REALM:-m7}
+      ADMIN_KEYCLOAK_WRITER_CLIENT_ID: ${ADMIN_KEYCLOAK_WRITER_CLIENT_ID:-administrative-kernel-writer}
+      ADMIN_KEYCLOAK_WRITER_SECRET: ${ADMIN_KEYCLOAK_WRITER_SECRET:-m7-keycloak-writer-secret}
+      ADMIN_KEYCLOAK_VERIFIER_CLIENT_ID: ${ADMIN_KEYCLOAK_VERIFIER_CLIENT_ID:-administrative-kernel-verifier}
+      ADMIN_KEYCLOAK_VERIFIER_SECRET: ${ADMIN_KEYCLOAK_VERIFIER_SECRET:-m7-keycloak-verifier-secret}
+      ADMIN_KEYCLOAK_REQUEST_REF_ATTRIBUTE: ${ADMIN_KEYCLOAK_REQUEST_REF_ATTRIBUTE:-administrative_request_ref}
+      ADMIN_CONNECTOR_TIMEOUT_SECONDS: ${ADMIN_CONNECTOR_TIMEOUT_SECONDS:-10}
+      PORTABLE_RUNTIME_RESPONSIBILITY_ADMISSION_PROFILE: administrative-public-v2
+      PORTABLE_RUNTIME_BOUNDED_DOMAIN_EFFECT_FACTORY: scripts.production_kernel_stack:build
+      PORTABLE_RUNTIME_ADMIN_PRODUCTION_STATE_PATH: /var/lib/agent-kernel/bounded-effects.db
+    volumes:
+      - administrative-m7-kernel-state:/var/lib/agent-kernel
+    depends_on:
+      odoo:
+        condition: service_healthy
+      keycloak:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8020/v1/contracts', timeout=3)"]
+      interval: 5s
+      timeout: 5s
+      retries: 18
+      start_period: 20s
+
+  api:
+    <<: *admin-common
+    command: ["python", "-m", "uvicorn", "administrative_orchestrator.api_observed:app", "--host", "0.0.0.0", "--port", "8000"]
+    env_file:
+      - path: ../m6-staging/.env.m6-secrets
+        required: false
+    ports:
+      - "127.0.0.1:${ADMIN_API_PORT:-18091}:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/readyz', timeout=3)"]
+      interval: 5s
+      timeout: 5s
+      retries: 18
+      start_period: 20s
+
+  operations-api:
+    <<: *admin-common
+    command: ["python", "-m", "uvicorn", "administrative_orchestrator.operations_app:app", "--host", "0.0.0.0", "--port", "8001"]
+    ports:
+      - "127.0.0.1:${ADMIN_OPERATIONS_API_PORT:-18092}:8001"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/readyz', timeout=3)"]
+      interval: 5s
+      timeout: 5s
+      retries: 18
+      start_period: 20s
+
+  worker:
+    <<: *admin-common
+    command: ["python", "-m", "administrative_orchestrator.worker"]
+    # The Agent Kernel mutating contract API is local-control only, so the
+    # worker must reach it over loopback: share the kernel network namespace.
+    network_mode: "service:agent-kernel"
+    environment:
+      <<: *admin-environment
+      ADMIN_KERNEL_BASE_URL: http://127.0.0.1:8020
+      ADMIN_KERNEL_CONTRACT_TIMEOUT_SECONDS: "30"
+      ADMIN_WORKER_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-administrative_m7}:${POSTGRES_PASSWORD:-m7-admin-postgres-password}@admin-postgres:5432/${POSTGRES_DB:-administrative_m7}
+      ADMIN_DBOS_SYSTEM_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-administrative_m7}:${POSTGRES_PASSWORD:-m7-admin-postgres-password}@admin-postgres:5432/administrative_dbos
+      ADMIN_WORKER_POLL_SECONDS: ${ADMIN_WORKER_POLL_SECONDS:-1}
+      ADMIN_FEISHU_APP_ID_FILE: ${ADMIN_FEISHU_APP_ID_FILE:-/run/feishu-secrets/feishu_app_id}
+      ADMIN_FEISHU_APP_SECRET_FILE: ${ADMIN_FEISHU_APP_SECRET_FILE:-/run/feishu-secrets/feishu_app_secret}
+      ADMIN_FEISHU_ACCESS_TOKEN: ${ADMIN_FEISHU_ACCESS_TOKEN:-}
+      ADMIN_FEISHU_ARTIFACT_ROOT: /var/lib/administrative/intake-artifacts
+      ADMIN_INTAKE_MODEL_URL: ${ADMIN_INTAKE_MODEL_URL:-http://host.docker.internal:4100/v1}
+      ADMIN_INTAKE_MODEL_API_KEY: ${ADMIN_INTAKE_MODEL_API_KEY:-}
+      ADMIN_INTAKE_MODEL_PROTOCOL: ${ADMIN_INTAKE_MODEL_PROTOCOL:-openai-responses}
+      ADMIN_INTAKE_MODEL_NAME: ${ADMIN_INTAKE_MODEL_NAME:-opencode-go/deepseek-flash}
+      ADMIN_INTAKE_MODEL_MAX_TOKENS: ${ADMIN_INTAKE_MODEL_MAX_TOKENS:-6000}
+    volumes:
+      - administrative-m7-intake-artifacts:/var/lib/administrative/intake-artifacts
+      - feishu_secrets:/run/feishu-secrets:ro
+
+  operations-console:
+    build:
+      context: ../../operations-console
+      args:
+        VITE_OPERATIONS_API_BASE_URL: /api
+        VITE_OIDC_AUTHORITY: ${ADMIN_OIDC_ISSUER:-http://host.docker.internal:18095/realms/m7}
+        VITE_OIDC_CLIENT_ID: ${ADMIN_OPERATIONS_OIDC_CLIENT_ID:-administrative-operations-console}
+        VITE_OIDC_SCOPE: ${ADMIN_OPERATIONS_OIDC_SCOPE:-openid profile email administrative-audience}
+    image: administrative-operations-console:m7-staging
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${ADMIN_OPERATIONS_CONSOLE_PORT:-18093}:80"
+    depends_on:
+      operations-api:
+        condition: service_healthy
+
+volumes:
+  administrative-m7-postgres:
+  administrative-m7-keycloak:
+  administrative-m7-odoo-postgres:
+  administrative-m7-odoo-data:
+  administrative-m7-kernel-state:
+  administrative-m7-intake-artifacts:
+  feishu_secrets:
+    external: true

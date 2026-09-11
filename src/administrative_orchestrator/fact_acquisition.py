@@ -41,6 +41,7 @@ def build_hris_source(settings: Settings) -> HRFactSource | None:
             termination_status_field=settings.odoo_termination_status_field,
             termination_effective_at_field=settings.odoo_termination_effective_at_field,
             employment_episode_field=settings.odoo_employment_episode_field,
+            principal_id_field=settings.odoo_principal_id_field,
         )
     raise FactAcquisitionError(f"unsupported HRIS source kind {settings.hris_source_kind!r}")
 
@@ -117,6 +118,7 @@ _OFFBOARDING_AUTHORITATIVE_KEYS = (
     "termination_status",
     "termination_effective_at",
     "employment_episode_ref",
+    "departing_principal_id",
     "active",
 )
 
