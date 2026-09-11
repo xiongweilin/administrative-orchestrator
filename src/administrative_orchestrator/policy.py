@@ -57,6 +57,7 @@ class OffboardingFacts(BaseModel):
     successor_principal_id: str | None = None
     requested_termination_date: str | None = None
     reason: str | None = None
+    requested_systems: tuple[str, ...] = ()
     requires_privileged_access: bool = False
 
 

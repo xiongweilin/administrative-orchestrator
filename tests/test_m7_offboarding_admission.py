@@ -109,6 +109,7 @@ def test_offboarding_bridge_keeps_claims_and_waits_for_authoritative_termination
         [
             ("employee_ref", "employee:1"),
             ("requested_termination_date", "2026-10-01"),
+            ("requested_systems", ["synthetic-iam", "synthetic-hris"]),
         ],
     )
     assessment = _final_admit(repository, candidate)
@@ -127,6 +128,7 @@ def test_offboarding_bridge_keeps_claims_and_waits_for_authoritative_termination
     assert snapshot.authority is FactAuthority.CLAIM
     assert snapshot.facts["employee_ref"] == "employee:1"
     assert snapshot.facts["requested_termination_date"] == "2026-10-01"
+    assert snapshot.facts["requested_systems"] == ["synthetic-iam", "synthetic-hris"]
     assert snapshot.facts["termination_status"] is None
     assert all(
         assertion.authority is FactAuthority.CLAIM

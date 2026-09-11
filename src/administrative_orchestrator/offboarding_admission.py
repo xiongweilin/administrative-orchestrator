@@ -38,6 +38,7 @@ class CandidateOffboardingAdmissionService(CandidateAdministrativeAdmissionServi
             'requested_termination_date',
             'reason',
             'successor_principal_id',
+            'requested_systems',
         }
     )
 
@@ -68,6 +69,7 @@ class CandidateOffboardingAdmissionService(CandidateAdministrativeAdmissionServi
                 requested_termination_date=values.get('requested_termination_date'),
                 reason=values.get('reason'),
                 successor_principal_id=values.get('successor_principal_id'),
+                requested_systems=values.get('requested_systems', ()),
             )
         except ValueError as exc:
             raise OffboardingAdmissionError(
