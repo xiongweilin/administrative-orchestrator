@@ -20,7 +20,12 @@ from administrative_orchestrator.intake.interpretation import (
     ModelTimeoutError,
 )
 from administrative_orchestrator.intake.models import SourceArtifact
-from administrative_orchestrator.onboarding_admission import CandidateOnboardingAdmissionService
+from administrative_orchestrator.offboarding_admission import (
+    CandidateOffboardingAdmissionService,
+)
+from administrative_orchestrator.onboarding_admission import (
+    CandidateOnboardingAdmissionService,
+)
 from administrative_orchestrator.persistence import SqlStore
 from administrative_orchestrator.providers.feishu_runtime import (
     HttpJsonModelGateway,
@@ -641,5 +646,15 @@ def test_default_intake_instruction_names_every_onboarding_fact_key() -> None:
         key
         for key in CandidateOnboardingAdmissionService._FACT_KEYS
         if key not in instruction
+    )
+    assert missing == []
+
+
+def test_default_intake_instruction_names_every_offboarding_fact_key() -> None:
+    instruction = Settings().intake_model_instruction
+    missing = sorted(
+        key
+        for key in CandidateOffboardingAdmissionService._CANDIDATE_FACT_KEYS
+        if key != "employee_ref" and key not in instruction
     )
     assert missing == []

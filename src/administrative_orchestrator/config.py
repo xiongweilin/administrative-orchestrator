@@ -66,6 +66,8 @@ class Settings(BaseSettings):
         "For employee-onboarding requests, use only these candidate fact keys: "
         "employee_ref, department_ref, manager_principal_id, start_date, "
         "employment_type, requested_systems, requires_privileged_access. "
+        "For employee-offboarding requests, use only these additional candidate "
+        "fact keys: requested_termination_date, reason, successor_principal_id. "
         "Put every requested account or system into requested_systems. "
         "Do not invent other fact keys."
     )
@@ -119,6 +121,7 @@ class Settings(BaseSettings):
         "x_administrative_termination_effective_at"
     )
     odoo_employment_episode_field: str = "x_administrative_employment_episode_ref"
+    odoo_principal_id_field: str = "x_administrative_principal_id"
 
     iam_source_kind: Literal["disabled", "keycloak"] = "disabled"
     keycloak_base_url: str = ""
