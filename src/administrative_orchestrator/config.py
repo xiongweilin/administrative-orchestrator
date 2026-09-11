@@ -95,6 +95,11 @@ class Settings(BaseSettings):
     oidc_issuer: str = ""
     oidc_audience: str = "administrative-orchestrator"
     oidc_allowed_algorithms: str = "RS256,ES256"
+    # Optional service-network endpoints for an externally issued OIDC token.
+    # The issuer remains the authoritative external identity provider URL;
+    # these endpoints only avoid a broken container-to-host backchannel.
+    oidc_metadata_url: str = ""
+    oidc_jwks_url: str = ""
     oidc_jwks_cache_ttl_seconds: int = 300
     oidc_clock_skew_seconds: int = 60
     oidc_http_timeout_seconds: float = 5.0

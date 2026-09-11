@@ -92,7 +92,7 @@ const config = {
   apiBase: import.meta.env.VITE_OPERATIONS_API_BASE_URL || "http://127.0.0.1:8001",
   oidcAuthority: import.meta.env.VITE_OIDC_AUTHORITY || "",
   oidcClientId: import.meta.env.VITE_OIDC_CLIENT_ID || "",
-  oidcScope: import.meta.env.VITE_OIDC_SCOPE || "openid profile email",
+  oidcScope: import.meta.env.VITE_OIDC_SCOPE || "openid",
 };
 
 const root = document.querySelector<HTMLDivElement>("#app")!;

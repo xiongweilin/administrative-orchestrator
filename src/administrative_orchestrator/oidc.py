@@ -47,10 +47,14 @@ class OidcVerifier:
         timeout_seconds: float,
         allow_insecure_http: bool = False,
         client: httpx.Client | None = None,
+        metadata_url: str = "",
+        jwks_url: str = "",
     ) -> None:
         self.issuer = issuer.rstrip("/")
         self.audience = audience
         self.allowed_algorithms = allowed_algorithms
+        self.metadata_url = metadata_url.strip()
+        self.jwks_url = jwks_url.strip()
         self.jwks_cache_ttl_seconds = jwks_cache_ttl_seconds
         self.clock_skew_seconds = clock_skew_seconds
         self.timeout_seconds = timeout_seconds
@@ -133,15 +137,18 @@ class OidcVerifier:
         if not self.issuer:
             raise OidcVerificationError("OIDC issuer is not configured")
         self._validate_url(self.issuer)
-        raw = self._get_json(f"{self.issuer}/.well-known/openid-configuration")
+        metadata_url = self.metadata_url or f"{self.issuer}/.well-known/openid-configuration"
+        self._validate_url(metadata_url)
+        raw = self._get_json(metadata_url)
         discovered_issuer = raw.get("issuer")
         jwks_uri = raw.get("jwks_uri")
         if not isinstance(discovered_issuer, str) or discovered_issuer.rstrip("/") != self.issuer:
             raise OidcVerificationError("OIDC discovery issuer mismatch")
         if not isinstance(jwks_uri, str) or not jwks_uri:
             raise OidcVerificationError("OIDC discovery lacks jwks_uri")
-        self._validate_url(jwks_uri)
-        self._metadata = OidcMetadata(issuer=self.issuer, jwks_uri=jwks_uri)
+        resolved_jwks_uri = self.jwks_url or jwks_uri
+        self._validate_url(resolved_jwks_uri)
+        self._metadata = OidcMetadata(issuer=self.issuer, jwks_uri=resolved_jwks_uri)
         return self._metadata
 
     def _validate_url(self, value: str) -> None:
