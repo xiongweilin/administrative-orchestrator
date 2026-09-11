@@ -44,6 +44,11 @@ from .intake.repository import AssessmentConflict, IntakeRepository
 from .integrations.kernel.bridge import KernelExecutionBridge
 from .integrations.kernel.client import KernelResponsibilityDischargeError
 from .integrations.kernel.repository import KernelBridgeRepository
+from .messaging import (
+    OutboxEventNotFailed,
+    OutboxEventNotFound,
+    replay_failed_outbox,
+)
 from .obligations import ObligationRepository
 from .offboarding_admission import CandidateOffboardingAdmissionService
 from .onboarding_admission import (
@@ -117,6 +122,13 @@ class BindIdentityBody(BaseModel):
 
 class ReasonBody(BaseModel):
     reason: str = Field(min_length=1, max_length=2000)
+
+
+class OutboxReplayResponse(BaseModel):
+    event_id: UUID
+    status: str
+    attempts: int
+    audit_id: UUID
 
 
 class ExpireAuthorityBody(BaseModel):
@@ -732,6 +744,36 @@ def refresh_authoritative_facts(case_id: UUID, request: Request) -> RefreshFacts
         source_ref=record.source_ref,
         source_version=record.source_version,
         source_digest=record.digest,
+    )
+
+
+@app.post(
+    "/v1/operations/outbox/dead-letter/{event_id}/replay",
+    response_model=OutboxReplayResponse,
+)
+def replay_dead_letter(
+    event_id: UUID,
+    payload: ReasonBody,
+    request: Request,
+) -> OutboxReplayResponse:
+    actor = _actor(request)
+    _require(actor, AdministrativePermission.DEAD_LETTER_REPLAY)
+    try:
+        replayed = replay_failed_outbox(
+            _store,
+            event_id,
+            reason=payload.reason,
+            actor_principal_id=actor.principal_id,
+        )
+    except OutboxEventNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except OutboxEventNotFailed as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return OutboxReplayResponse(
+        event_id=replayed.event_id,
+        status=replayed.status,
+        attempts=replayed.attempts,
+        audit_id=replayed.audit_id,
     )
 
 

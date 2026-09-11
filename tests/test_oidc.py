@@ -124,6 +124,37 @@ def test_unknown_kid_forces_one_jwks_refresh_for_rotation() -> None:
     assert jwks_calls == 2
 
 
+def test_oidc_can_use_internal_metadata_and_jwks_endpoints_for_external_issuer() -> None:
+    private, public_jwk = _material("internal-path")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "keycloak" and request.url.path.endswith(
+            "/.well-known/openid-configuration"
+        ):
+            return httpx.Response(
+                200,
+                json={"issuer": ISSUER, "jwks_uri": f"{ISSUER}/jwks"},
+            )
+        if request.url.host == "keycloak" and request.url.path.endswith("/certs"):
+            return httpx.Response(200, json={"keys": [public_jwk]})
+        return httpx.Response(404)
+
+    verifier = OidcVerifier(
+        issuer=ISSUER,
+        audience=AUDIENCE,
+        allowed_algorithms=("RS256",),
+        metadata_url="http://keycloak/realms/m7/.well-known/openid-configuration",
+        jwks_url="http://keycloak/realms/m7/protocol/openid-connect/certs",
+        jwks_cache_ttl_seconds=300,
+        clock_skew_seconds=30,
+        timeout_seconds=1,
+        allow_insecure_http=True,
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    assert verifier.verify(_token(private, "internal-path"))["iss"] == ISSUER
+
+
 def test_oidc_rejects_issuer_audience_and_unknown_kid() -> None:
     private, public_jwk = _material("known")
 

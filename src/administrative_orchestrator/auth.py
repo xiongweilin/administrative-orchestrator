@@ -73,6 +73,8 @@ class Authenticator:
                 issuer=self.settings.oidc_issuer,
                 audience=self.settings.oidc_audience,
                 allowed_algorithms=self.settings.oidc_algorithms,
+                metadata_url=self.settings.oidc_metadata_url,
+                jwks_url=self.settings.oidc_jwks_url,
                 jwks_cache_ttl_seconds=self.settings.oidc_jwks_cache_ttl_seconds,
                 clock_skew_seconds=self.settings.oidc_clock_skew_seconds,
                 timeout_seconds=self.settings.oidc_http_timeout_seconds,
