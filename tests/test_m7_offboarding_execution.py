@@ -342,6 +342,30 @@ def test_waits_without_effects_then_completes_full_lifecycle() -> None:
     assert provider.execute_calls == 3
 
 
+def test_replay_reuses_frozen_obligations_after_partial_domain_planning() -> None:
+    store, _authority, case = _authorized_case(successor="person:successor")
+    engine = OffboardingExecutionEngine(
+        store,
+        _Provider(),
+        clock=_Clock(_EFFECTIVE + timedelta(seconds=1)),
+    )
+
+    engine._plan_current_effects(case)
+    first = ObligationRepository(store).get_current(case.case_id, case.authority_epoch)
+    assert first is not None
+    assert len(first.obligations) > 4
+
+    # Domain-state fulfillment has already changed the authority graph. A
+    # retry must keep the immutable obligation set for this authority epoch
+    # instead of deriving a smaller set from the mutated graph.
+    engine._plan_current_effects(case)
+
+    replayed = ObligationRepository(store).get_current(
+        case.case_id, case.authority_epoch
+    )
+    assert replayed == first
+
+
 def test_missing_successor_does_not_block_security_revocation() -> None:
     store, authority, case = _authorized_case(successor=None)
     provider = _Provider()
