@@ -5,11 +5,18 @@ from uuid import uuid4
 
 import pytest
 
+from administrative_orchestrator.authority import ApprovalSatisfaction, AuthorityRepository
 from administrative_orchestrator.domain import (
     AdministrativeCase,
     AdministrativeRequest,
+    CaseStatus,
+    Decision,
+    DecisionDisposition,
     FactAuthority,
     FactSnapshot,
+    Principal,
+    PrincipalKind,
+    RoleAssignment,
 )
 from administrative_orchestrator.fact_acquisition import (
     AuthoritativeFactRevalidator,
@@ -28,6 +35,7 @@ from administrative_orchestrator.policy_plane import (
     PolicyRepository,
     default_offboarding_policy_version,
 )
+from administrative_orchestrator.unit_of_work import _expected_governance_change_keys
 
 _FACTS = {
     "employee_ref": "odoo:hr.employee:42",
@@ -190,4 +198,72 @@ def test_authoritative_revalidator_can_skip_expected_change() -> None:
         _Source(), max_age_seconds=300
     ).validate_with_dependencies(case, expected_change_keys=('active',))
     assert tolerant.valid is True
+
+
+def test_offboarding_approval_declares_active_as_self_induced_change() -> None:
+    _, case, _ = _case_and_record()
+
+    assert _expected_governance_change_keys(case) == ("active",)
+
+
+def test_non_offboarding_approval_has_no_lifecycle_self_induced_changes() -> None:
+    _, case, _ = _case_and_record()
+    onboarding = case.model_copy(update={"case_kind": "employee-onboarding"})
+
+    assert _expected_governance_change_keys(onboarding) == ()
+
+
+def test_decision_transition_persists_offboarding_expected_change_keys() -> None:
+    store, case, record = _case_and_record()
+    authority = AuthorityRepository(store)
+    authority.put_principal(
+        Principal(
+            principal_id="person:approver",
+            kind=PrincipalKind.PERSON,
+            display_name="approver",
+        )
+    )
+    authority.put_role_assignment(
+        RoleAssignment(
+            principal_id="person:approver",
+            role="hr_approver",
+            organization_scope="*",
+            valid_from=datetime(2026, 9, 1, tzinfo=UTC),
+        )
+    )
+    decision = Decision(
+        case_id=case.case_id,
+        case_version=case.version,
+        authority_epoch=case.authority_epoch,
+        principal_id="person:approver",
+        decision_role="hr_approver",
+        disposition=DecisionDisposition.APPROVE,
+        rationale="approved",
+        policy_ref=record.policy_ref,
+    )
+    after = case.model_copy(
+        update={"status": CaseStatus.AUTHORIZED, "version": case.version + 1}
+    )
+    satisfaction = ApprovalSatisfaction(
+        satisfaction_id=uuid4(),
+        case_id=case.case_id,
+        authority_epoch=case.authority_epoch,
+        policy_ref=record.policy_ref,
+        decision_ids=(decision.decision_id,),
+        satisfied_roles=("hr_approver",),
+    )
+
+    from administrative_orchestrator.unit_of_work import AdministrativeUnitOfWork
+
+    AdministrativeUnitOfWork(store).apply_decision_transition(
+        case,
+        after,
+        decision,
+        organization_scope="*",
+        approval_satisfaction=satisfaction,
+    )
+
+    basis = GovernanceRepository(store).get_for_approval(satisfaction.satisfaction_id)
+    assert basis is not None
+    assert basis.expected_change_keys == ("active",)
 

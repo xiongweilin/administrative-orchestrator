@@ -19,6 +19,13 @@ from .persistence import (
 from .policy import PolicyEvaluation
 
 
+def _expected_governance_change_keys(case: AdministrativeCase) -> tuple[str, ...]:
+    """Describe authoritative fields changed by the approved lifecycle effects."""
+    if case.case_kind == "employee-offboarding":
+        return ("active",)
+    return ()
+
+
 class AdministrativeUnitOfWork:
     """Atomic persistence boundary for case creation and authority transitions.
 
@@ -265,6 +272,7 @@ class AdministrativeUnitOfWork:
                     after,
                     approval_satisfaction,
                     organization_scope=organization_scope or "*",
+                    expected_change_keys=_expected_governance_change_keys(after),
                     db=db,
                 )
                 self.store._append_audit(
