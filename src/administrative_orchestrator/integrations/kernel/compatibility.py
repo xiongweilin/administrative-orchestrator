@@ -6,6 +6,14 @@ EXPECTED_RUNTIME_PROTOCOL = "2.0"
 EXPECTED_PERSISTENT_RESPONSIBILITY = "persistent-responsibility-v1"
 EXPECTED_DOMAIN_RESPONSIBILITY_PROPOSAL = "domain-responsibility-proposal-v1"
 EXPECTED_RESPONSIBILITY_WORK_ADMISSION = "responsibility-work-admission-v1"
+EXPECTED_RESPONSIBILITY_ASSESSMENT_RECORD = "responsibility-assessment-record-v1"
+EXPECTED_RESPONSIBILITY_DISCHARGE_DECISION_RECORD = (
+    "responsibility-discharge-decision-record-v1"
+)
+EXPECTED_RESPONSIBILITY_LIFECYCLE_TRANSITION_APPLY = (
+    "responsibility-lifecycle-transition-apply-v1"
+)
+EXPECTED_RESPONSIBILITY_STATUS_VIEW = "responsibility-status-view-v1"
 EXPECTED_BOUNDED_DOMAIN_EFFECT_EXECUTION = "bounded-domain-effect-execution-v1"
 EXPECTED_BOUNDED_DOMAIN_EFFECT_RECOVERY = "bounded-domain-effect-recovery-v1"
 EXPECTED_BOUNDED_DOMAIN_EFFECT_RESOLUTION = "bounded-domain-effect-resolution-v1"
@@ -26,6 +34,10 @@ class KernelContractIdentity:
     persistent_responsibility_contract: str
     domain_responsibility_proposal_contract: str
     responsibility_work_admission_contract: str | None = None
+    responsibility_assessment_record_contract: str | None = None
+    responsibility_discharge_decision_record_contract: str | None = None
+    responsibility_lifecycle_transition_apply_contract: str | None = None
+    responsibility_status_view_contract: str | None = None
     bounded_domain_effect_execution_contract: str | None = None
     bounded_domain_effect_recovery_contract: str | None = None
     bounded_domain_effect_resolution_view: str | None = None
@@ -36,6 +48,7 @@ def validate_kernel_catalog(
     raw: dict[str, object],
     *,
     require_work_admission: bool = False,
+    require_responsibility_discharge: bool = False,
     require_domain_effect_execution: bool = False,
     require_domain_effect_recovery: bool = False,
     require_domain_effect_evidence: bool = False,
@@ -59,6 +72,21 @@ def validate_kernel_catalog(
             if not isinstance(work_admission, dict):
                 raise TypeError("responsibility_work_admission must be an object")
             work_admission_contract = str(work_admission["current"])
+
+        discharge_contracts: dict[str, str | None] = {}
+        for key in (
+            "responsibility_assessment_record",
+            "responsibility_discharge_decision_record",
+            "responsibility_lifecycle_transition_apply",
+            "responsibility_status",
+        ):
+            value = contracts.get(key)
+            if value is not None:
+                if not isinstance(value, dict):
+                    raise TypeError(f"{key} must be an object")
+                discharge_contracts[key] = str(value["current"])
+            else:
+                discharge_contracts[key] = None
 
         execution_contract: str | None = None
         bounded_execution = contracts.get("bounded_domain_effect_execution")
@@ -96,6 +124,16 @@ def validate_kernel_catalog(
             persistent_responsibility_contract=str(persistent),
             domain_responsibility_proposal_contract=str(domain_proposal),
             responsibility_work_admission_contract=work_admission_contract,
+            responsibility_assessment_record_contract=discharge_contracts[
+                "responsibility_assessment_record"
+            ],
+            responsibility_discharge_decision_record_contract=discharge_contracts[
+                "responsibility_discharge_decision_record"
+            ],
+            responsibility_lifecycle_transition_apply_contract=discharge_contracts[
+                "responsibility_lifecycle_transition_apply"
+            ],
+            responsibility_status_view_contract=discharge_contracts["responsibility_status"],
             bounded_domain_effect_execution_contract=execution_contract,
             bounded_domain_effect_recovery_contract=recovery_contract,
             bounded_domain_effect_resolution_view=resolution_view,
@@ -140,6 +178,39 @@ def validate_kernel_catalog(
             f"{identity.responsibility_work_admission_contract!r}, "
             f"expected {EXPECTED_RESPONSIBILITY_WORK_ADMISSION!r}"
         )
+
+    optional_contracts = (
+        (
+            "responsibility_assessment_record",
+            identity.responsibility_assessment_record_contract,
+            EXPECTED_RESPONSIBILITY_ASSESSMENT_RECORD,
+        ),
+        (
+            "responsibility_discharge_decision_record",
+            identity.responsibility_discharge_decision_record_contract,
+            EXPECTED_RESPONSIBILITY_DISCHARGE_DECISION_RECORD,
+        ),
+        (
+            "responsibility_lifecycle_transition_apply",
+            identity.responsibility_lifecycle_transition_apply_contract,
+            EXPECTED_RESPONSIBILITY_LIFECYCLE_TRANSITION_APPLY,
+        ),
+        (
+            "responsibility_status",
+            identity.responsibility_status_view_contract,
+            EXPECTED_RESPONSIBILITY_STATUS_VIEW,
+        ),
+    )
+    for name, actual, expected in optional_contracts:
+        if actual is not None and actual != expected:
+            mismatches.append(f"{name}={actual!r}, expected {expected!r}")
+
+    if require_responsibility_discharge:
+        for name, actual, expected in optional_contracts:
+            if actual != expected:
+                mismatches.append(
+                    f"{name} is required for responsibility discharge: expected {expected!r}"
+                )
     if (
         identity.bounded_domain_effect_execution_contract is not None
         and identity.bounded_domain_effect_execution_contract
@@ -230,6 +301,7 @@ class HttpKernelContractProbe:
         *,
         timeout_seconds: float = 3.0,
         require_work_admission: bool = False,
+        require_responsibility_discharge: bool = False,
         require_domain_effect_execution: bool = False,
         require_domain_effect_recovery: bool = False,
         require_domain_effect_evidence: bool = False,
@@ -237,6 +309,7 @@ class HttpKernelContractProbe:
         self.base_url = base_url.rstrip("/")
         self.timeout_seconds = timeout_seconds
         self.require_work_admission = require_work_admission
+        self.require_responsibility_discharge = require_responsibility_discharge
         self.require_domain_effect_execution = require_domain_effect_execution
         self.require_domain_effect_recovery = require_domain_effect_recovery
         self.require_domain_effect_evidence = require_domain_effect_evidence
@@ -258,6 +331,7 @@ class HttpKernelContractProbe:
         return validate_kernel_catalog(
             payload,
             require_work_admission=self.require_work_admission,
+            require_responsibility_discharge=self.require_responsibility_discharge,
             require_domain_effect_execution=self.require_domain_effect_execution,
             require_domain_effect_recovery=self.require_domain_effect_recovery,
             require_domain_effect_evidence=self.require_domain_effect_evidence,
@@ -273,6 +347,10 @@ __all__ = [
     "EXPECTED_DOMAIN_RESPONSIBILITY_PROPOSAL",
     "EXPECTED_OWNER",
     "EXPECTED_PERSISTENT_RESPONSIBILITY",
+    "EXPECTED_RESPONSIBILITY_ASSESSMENT_RECORD",
+    "EXPECTED_RESPONSIBILITY_DISCHARGE_DECISION_RECORD",
+    "EXPECTED_RESPONSIBILITY_LIFECYCLE_TRANSITION_APPLY",
+    "EXPECTED_RESPONSIBILITY_STATUS_VIEW",
     "EXPECTED_RESPONSIBILITY_WORK_ADMISSION",
     "EXPECTED_RUNTIME_PROTOCOL",
     "HttpKernelContractProbe",
