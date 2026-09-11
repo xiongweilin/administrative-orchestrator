@@ -34,26 +34,31 @@ From PowerShell:
 
 ```powershell
 Set-Location D:\infrastructure\compose\administrative-orchestrator\deploy\m7-staging
-docker compose --env-file .env.example config --quiet
-docker compose --env-file .env.example build admin-postgres migrate odoo-bootstrap odoo keycloak agent-kernel api operations-api worker operations-console
-docker compose --env-file .env.example up -d admin-postgres odoo-postgres keycloak
-docker compose --env-file .env.example run --rm odoo-bootstrap
-docker compose --env-file .env.example up -d odoo
-docker compose --env-file .env.example run --rm migrate
-docker compose --env-file .env.example --profile bootstrap run --rm foundation-bootstrap
-docker compose --env-file .env.example up -d agent-kernel api operations-api worker operations-console
+docker compose --env-file .env.example --env-file ..\m6-staging\.env.m6-secrets config --quiet
+docker compose --env-file .env.example --env-file ..\m6-staging\.env.m6-secrets build admin-postgres migrate odoo-bootstrap odoo keycloak agent-kernel api operations-api worker operations-console
+docker compose --env-file .env.example --env-file ..\m6-staging\.env.m6-secrets up -d admin-postgres odoo-postgres keycloak
+docker compose --env-file .env.example --env-file ..\m6-staging\.env.m6-secrets run --rm odoo-bootstrap
+docker compose --env-file .env.example --env-file ..\m6-staging\.env.m6-secrets up -d odoo
+docker compose --env-file .env.example --env-file ..\m6-staging\.env.m6-secrets run --rm migrate
+docker compose --env-file .env.example --env-file ..\m6-staging\.env.m6-secrets --profile bootstrap run --rm foundation-bootstrap
+docker compose --env-file .env.example --env-file ..\m6-staging\.env.m6-secrets up -d agent-kernel api operations-api worker operations-console
 ```
 
-The API reads the existing task-scoped Feishu ingress secret file through the
-M6 staging secret locator declared in `compose.yaml`; Compose does not print
-the value. The worker reads Feishu app credentials from the external
+The API receives the Feishu verification and gateway transport secrets from
+the existing task-scoped M6 env file; Compose does not print their values. The
+worker reads Feishu app credentials from the external
 `feishu_secrets` volume, and the model route is the already-running host
 LiteLLM process at `127.0.0.1:4100`. Do not stop or restart that process.
+
+The second env file in the commands above is the existing task-scoped M6
+secret material. It supplies only the Feishu verification and gateway
+transport secrets; do not copy its values into this directory or record them
+in acceptance evidence.
 
 ## Runtime checks
 
 ```powershell
-docker compose --env-file .env.example ps
+docker compose --env-file .env.example --env-file ..\m6-staging\.env.m6-secrets ps
 Invoke-WebRequest http://127.0.0.1:18091/readyz
 Invoke-WebRequest http://127.0.0.1:18092/readyz
 Invoke-WebRequest http://127.0.0.1:18093/
