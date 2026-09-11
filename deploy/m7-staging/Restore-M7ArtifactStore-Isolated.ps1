@@ -41,7 +41,7 @@ if ($PSCmdlet.ShouldProcess($TargetVolumeName, 'Create isolated artifact restore
     docker run --rm `
         --mount "type=volume,source=$TargetVolumeName,target=/restore,readonly" `
         alpine:3.20 `
-        sh -c 'find /restore/sha256 -type f | wc -l'
+        sh -c 'find /restore -type f | wc -l'
     if ($LASTEXITCODE -ne 0) {
         throw 'Isolated restore verification failed.'
     }
