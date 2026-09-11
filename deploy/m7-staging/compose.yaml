@@ -53,6 +53,7 @@ services:
   admin-postgres:
     image: postgres:17-alpine
     restart: unless-stopped
+    command: ["postgres", "-c", "hba_file=/etc/postgresql/m7-pg_hba.conf"]
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-administrative_m7}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-m7-admin-postgres-password}
@@ -60,6 +61,7 @@ services:
     volumes:
       - administrative-m7-postgres:/var/lib/postgresql/data
       - ../../infra/postgres/init.sql:/docker-entrypoint-initdb.d/10-init.sql:ro
+      - ./infra/postgres/m7-pg_hba.conf:/etc/postgresql/m7-pg_hba.conf:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-administrative_m7} -d ${POSTGRES_DB:-administrative_m7}"]
       interval: 5s
@@ -116,12 +118,14 @@ services:
   odoo-postgres:
     image: postgres:17-alpine
     restart: unless-stopped
+    command: ["postgres", "-c", "hba_file=/etc/postgresql/m7-pg_hba.conf"]
     environment:
       POSTGRES_USER: ${ODOO_POSTGRES_USER:-odoo}
       POSTGRES_PASSWORD: ${ODOO_POSTGRES_PASSWORD:-m7-odoo-postgres-password}
       POSTGRES_DB: postgres
     volumes:
       - administrative-m7-odoo-postgres:/var/lib/postgresql/data
+      - ./infra/postgres/m7-pg_hba.conf:/etc/postgresql/m7-pg_hba.conf:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${ODOO_POSTGRES_USER:-odoo} -d postgres"]
       interval: 5s
