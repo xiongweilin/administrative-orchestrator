@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 from uuid import uuid4
 
+from administrative_orchestrator.authority import AuthorityRepository
 from administrative_orchestrator.domain import (
     AdministrativeCase,
     AdministrativeRequest,
@@ -20,6 +21,7 @@ from administrative_orchestrator.domain import (
     RealizationDisposition,
 )
 from administrative_orchestrator.execution_repository import ExecutionRepository
+from administrative_orchestrator.governance import GovernanceRepository
 from administrative_orchestrator.integrations.kernel.client import (
     KernelResponsibilityAssessmentReceipt,
     KernelResponsibilityDischargeDecisionReceipt,
@@ -42,6 +44,7 @@ from administrative_orchestrator.persistence import SqlStore
 from administrative_orchestrator.responsibility_discharge import (
     AdministrativeResponsibilityDischargeService,
     ResponsibilityDischargeStatus,
+    ResponsibilityHandle,
 )
 
 NOW = datetime(2026, 9, 11, 9, 0, tzinfo=UTC)
@@ -369,3 +372,121 @@ def test_non_active_status_prevents_set_closure() -> None:
     assert client.assessment_calls == []
     assert client.decision_calls == []
     assert client.transition_calls == []
+
+
+def test_operations_detail_exposes_completion_and_read_only_lifecycle_state(monkeypatch) -> None:
+    store, case, _obligation = _fixture()
+    from administrative_orchestrator import operations_api
+
+    actor = SimpleNamespace(principal_id="person:operations")
+    monkeypatch.setattr(operations_api, "_store", store)
+    monkeypatch.setattr(operations_api, "_authority", AuthorityRepository(store))
+    monkeypatch.setattr(operations_api, "_governance", GovernanceRepository(store))
+    monkeypatch.setattr(operations_api, "_obligations", ObligationRepository(store))
+    monkeypatch.setattr(operations_api, "_execution", ExecutionRepository(store))
+    monkeypatch.setattr(
+        operations_api,
+        "_settings",
+        SimpleNamespace(kernel_bridge_mode="disabled"),
+    )
+    monkeypatch.setattr(operations_api, "_actor", lambda request: actor)
+    monkeypatch.setattr(operations_api, "_require", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        operations_api,
+        "_access",
+        SimpleNamespace(allows=lambda *args, **kwargs: False),
+    )
+
+    detail = operations_api.case_detail(case.case_id, object())
+
+    assert detail["completion_assessment"]["satisfied"] is True
+    assert detail["termination"]["employment_episode_ref"] is None
+    assert detail["authority"] == {
+        "bindings": [],
+        "role_assignments": [],
+        "delegations": [],
+    }
+    assert detail["responsibility_discharge"]["status"] == "pending"
+    assert detail["responsibility_discharge"]["blocker"] == "kernel_cutover_required"
+    assert detail["kernel_projections"] == []
+    assert "force_discharge" not in detail
+
+
+def test_operations_responsibility_snapshot_observes_active_and_discharged(monkeypatch) -> None:
+    store, case, obligation = _fixture()
+    from administrative_orchestrator import operations_api
+
+    obligation_set = ObligationRepository(store).get_current(
+        case.case_id, case.authority_epoch
+    )
+    assert obligation_set is not None
+    effects = ExecutionRepository(store).list_effects(case.case_id, case.authority_epoch)
+    outcomes = ExecutionRepository(store).list_outcomes(case.case_id, case.authority_epoch)
+    links = ObligationRepository(store).list_links(case.case_id, case.authority_epoch)
+    completion = operations_api._case_completion_assessment(
+        obligation_set,
+        effects,
+        outcomes,
+        links=links,
+        fulfillments=[],
+    )
+    handle = ResponsibilityHandle(
+        responsibility_ref="resp:ops",
+        responsibility_version=1,
+        obligation_ids=(obligation.obligation_id,),
+    )
+    client = SimpleNamespace(
+        get_responsibility_status=lambda responsibility_ref, *, expected_version: (
+            KernelResponsibilityStatusView(
+                responsibility_ref=responsibility_ref,
+                responsibility_version=expected_version,
+                current_status="active",
+            )
+        )
+    )
+
+    class _Bridge:
+        cutover = True
+
+        def client(self):
+            return client
+
+    class _Service:
+        def __init__(self, store, bridge):
+            del store, bridge
+
+        def project_responsibility_set(self, case, obligation_set):
+            del case, obligation_set
+            return (handle,)
+
+        def discharge_chain_refs(self, case, handle):
+            del case, handle
+            return ("assessment:ops", "decision:ops", "transition:ops")
+
+    monkeypatch.setattr(operations_api, "_store", store)
+    monkeypatch.setattr(
+        operations_api,
+        "_settings",
+        SimpleNamespace(kernel_bridge_mode="cutover"),
+    )
+    monkeypatch.setattr(operations_api, "KernelExecutionBridge", lambda *args, **kwargs: _Bridge())
+    monkeypatch.setattr(operations_api, "AdministrativeResponsibilityDischargeService", _Service)
+
+    pending = operations_api._responsibility_snapshot(
+        case, obligation_set, completion, []
+    )
+    assert pending["status"] == "pending"
+    assert pending["responsibilities"][0]["current_status"] == "active"
+
+    client.get_responsibility_status = lambda responsibility_ref, *, expected_version: (
+        KernelResponsibilityStatusView(
+            responsibility_ref=responsibility_ref,
+            responsibility_version=expected_version,
+            current_status="discharged",
+        )
+    )
+    discharged = operations_api._responsibility_snapshot(
+        case, obligation_set, completion, []
+    )
+    assert discharged["status"] == "discharged"
+    assert discharged["blocker"] is None
