@@ -18,12 +18,14 @@ from .persistence import (
 )
 from .policy import PolicyEvaluation
 
+_EXPECTED_GOVERNANCE_CHANGE_KEYS: dict[str, tuple[str, ...]] = {
+    "employee-offboarding": ("active",),
+}
+
 
 def _expected_governance_change_keys(case: AdministrativeCase) -> tuple[str, ...]:
     """Describe authoritative fields changed by the approved lifecycle effects."""
-    if case.case_kind == "employee-offboarding":
-        return ("active",)
-    return ()
+    return _EXPECTED_GOVERNANCE_CHANGE_KEYS.get(case.case_kind, ())
 
 
 class AdministrativeUnitOfWork:
