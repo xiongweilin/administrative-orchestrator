@@ -56,6 +56,9 @@ from administrative_orchestrator.integrations.production_effects import (
     OdooEmployeeEffectConnector,
     OdooEmployeeVerifier,
 )
+from administrative_orchestrator.production_verification import (
+    complete_readback_postcondition,
+)
 
 IAM_CAPABILITY = ADMINISTRATIVE_IAM_IDENTITY_CREATE
 
@@ -196,7 +199,10 @@ class ProductionReadbackVerifier:
                     "message": result.error_message or "verification unavailable",
                 },
             )
-        observed = result.observed_postcondition or {}
+        observed = complete_readback_postcondition(
+            expected,
+            result.observed_postcondition,
+        )
         objective = "pass" if observed == expected else "fail"
         return CapabilityResult(
             request_id=request.id,
