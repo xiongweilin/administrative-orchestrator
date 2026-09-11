@@ -13,6 +13,7 @@ from ..fact_acquisition import build_hris_source
 from ..integrations.kernel.bridge import KernelExecutionBridge
 from ..integrations.kernel.effect_provider import KernelCutoverEffectProvider
 from ..integrations.kernel.onboarding import prepare_onboarding_kernel_shadow
+from ..observability import record_responsibility_discharge
 from ..offboarding_execution import (
     OffboardingExecutionEngine,
     ProductionTrustOffboardingExecutionEngine,
@@ -20,6 +21,10 @@ from ..offboarding_execution import (
 from ..onboarding_execution import OnboardingExecutionEngine
 from ..persistence import SqlStore
 from ..production_trust_execution import ProductionTrustOnboardingExecutionEngine
+from ..responsibility_discharge import (
+    AdministrativeResponsibilityDischargeService,
+    ResponsibilityDischargeResult,
+)
 from ..service import authoritative_effective_time
 from .protocol import (
     CASE_CHANGED_TOPIC,
@@ -126,7 +131,11 @@ def drive_offboarding_case_step(case_id: str) -> dict[str, Any]:
         timeout_seconds=settings.provider_timeout_seconds,
     )
     if settings.kernel_bridge_mode != "disabled":
-        bridge = KernelExecutionBridge(store, settings=settings)
+        bridge = KernelExecutionBridge(
+            store,
+            settings=settings,
+            require_responsibility_discharge=True,
+        )
         if bridge.cutover:
             provider = KernelCutoverEffectProvider(provider, bridge)
 
@@ -161,21 +170,36 @@ def drive_offboarding_case_step(case_id: str) -> dict[str, Any]:
             "next_qualified_action_at": effective_at.isoformat() if effective_at else None,
         }
 
-    return {
+    state: dict[str, Any] = {
         "case_id": case_id,
         "status": case.status.value,
         "case_version": case.version,
         "authority_epoch": case.authority_epoch,
         "next_qualified_action_at": effective_at.isoformat() if effective_at else None,
     }
+    if case.status is CaseStatus.COMPLETED:
+        if bridge is None:
+            record_responsibility_discharge(result="pending")
+            state.update(
+                {
+                    "responsibility_status": "pending",
+                    "responsibility_blocker": "kernel_discharge_bridge_unavailable",
+                }
+            )
+        else:
+            discharge = AdministrativeResponsibilityDischargeService(store, bridge).discharge(
+                case
+            )
+            record_responsibility_discharge(result=discharge.status.value)
+            state.update(_responsibility_state(discharge))
+    return state
 
 
 @DBOS.workflow(name="administrative_offboarding_case_v1")
 def offboarding_case_workflow(*, case_id: str) -> dict[str, Any]:
     while True:
         state = drive_offboarding_case_step(case_id)
-        status = str(state["status"])
-        if status in TERMINAL_STATUSES:
+        if _offboarding_is_terminal(state):
             return state
         timeout = _offboarding_wake_timeout(state)
         DBOS.recv(topic=CASE_CHANGED_TOPIC, timeout_seconds=timeout)
@@ -198,10 +222,34 @@ def _offboarding_wake_timeout(state: dict[str, Any]) -> float:
     return max(0.1, seconds)
 
 
+def _offboarding_is_terminal(state: dict[str, Any]) -> bool:
+    status = str(state.get("status"))
+    if status in {CaseStatus.CANCELLED.value, CaseStatus.FAILED.value}:
+        return True
+    return (
+        status == CaseStatus.COMPLETED.value
+        and state.get("responsibility_status") == "discharged"
+    )
+
+
+def _responsibility_state(result: ResponsibilityDischargeResult) -> dict[str, Any]:
+    return {
+        "responsibility_status": result.status.value,
+        "responsibility_refs": list(result.responsibility_refs),
+        "discharged_responsibility_refs": list(result.discharged_refs),
+        "responsibility_assessment_refs": dict(result.assessment_refs),
+        "responsibility_decision_refs": dict(result.decision_refs),
+        "responsibility_transition_refs": dict(result.transition_refs),
+        "completion_assessment": result.completion.model_dump(mode="json"),
+        "responsibility_blocker": result.blocker,
+    }
+
+
 __all__ = [
     "drive_offboarding_case_step",
     "drive_onboarding_case_step",
     "offboarding_case_workflow",
+    "_offboarding_is_terminal",
     "onboarding_case_workflow",
     "_offboarding_wake_timeout",
 ]

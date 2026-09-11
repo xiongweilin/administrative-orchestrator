@@ -110,8 +110,9 @@ def test_drive_offboarding_selects_production_trust_and_kernel_cutover(
     class _Bridge:
         cutover = True
 
-        def __init__(self, actual_store, *, settings):
+        def __init__(self, actual_store, *, settings, require_responsibility_discharge):
             captured["bridge_store"] = actual_store
+            captured["require_responsibility_discharge"] = require_responsibility_discharge
 
     class _ProductionEngine:
         def __init__(self, actual_store, actual_provider, **kwargs):
@@ -135,19 +136,56 @@ def test_drive_offboarding_selects_production_trust_and_kernel_cutover(
     monkeypatch.setattr(
         definitions, "ProductionTrustOffboardingExecutionEngine", _ProductionEngine
     )
+    monkeypatch.setattr(
+        definitions,
+        "AdministrativeResponsibilityDischargeService",
+        lambda store, bridge: SimpleNamespace(
+            discharge=lambda actual_case: SimpleNamespace(
+                status=SimpleNamespace(value="discharged"),
+                responsibility_refs=(),
+                discharged_refs=(),
+                assessment_refs=(),
+                decision_refs=(),
+                transition_refs=(),
+                completion=SimpleNamespace(model_dump=lambda mode: {}),
+                blocker=None,
+            )
+        ),
+    )
     monkeypatch.setattr(definitions, "authoritative_effective_time", lambda value: _NOW)
 
     state = definitions.drive_offboarding_case_step.__wrapped__(str(case.case_id))
 
     assert state["status"] == CaseStatus.COMPLETED.value
+    assert state["responsibility_status"] == "discharged"
+    assert captured["require_responsibility_discharge"] is True
     assert captured["engine"][1] is wrapped_provider
     assert captured["engine"][2]["hris_source"] is source
 
 
 def test_offboarding_workflow_returns_terminal_state(monkeypatch) -> None:
-    terminal = {"status": CaseStatus.COMPLETED.value, "case_id": "case:1"}
+    terminal = {
+        "status": CaseStatus.COMPLETED.value,
+        "case_id": "case:1",
+        "responsibility_status": "discharged",
+    }
     monkeypatch.setattr(definitions, "drive_offboarding_case_step", lambda case_id: terminal)
     assert definitions.offboarding_case_workflow.__wrapped__(case_id="case:1") == terminal
+
+
+def test_completed_case_with_active_responsibilities_is_not_terminal() -> None:
+    assert not definitions._offboarding_is_terminal(
+        {
+            "status": CaseStatus.COMPLETED.value,
+            "responsibility_status": "pending",
+        }
+    )
+    assert definitions._offboarding_is_terminal(
+        {
+            "status": CaseStatus.COMPLETED.value,
+            "responsibility_status": "discharged",
+        }
+    )
 
 
 def test_offboarding_timeout_fallbacks(monkeypatch) -> None:

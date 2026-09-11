@@ -11,7 +11,15 @@ from .capabilities import (
     OFFBOARDING_CUTOVER_CAPABILITIES,
 )
 from .client import HttpKernelResponsibilityClient, KernelResponsibilityClient
-from .compatibility import HttpKernelContractProbe, KernelCompatibilityError, KernelContractIdentity
+from .compatibility import (
+    EXPECTED_RESPONSIBILITY_ASSESSMENT_RECORD,
+    EXPECTED_RESPONSIBILITY_DISCHARGE_DECISION_RECORD,
+    EXPECTED_RESPONSIBILITY_LIFECYCLE_TRANSITION_APPLY,
+    EXPECTED_RESPONSIBILITY_STATUS_VIEW,
+    HttpKernelContractProbe,
+    KernelCompatibilityError,
+    KernelContractIdentity,
+)
 from .evidence import HttpKernelEvidenceClient, KernelEvidenceClient
 from .mapper import capability_for, derive_effect_intent, derive_execution_grant, project_to_kernel
 from .models import KernelProjectionStatus, KernelShadowProjection
@@ -49,6 +57,7 @@ class KernelExecutionBridge:
         client: KernelResponsibilityClient | None = None,
         evidence_client: KernelEvidenceClient | None = None,
         recovery_client: KernelRecoveryClient | None = None,
+        require_responsibility_discharge: bool = False,
     ) -> None:
         self.store = store
         self.settings = settings or get_settings()
@@ -57,6 +66,7 @@ class KernelExecutionBridge:
         self._client = client
         self._evidence_client = evidence_client
         self._recovery_client = recovery_client
+        self._require_responsibility_discharge = require_responsibility_discharge
 
     @property
     def enabled(self) -> bool:
@@ -78,6 +88,10 @@ class KernelExecutionBridge:
     def requires_work_admission(self) -> bool:
         return self.settings.kernel_bridge_mode in {"admission", "cutover"}
 
+    @property
+    def requires_responsibility_discharge(self) -> bool:
+        return self._require_responsibility_discharge
+
     def owns(self, obligation: AdministrativeObligation) -> bool:
         return self.cutover and capability_for(obligation) in KERNEL_CUTOVER_CAPABILITIES
 
@@ -89,6 +103,7 @@ class KernelExecutionBridge:
                 self.settings.kernel_base_url,
                 timeout_seconds=self.settings.kernel_contract_timeout_seconds,
                 require_work_admission=self.requires_work_admission,
+                require_responsibility_discharge=self.requires_responsibility_discharge,
                 require_domain_effect_execution=self.cutover,
                 require_domain_effect_recovery=self.cutover,
                 require_domain_effect_evidence=self.cutover,
@@ -100,6 +115,29 @@ class KernelExecutionBridge:
             raise KernelCompatibilityError(
                 "kernel admission/cutover mode requires responsibility-work-admission-v1"
             )
+        if self.requires_responsibility_discharge:
+            expected_discharge = (
+                (
+                    self._compatibility.responsibility_assessment_record_contract,
+                    EXPECTED_RESPONSIBILITY_ASSESSMENT_RECORD,
+                ),
+                (
+                    self._compatibility.responsibility_discharge_decision_record_contract,
+                    EXPECTED_RESPONSIBILITY_DISCHARGE_DECISION_RECORD,
+                ),
+                (
+                    self._compatibility.responsibility_lifecycle_transition_apply_contract,
+                    EXPECTED_RESPONSIBILITY_LIFECYCLE_TRANSITION_APPLY,
+                ),
+                (
+                    self._compatibility.responsibility_status_view_contract,
+                    EXPECTED_RESPONSIBILITY_STATUS_VIEW,
+                ),
+            )
+            if any(actual != expected for actual, expected in expected_discharge):
+                raise KernelCompatibilityError(
+                    "kernel offboarding discharge requires all responsibility discharge contracts"
+                )
         if self.cutover and self._compatibility.bounded_domain_effect_execution_contract is None:
             raise KernelCompatibilityError(
                 "kernel cutover is fail-closed without bounded-domain-effect-execution-v1"

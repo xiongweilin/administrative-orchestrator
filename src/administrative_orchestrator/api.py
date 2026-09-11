@@ -21,7 +21,11 @@ from .authority import (
     assess_approval_satisfaction,
     resolve_decision_role,
 )
-from .completion import CompletionAssessment, assess_onboarding_completion
+from .completion import (
+    CompletionAssessment,
+    assess_administrative_completion,
+    assess_onboarding_completion,
+)
 from .config import get_settings
 from .domain import (
     AdministrativeCase,
@@ -512,11 +516,14 @@ def get_case_completion(case_id: UUID, request: Request) -> CompletionAssessment
     obligation_set = _obligations.get_current(case.case_id, case.authority_epoch)
     if obligation_set is None:
         return assess_onboarding_completion(effects, outcomes)
-    return assess_onboarding_completion(
+    return assess_administrative_completion(
         obligation_set,
         effects,
         outcomes,
         links=_obligations.list_links(case.case_id, case.authority_epoch),
+        fulfillments=_obligations.list_domain_state_fulfillments(
+            case.case_id, case.authority_epoch
+        ),
     )
 
 

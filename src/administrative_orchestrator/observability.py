@@ -46,6 +46,11 @@ IDENTITY_LIFECYCLE = Counter(
     "Identity lifecycle semantic transitions.",
     ("event",),
 )
+RESPONSIBILITY_DISCHARGE = Counter(
+    "administrative_responsibility_discharge_total",
+    "Kernel responsibility discharge workflow outcomes without case identity labels.",
+    ("result",),
+)
 
 
 def current_correlation_id() -> str:
@@ -66,6 +71,12 @@ def record_connector_outcome(*, system: str, operation: str, outcome: str) -> No
 
 def record_identity_lifecycle(event: str) -> None:
     IDENTITY_LIFECYCLE.labels(event=event).inc()
+
+
+def record_responsibility_discharge(*, result: str) -> None:
+    if result not in {"pending", "discharged"}:
+        result = "pending"
+    RESPONSIBILITY_DISCHARGE.labels(result=result).inc()
 
 
 def install_observability(app: FastAPI, *, service_name: str) -> None:
@@ -146,4 +157,5 @@ __all__ = [
     "record_connector_outcome",
     "record_governance_revalidation",
     "record_identity_lifecycle",
+    "record_responsibility_discharge",
 ]

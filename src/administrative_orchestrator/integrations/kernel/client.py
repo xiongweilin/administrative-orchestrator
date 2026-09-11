@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Literal, Protocol
+from typing import Any, Literal, Protocol
+from urllib.parse import quote
 
 import httpx
 
@@ -19,6 +21,21 @@ EXPECTED_WORK_ADMISSION_COMMAND_SCHEMA = "responsibility-work-admission-v1"
 EXPECTED_WORK_ADMISSION_RECEIPT_SCHEMA = "responsibility-work-admission-receipt-v1"
 EXPECTED_EXECUTION_COMMAND_SCHEMA = "bounded-domain-effect-execution-v1"
 EXPECTED_EXECUTION_RECEIPT_SCHEMA = "bounded-domain-effect-execution-receipt-v1"
+EXPECTED_RESPONSIBILITY_ASSESSMENT_COMMAND_SCHEMA = "responsibility-assessment-record-v1"
+EXPECTED_RESPONSIBILITY_ASSESSMENT_RECEIPT_SCHEMA = "responsibility-assessment-receipt-v1"
+EXPECTED_RESPONSIBILITY_DISCHARGE_DECISION_COMMAND_SCHEMA = (
+    "responsibility-discharge-decision-record-v1"
+)
+EXPECTED_RESPONSIBILITY_DISCHARGE_DECISION_RECEIPT_SCHEMA = (
+    "responsibility-discharge-decision-receipt-v1"
+)
+EXPECTED_RESPONSIBILITY_LIFECYCLE_TRANSITION_COMMAND_SCHEMA = (
+    "responsibility-lifecycle-transition-apply-v1"
+)
+EXPECTED_RESPONSIBILITY_LIFECYCLE_TRANSITION_RECEIPT_SCHEMA = (
+    "responsibility-lifecycle-transition-receipt-v1"
+)
+EXPECTED_RESPONSIBILITY_STATUS_SCHEMA = "responsibility-status-view-v1"
 
 
 class KernelSubmissionError(RuntimeError):
@@ -30,6 +47,10 @@ class KernelWorkAdmissionError(RuntimeError):
 
 
 class KernelExecutionError(RuntimeError):
+    pass
+
+
+class KernelResponsibilityDischargeError(RuntimeError):
     pass
 
 
@@ -79,6 +100,38 @@ class KernelExecutionReceipt:
     responsibility_ref: str | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class KernelResponsibilityAssessmentReceipt:
+    assessment_ref: str
+    responsibility_ref: str
+    responsibility_version: int
+
+
+@dataclass(frozen=True, slots=True)
+class KernelResponsibilityDischargeDecisionReceipt:
+    decision_ref: str
+    responsibility_ref: str
+    responsibility_version: int
+    status_after_decision: Literal["active", "suspended", "discharged"]
+    assessment_ref: str
+
+
+@dataclass(frozen=True, slots=True)
+class KernelResponsibilityLifecycleTransitionReceipt:
+    transition_ref: str
+    responsibility_ref: str
+    responsibility_version: int
+    current_status: Literal["active", "suspended", "discharged"]
+    decision_ref: str
+
+
+@dataclass(frozen=True, slots=True)
+class KernelResponsibilityStatusView:
+    responsibility_ref: str
+    responsibility_version: int
+    current_status: Literal["active", "suspended", "discharged"]
+
+
 class KernelResponsibilityClient(Protocol):
     def submit(self, projection: KernelShadowProjection) -> KernelProposalReceipt: ...
 
@@ -102,6 +155,55 @@ class KernelResponsibilityClient(Protocol):
         *,
         expected_work_ref: str | None = None,
     ) -> KernelExecutionReceipt | None: ...
+
+    def record_assessment(
+        self,
+        *,
+        assessment_ref: str,
+        responsibility_ref: str,
+        responsibility_version: int,
+        subject_ref: str,
+        assessment_kind: str,
+        basis_refs: Sequence[str],
+        assessed_at: datetime,
+        fresh_until: datetime | None,
+        rationale: str,
+        created_at: datetime,
+    ) -> KernelResponsibilityAssessmentReceipt: ...
+
+    def record_discharge_decision(
+        self,
+        *,
+        decision_ref: str,
+        responsibility_ref: str,
+        responsibility_version: int,
+        assessment_ref: str,
+        basis_refs: Sequence[str],
+        policy_ref: str,
+        decided_at: datetime,
+        rationale: str,
+        created_at: datetime,
+    ) -> KernelResponsibilityDischargeDecisionReceipt: ...
+
+    def apply_lifecycle_transition(
+        self,
+        *,
+        transition_ref: str,
+        responsibility_ref: str,
+        responsibility_version: int,
+        decision_ref: str,
+        basis_refs: Sequence[str],
+        applied_at: datetime,
+        reason: str,
+        created_at: datetime,
+    ) -> KernelResponsibilityLifecycleTransitionReceipt: ...
+
+    def get_responsibility_status(
+        self,
+        responsibility_ref: str,
+        *,
+        expected_version: int,
+    ) -> KernelResponsibilityStatusView: ...
 
 
 class HttpKernelResponsibilityClient:
@@ -334,6 +436,287 @@ class HttpKernelResponsibilityClient:
             raise KernelExecutionError("agent-kernel execution inspection identity rebound")
         return receipt
 
+    def record_assessment(
+        self,
+        *,
+        assessment_ref: str,
+        responsibility_ref: str,
+        responsibility_version: int,
+        subject_ref: str,
+        assessment_kind: str,
+        basis_refs: Sequence[str],
+        assessed_at: datetime,
+        fresh_until: datetime | None,
+        rationale: str,
+        created_at: datetime,
+    ) -> KernelResponsibilityAssessmentReceipt:
+        assessment: dict[str, Any] = {
+            "id": assessment_ref,
+            "object_type": "ResponsibilityAssessment",
+            "responsibility_ref": responsibility_ref,
+            "responsibility_version": responsibility_version,
+            "subject_ref": subject_ref,
+            "assessment_kind": assessment_kind,
+            "basis_refs": list(basis_refs),
+            "assessed_at": assessed_at.isoformat(),
+            "rationale": rationale,
+            "created_at": created_at.isoformat(),
+        }
+        if fresh_until is not None:
+            assessment["fresh_until"] = fresh_until.isoformat()
+        raw = self._post_discharge(
+            "/v1/responsibilities/assessments",
+            {
+                "schema": EXPECTED_RESPONSIBILITY_ASSESSMENT_COMMAND_SCHEMA,
+                "assessment": assessment,
+            },
+        )
+        if raw.get("schema") != EXPECTED_RESPONSIBILITY_ASSESSMENT_RECEIPT_SCHEMA:
+            raise KernelResponsibilityDischargeError(
+                "agent-kernel returned an incompatible responsibility assessment receipt schema"
+            )
+        self._require_non_authoritative(raw)
+        returned = self._validate_responsibility_object(
+            raw.get("assessment"),
+            object_type="ResponsibilityAssessment",
+            responsibility_ref=responsibility_ref,
+            responsibility_version=responsibility_version,
+        )
+        if returned.get("id") != assessment_ref:
+            raise KernelResponsibilityDischargeError(
+                "agent-kernel assessment receipt identity rebound"
+            )
+        return KernelResponsibilityAssessmentReceipt(
+            assessment_ref=assessment_ref,
+            responsibility_ref=responsibility_ref,
+            responsibility_version=responsibility_version,
+        )
+
+    def record_discharge_decision(
+        self,
+        *,
+        decision_ref: str,
+        responsibility_ref: str,
+        responsibility_version: int,
+        assessment_ref: str,
+        basis_refs: Sequence[str],
+        policy_ref: str,
+        decided_at: datetime,
+        rationale: str,
+        created_at: datetime,
+    ) -> KernelResponsibilityDischargeDecisionReceipt:
+        decision = {
+            "id": decision_ref,
+            "object_type": "ResponsibilityDischargeDecision",
+            "responsibility_ref": responsibility_ref,
+            "responsibility_version": responsibility_version,
+            "status_at_decision": "active",
+            "assessment_ref": assessment_ref,
+            "disposition": "discharge",
+            "basis_refs": list(basis_refs),
+            "policy_ref": policy_ref,
+            "decided_at": decided_at.isoformat(),
+            "rationale": rationale,
+            "created_at": created_at.isoformat(),
+        }
+        raw = self._post_discharge(
+            "/v1/responsibilities/discharge-decisions",
+            {
+                "schema": EXPECTED_RESPONSIBILITY_DISCHARGE_DECISION_COMMAND_SCHEMA,
+                "decision": decision,
+            },
+        )
+        if raw.get("schema") != EXPECTED_RESPONSIBILITY_DISCHARGE_DECISION_RECEIPT_SCHEMA:
+            raise KernelResponsibilityDischargeError(
+                "agent-kernel returned an incompatible responsibility discharge decision receipt schema"
+            )
+        self._require_non_authoritative(raw)
+        returned = self._validate_responsibility_object(
+            raw.get("decision"),
+            object_type="ResponsibilityDischargeDecision",
+            responsibility_ref=responsibility_ref,
+            responsibility_version=responsibility_version,
+        )
+        if returned.get("id") != decision_ref or returned.get("assessment_ref") != assessment_ref:
+            raise KernelResponsibilityDischargeError(
+                "agent-kernel discharge decision receipt identity rebound"
+            )
+        status = raw.get("status_after_decision")
+        if status != "active":
+            raise KernelResponsibilityDischargeError(
+                "agent-kernel discharge decision must leave responsibility active"
+            )
+        return KernelResponsibilityDischargeDecisionReceipt(
+            decision_ref=decision_ref,
+            responsibility_ref=responsibility_ref,
+            responsibility_version=responsibility_version,
+            status_after_decision=status,
+            assessment_ref=assessment_ref,
+        )
+
+    def apply_lifecycle_transition(
+        self,
+        *,
+        transition_ref: str,
+        responsibility_ref: str,
+        responsibility_version: int,
+        decision_ref: str,
+        basis_refs: Sequence[str],
+        applied_at: datetime,
+        reason: str,
+        created_at: datetime,
+    ) -> KernelResponsibilityLifecycleTransitionReceipt:
+        transition = {
+            "id": transition_ref,
+            "object_type": "ResponsibilityLifecycleTransition",
+            "responsibility_ref": responsibility_ref,
+            "responsibility_version": responsibility_version,
+            "from_status": "active",
+            "to_status": "discharged",
+            "decision_ref": decision_ref,
+            "basis_refs": list(basis_refs),
+            "applied_at": applied_at.isoformat(),
+            "reason": reason,
+            "created_at": created_at.isoformat(),
+        }
+        raw = self._post_discharge(
+            "/v1/responsibilities/lifecycle-transitions",
+            {
+                "schema": EXPECTED_RESPONSIBILITY_LIFECYCLE_TRANSITION_COMMAND_SCHEMA,
+                "transition": transition,
+            },
+        )
+        if raw.get("schema") != EXPECTED_RESPONSIBILITY_LIFECYCLE_TRANSITION_RECEIPT_SCHEMA:
+            raise KernelResponsibilityDischargeError(
+                "agent-kernel returned an incompatible responsibility lifecycle receipt schema"
+            )
+        self._require_non_authoritative(raw)
+        returned = self._validate_responsibility_object(
+            raw.get("transition"),
+            object_type="ResponsibilityLifecycleTransition",
+            responsibility_ref=responsibility_ref,
+            responsibility_version=responsibility_version,
+        )
+        if returned.get("id") != transition_ref or returned.get("decision_ref") != decision_ref:
+            raise KernelResponsibilityDischargeError(
+                "agent-kernel lifecycle transition receipt identity rebound"
+            )
+        if returned.get("from_status") != "active" or returned.get("to_status") != "discharged":
+            raise KernelResponsibilityDischargeError(
+                "agent-kernel lifecycle transition status semantics rebound"
+            )
+        if raw.get("current_status") != "discharged":
+            raise KernelResponsibilityDischargeError(
+                "agent-kernel lifecycle transition did not confirm discharged status"
+            )
+        return KernelResponsibilityLifecycleTransitionReceipt(
+            transition_ref=transition_ref,
+            responsibility_ref=responsibility_ref,
+            responsibility_version=responsibility_version,
+            current_status="discharged",
+            decision_ref=decision_ref,
+        )
+
+    def get_responsibility_status(
+        self,
+        responsibility_ref: str,
+        *,
+        expected_version: int,
+    ) -> KernelResponsibilityStatusView:
+        escaped_ref = quote(responsibility_ref, safe="")
+        try:
+            response = httpx.get(
+                f"{self.base_url}/v1/responsibilities/{escaped_ref}/status",
+                timeout=self.timeout_seconds,
+            )
+            response.raise_for_status()
+            raw = response.json()
+        except (httpx.HTTPError, ValueError) as exc:
+            raise KernelResponsibilityDischargeError(
+                f"agent-kernel responsibility status inspection failed: {exc}"
+            ) from exc
+        if not isinstance(raw, dict):
+            raise KernelResponsibilityDischargeError(
+                "agent-kernel responsibility status must be a JSON object"
+            )
+        if raw.get("schema") != EXPECTED_RESPONSIBILITY_STATUS_SCHEMA:
+            raise KernelResponsibilityDischargeError(
+                "agent-kernel returned an incompatible responsibility status schema"
+            )
+        self._require_non_authoritative(raw)
+        if raw.get("responsibility_ref") != responsibility_ref:
+            raise KernelResponsibilityDischargeError(
+                "agent-kernel responsibility status identity rebound"
+            )
+        version = raw.get("responsibility_version")
+        if not isinstance(version, int) or isinstance(version, bool) or version != expected_version:
+            raise KernelResponsibilityDischargeError(
+                "agent-kernel responsibility status version mismatch"
+            )
+        status = raw.get("current_status")
+        if status not in {"active", "suspended", "discharged"}:
+            raise KernelResponsibilityDischargeError(
+                "agent-kernel returned unknown responsibility status"
+            )
+        return KernelResponsibilityStatusView(
+            responsibility_ref=responsibility_ref,
+            responsibility_version=version,
+            current_status=status,
+        )
+
+    def _post_discharge(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+        try:
+            response = httpx.post(
+                f"{self.base_url}{path}",
+                json=payload,
+                timeout=self.timeout_seconds,
+            )
+            response.raise_for_status()
+            raw = response.json()
+        except (httpx.HTTPError, ValueError) as exc:
+            raise KernelResponsibilityDischargeError(
+                f"agent-kernel responsibility discharge request failed: {exc}"
+            ) from exc
+        if not isinstance(raw, dict):
+            raise KernelResponsibilityDischargeError(
+                "agent-kernel responsibility discharge receipt must be a JSON object"
+            )
+        return raw
+
+    @staticmethod
+    def _require_non_authoritative(raw: dict[str, Any]) -> None:
+        if raw.get("authority_bearing") is not False:
+            raise KernelResponsibilityDischargeError(
+                "agent-kernel responsibility discharge receipt must be explicitly non-authoritative"
+            )
+
+    @staticmethod
+    def _validate_responsibility_object(
+        raw: object,
+        *,
+        object_type: str,
+        responsibility_ref: str,
+        responsibility_version: int,
+    ) -> dict[str, Any]:
+        if not isinstance(raw, dict):
+            raise KernelResponsibilityDischargeError(
+                "agent-kernel responsibility receipt object must be a JSON object"
+            )
+        if raw.get("object_type") != object_type:
+            raise KernelResponsibilityDischargeError(
+                f"agent-kernel responsibility receipt object must be {object_type}"
+            )
+        if raw.get("responsibility_ref") != responsibility_ref:
+            raise KernelResponsibilityDischargeError(
+                "agent-kernel responsibility receipt responsibility identity rebound"
+            )
+        version = raw.get("responsibility_version")
+        if not isinstance(version, int) or isinstance(version, bool) or version != responsibility_version:
+            raise KernelResponsibilityDischargeError(
+                "agent-kernel responsibility receipt version mismatch"
+            )
+        return raw
+
     @staticmethod
     def _execution_receipt(
         raw: object,
@@ -425,14 +808,26 @@ class HttpKernelResponsibilityClient:
 
 
 __all__ = [
+    "EXPECTED_RESPONSIBILITY_ASSESSMENT_COMMAND_SCHEMA",
+    "EXPECTED_RESPONSIBILITY_ASSESSMENT_RECEIPT_SCHEMA",
+    "EXPECTED_RESPONSIBILITY_DISCHARGE_DECISION_COMMAND_SCHEMA",
+    "EXPECTED_RESPONSIBILITY_DISCHARGE_DECISION_RECEIPT_SCHEMA",
     "EXPECTED_EXECUTION_COMMAND_SCHEMA",
     "EXPECTED_EXECUTION_RECEIPT_SCHEMA",
+    "EXPECTED_RESPONSIBILITY_LIFECYCLE_TRANSITION_COMMAND_SCHEMA",
+    "EXPECTED_RESPONSIBILITY_LIFECYCLE_TRANSITION_RECEIPT_SCHEMA",
+    "EXPECTED_RESPONSIBILITY_STATUS_SCHEMA",
     "HttpKernelResponsibilityClient",
     "KernelExecutionError",
     "KernelExecutionReceipt",
     "KernelExecutionStatus",
     "KernelProposalReceipt",
+    "KernelResponsibilityAssessmentReceipt",
     "KernelResponsibilityClient",
+    "KernelResponsibilityDischargeError",
+    "KernelResponsibilityDischargeDecisionReceipt",
+    "KernelResponsibilityLifecycleTransitionReceipt",
+    "KernelResponsibilityStatusView",
     "KernelSubmissionError",
     "KernelWorkAdmissionError",
     "KernelWorkAdmissionReceipt",

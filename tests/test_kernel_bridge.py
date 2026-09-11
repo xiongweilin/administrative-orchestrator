@@ -149,6 +149,7 @@ class FakeKernelClient:
 def _compatibility(
     *,
     work_admission: bool = False,
+    responsibility_discharge: bool = False,
     execution: bool = False,
     recovery: bool = False,
     evidence: bool = False,
@@ -161,6 +162,22 @@ def _compatibility(
         domain_responsibility_proposal_contract="domain-responsibility-proposal-v1",
         responsibility_work_admission_contract=(
             "responsibility-work-admission-v1" if work_admission else None
+        ),
+        responsibility_assessment_record_contract=(
+            "responsibility-assessment-record-v1" if responsibility_discharge else None
+        ),
+        responsibility_discharge_decision_record_contract=(
+            "responsibility-discharge-decision-record-v1"
+            if responsibility_discharge
+            else None
+        ),
+        responsibility_lifecycle_transition_apply_contract=(
+            "responsibility-lifecycle-transition-apply-v1"
+            if responsibility_discharge
+            else None
+        ),
+        responsibility_status_view_contract=(
+            "responsibility-status-view-v1" if responsibility_discharge else None
         ),
         bounded_domain_effect_execution_contract=(
             "bounded-domain-effect-execution-v1" if execution else None
@@ -254,6 +271,7 @@ def _projection_inputs():
 def _catalog(
     *,
     include_work_admission: bool = False,
+    include_responsibility_discharge: bool = False,
     include_execution: bool = False,
     include_recovery: bool = False,
     include_evidence: bool = False,
@@ -268,6 +286,23 @@ def _catalog(
         contracts["responsibility_work_admission"] = {
             "current": "responsibility-work-admission-v1"
         }
+    if include_responsibility_discharge:
+        contracts.update(
+            {
+                "responsibility_assessment_record": {
+                    "current": "responsibility-assessment-record-v1"
+                },
+                "responsibility_discharge_decision_record": {
+                    "current": "responsibility-discharge-decision-record-v1"
+                },
+                "responsibility_lifecycle_transition_apply": {
+                    "current": "responsibility-lifecycle-transition-apply-v1"
+                },
+                "responsibility_status": {
+                    "current": "responsibility-status-view-v1"
+                },
+            }
+        )
     if include_execution:
         contracts["bounded_domain_effect_execution"] = {
             "current": "bounded-domain-effect-execution-v1"
@@ -298,6 +333,15 @@ def test_kernel_contract_gate_preserves_shadow_compatibility_and_gates_admission
 
     with pytest.raises(KernelCompatibilityError, match="required for admission mode"):
         validate_kernel_catalog(raw, require_work_admission=True)
+
+    with pytest.raises(KernelCompatibilityError, match="responsibility_assessment_record"):
+        validate_kernel_catalog(raw, require_responsibility_discharge=True)
+
+    discharge_raw = _catalog(include_responsibility_discharge=True)
+    assert validate_kernel_catalog(
+        discharge_raw,
+        require_responsibility_discharge=True,
+    ) == _compatibility(responsibility_discharge=True)
 
     admission_raw = _catalog(include_work_admission=True)
     assert validate_kernel_catalog(

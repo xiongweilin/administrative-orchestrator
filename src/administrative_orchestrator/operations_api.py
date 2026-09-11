@@ -19,6 +19,7 @@ from .auth import AuthenticatedPrincipal, Authenticator
 from .authority import AuthorityError, AuthorityRepository, IdentityBinding
 from .authority_lifecycle import AuthorityLifecycleEvent, AuthorityLifecycleRepository
 from .candidate_admission import CandidateAdministrativeAdmissionService
+from .completion import CompletionAssessment, assess_administrative_completion
 from .config import get_settings
 from .conversation import ConversationMessageRow, ConversationRow
 from .domain import AdministrativeCase, AdministrativeRequest, CaseStatus, utcnow
@@ -31,6 +32,7 @@ from .fact_acquisition import (
 )
 from .fact_transitions import replace_facts_for_reevaluation
 from .governance import GovernanceRepository
+from .inspection import list_authorizations, list_decisions, list_realizations
 from .intake.models import (
     CandidateAdministrativeRequest,
     CandidateStatus,
@@ -39,6 +41,9 @@ from .intake.models import (
     PromotionRecord,
 )
 from .intake.repository import AssessmentConflict, IntakeRepository
+from .integrations.kernel.bridge import KernelExecutionBridge
+from .integrations.kernel.client import KernelResponsibilityDischargeError
+from .integrations.kernel.repository import KernelBridgeRepository
 from .obligations import ObligationRepository
 from .offboarding_admission import CandidateOffboardingAdmissionService
 from .onboarding_admission import (
@@ -53,7 +58,12 @@ from .policy_plane import (
     compile_offboarding_policy,
     compile_onboarding_policy,
 )
+from .responsibility_discharge import (
+    AdministrativeResponsibilityDischargeService,
+    ResponsibilityDischargeBlocked,
+)
 from .service import TransitionError, apply_policy_evaluation, start_policy_evaluation
+from .transfer import TransferRequirementRepository
 from .unit_of_work import AdministrativeUnitOfWork
 
 app = FastAPI(title="Administrative Operations API", version="0.3.0")
@@ -235,6 +245,26 @@ def case_detail(case_id: UUID, request: Request) -> dict:
     if case is None:
         raise HTTPException(status_code=404, detail="case not found")
     _require(actor, AdministrativePermission.OPERATIONS_READ)
+
+    obligation_set = _obligations.get_current(case.case_id, case.authority_epoch)
+    effects = _execution.list_effects(case.case_id, case.authority_epoch)
+    outcomes = _execution.list_outcomes(case.case_id, case.authority_epoch)
+    links = _obligations.list_links(case.case_id, case.authority_epoch)
+    fulfillments = _obligations.list_domain_state_fulfillments(
+        case.case_id, case.authority_epoch
+    )
+    completion = _case_completion_assessment(
+        obligation_set,
+        effects,
+        outcomes,
+        links=links,
+        fulfillments=fulfillments,
+    )
+    projections = KernelBridgeRepository(_store).list_projections_for_case(case.case_id)
+    transfers = TransferRequirementRepository(_store).list_for_case(
+        case.case_id, case.authority_epoch
+    )
+    authority = _authority_snapshot(case)
     audit = None
     if _access.allows(actor.principal_id, AdministrativePermission.AUDIT_READ, case=case):
         audit = _store.list_audit_events(case.case_id)
@@ -251,22 +281,242 @@ def case_detail(case_id: UUID, request: Request) -> dict:
             is not None
             else None
         ),
-        "obligations": (
-            obligations.model_dump(mode="json")
-            if (obligations := _obligations.get_current(case.case_id, case.authority_epoch))
-            is not None
-            else None
+        "obligations": obligation_set.model_dump(mode="json") if obligation_set else None,
+        "effects": [item.model_dump(mode="json") for item in effects],
+        "realizations": [
+            item.model_dump(mode="json") for item in list_realizations(_store, case.case_id)
+        ],
+        "outcomes": [item.model_dump(mode="json") for item in outcomes],
+        "decisions": [
+            item.model_dump(mode="json") for item in list_decisions(_store, case.case_id)
+        ],
+        "authorizations": [
+            item.model_dump(mode="json") for item in list_authorizations(_store, case.case_id)
+        ],
+        "termination": _termination_snapshot(case),
+        "authority": authority,
+        "transfers": [item.model_dump(mode="json") for item in transfers],
+        "domain_fulfillments": [item.model_dump(mode="json") for item in fulfillments],
+        "completion_assessment": completion.model_dump(mode="json"),
+        "kernel_projections": [_kernel_projection_snapshot(item) for item in projections],
+        "responsibility_discharge": _responsibility_snapshot(
+            case,
+            obligation_set,
+            completion,
+            projections,
         ),
-        "effects": [
-            item.model_dump(mode="json")
-            for item in _execution.list_effects(case.case_id, case.authority_epoch)
-        ],
-        "outcomes": [
-            item.model_dump(mode="json")
-            for item in _execution.list_outcomes(case.case_id, case.authority_epoch)
-        ],
         "audit": audit,
     }
+
+
+def _case_completion_assessment(
+    obligation_set,
+    effects,
+    outcomes,
+    *,
+    links,
+    fulfillments,
+) -> CompletionAssessment:
+    if obligation_set is None:
+        return CompletionAssessment(
+            requirement_id="missing-current-obligation-set",
+            satisfied=False,
+            blocking_reasons=("missing current obligation set",),
+        )
+    return assess_administrative_completion(
+        obligation_set,
+        effects,
+        outcomes,
+        links=links,
+        fulfillments=fulfillments,
+    )
+
+
+def _termination_snapshot(case: AdministrativeCase) -> dict[str, Any]:
+    facts = case.fact_snapshot.facts if case.fact_snapshot is not None else {}
+    return {
+        "termination_status": facts.get("termination_status"),
+        "termination_effective_at": facts.get("termination_effective_at"),
+        "employment_episode_ref": facts.get("employment_episode_ref"),
+        "authoritative_fact_snapshot": (
+            case.fact_snapshot.model_dump(mode="json") if case.fact_snapshot else None
+        ),
+    }
+
+
+def _authority_snapshot(case: AdministrativeCase) -> dict[str, list[dict[str, Any]]]:
+    facts = case.fact_snapshot.facts if case.fact_snapshot is not None else {}
+    principal_ids = {
+        str(value)
+        for key, value in facts.items()
+        if key.endswith("principal_id") and isinstance(value, str) and value.strip()
+    }
+    principal_ids.add(case.requester_principal_id)
+    bindings: list[dict[str, Any]] = []
+    roles: list[dict[str, Any]] = []
+    delegations: list[dict[str, Any]] = []
+    observed_at = utcnow()
+    for principal_id in sorted(principal_ids):
+        bindings.extend(
+            item.model_dump(mode="json")
+            for item in _authority.list_current_identity_bindings(
+                principal_id, at=observed_at
+            )
+        )
+        roles.extend(
+            item.model_dump(mode="json")
+            for item in _authority.list_current_role_assignments(
+                principal_id, at=observed_at
+            )
+        )
+        delegations.extend(
+            item.model_dump(mode="json")
+            for item in _authority.list_current_delegations_involving(
+                principal_id, at=observed_at
+            )
+        )
+    return {
+        "bindings": _dedupe_json_records(bindings),
+        "role_assignments": _dedupe_json_records(roles),
+        "delegations": _dedupe_json_records(delegations),
+    }
+
+
+def _kernel_projection_snapshot(projection) -> dict[str, Any]:
+    return {
+        "projection_id": str(projection.projection_id),
+        "obligation_id": str(projection.obligation_id),
+        "authority_epoch": projection.authority_epoch,
+        "status": projection.status.value,
+        "responsibility_ref": projection.kernel_responsibility_ref,
+        "responsibility_version": projection.admission_payload.get("responsibility_version"),
+        "admission_ref": projection.kernel_admission_ref,
+        "assessment_ref": projection.kernel_assessment_ref,
+        "proposal_ref": projection.kernel_proposal_ref,
+        "work_ref": projection.kernel_work_ref,
+        "execution": {
+            "status": (
+                projection.kernel_execution_status.value
+                if projection.kernel_execution_status is not None
+                else None
+            ),
+            "execution_ref": projection.kernel_execution_ref,
+            "run_ref": projection.kernel_run_ref,
+            "request_ref": projection.kernel_request_ref,
+            "authorization_ref": projection.kernel_authorization_ref,
+            "provider_id": projection.kernel_provider_id,
+            "action_ref": projection.kernel_action_ref,
+            "outcome_ref": projection.kernel_outcome_ref,
+            "evidence_ref": projection.kernel_evidence_ref,
+            "responsibility_ref": projection.kernel_execution_responsibility_ref,
+            "processed_at": (
+                projection.kernel_execution_processed_at.isoformat()
+                if projection.kernel_execution_processed_at is not None
+                else None
+            ),
+        },
+    }
+
+
+def _responsibility_snapshot(
+    case: AdministrativeCase,
+    obligation_set,
+    completion: CompletionAssessment,
+    projections,
+) -> dict[str, Any]:
+    if obligation_set is None:
+        return {
+            "status": "pending",
+            "blocker": "missing_current_obligation_set",
+            "responsibilities": [],
+            "completion_satisfied": completion.satisfied,
+        }
+    if not completion.satisfied:
+        return {
+            "status": "pending",
+            "blocker": "completion_assessment_not_satisfied",
+            "responsibilities": [],
+            "completion_satisfied": False,
+        }
+
+    bridge = None
+    if _settings.kernel_bridge_mode != "disabled":
+        bridge = KernelExecutionBridge(
+            _store,
+            settings=_settings,
+            require_responsibility_discharge=True,
+        )
+    if bridge is None or not bridge.cutover:
+        return {
+            "status": "pending",
+            "blocker": "kernel_cutover_required",
+            "responsibilities": [],
+            "completion_satisfied": completion.satisfied,
+        }
+
+    service = AdministrativeResponsibilityDischargeService(_store, bridge)
+    try:
+        handles = service.project_responsibility_set(case, obligation_set)
+    except ResponsibilityDischargeBlocked as exc:
+        return {
+            "status": "pending",
+            "blocker": str(exc),
+            "responsibilities": [],
+            "completion_satisfied": completion.satisfied,
+        }
+
+    client = bridge.client()
+    observations: list[dict[str, Any]] = []
+    for handle in handles:
+        assessment_ref, decision_ref, transition_ref = service.discharge_chain_refs(
+            case, handle
+        )
+        current_status = "unknown"
+        blocker = None
+        try:
+            current_status = client.get_responsibility_status(
+                handle.responsibility_ref,
+                expected_version=handle.responsibility_version,
+            ).current_status
+        except KernelResponsibilityDischargeError:
+            blocker = "kernel_responsibility_status_unavailable"
+        observations.append(
+            {
+                "responsibility_ref": handle.responsibility_ref,
+                "responsibility_version": handle.responsibility_version,
+                "obligation_ids": [str(item) for item in handle.obligation_ids],
+                "current_status": current_status,
+                "assessment_ref": assessment_ref,
+                "decision_ref": decision_ref,
+                "transition_ref": transition_ref,
+                "blocker": blocker,
+            }
+        )
+
+    statuses = {item["current_status"] for item in observations}
+    if not observations or statuses == {"discharged"}:
+        overall = "discharged"
+        blocker = None
+    else:
+        overall = "pending"
+        blocker = next(
+            (item["blocker"] for item in observations if item["blocker"]),
+            "responsibility_set_not_discharged",
+        )
+    return {
+        "status": overall,
+        "blocker": blocker,
+        "completion_satisfied": completion.satisfied,
+        "responsibilities": observations,
+    }
+
+
+def _dedupe_json_records(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    unique: dict[str, dict[str, Any]] = {}
+    for record in records:
+        key = repr(sorted(record.items()))
+        unique[key] = record
+    return [unique[key] for key in sorted(unique)]
 
 
 @app.get("/v1/operations/intake/candidates", response_model=list[IntakeQueueItem])
