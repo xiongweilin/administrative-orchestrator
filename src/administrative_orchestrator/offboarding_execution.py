@@ -124,22 +124,36 @@ class OffboardingExecutionEngine(OnboardingExecutionEngine):
         if not validation.valid:
             raise TransitionError("governance basis is stale: " + "; ".join(validation.reasons))
 
-        transfers = derive_transfer_requirements(
-            case,
-            policy,
-            self.authority,
-            governance_basis_id=basis.basis_id,
+        existing_obligation_set = self.obligations.get_current(
+            case.case_id, case.authority_epoch
         )
-        self.transfers.put_all(transfers)
-        obligation_set = derive_offboarding_obligations(
-            case,
-            evaluation,
-            policy,
-            self.authority,
-            governance_basis_id=basis.basis_id,
-            transfer_requirements=transfers,
-        )
-        self.obligations.put(obligation_set)
+        if existing_obligation_set is not None:
+            # Planning can partially fulfill Administrative domain-state
+            # obligations before a later Kernel Work admission fails. Reuse
+            # the immutable set for this authority epoch on replay; deriving
+            # from the already-mutated authority graph would produce a
+            # different set and incorrectly block recovery.
+            obligation_set = existing_obligation_set
+            transfers = tuple(
+                self.transfers.list_for_case(case.case_id, case.authority_epoch)
+            )
+        else:
+            transfers = derive_transfer_requirements(
+                case,
+                policy,
+                self.authority,
+                governance_basis_id=basis.basis_id,
+            )
+            self.transfers.put_all(transfers)
+            obligation_set = derive_offboarding_obligations(
+                case,
+                evaluation,
+                policy,
+                self.authority,
+                governance_basis_id=basis.basis_id,
+                transfer_requirements=transfers,
+            )
+            self.obligations.put(obligation_set)
         self._fulfill_domain_state(
             case, obligation_set, transfers, transfer_phase=False
         )
