@@ -221,3 +221,21 @@ def test_recovery_that_does_not_establish_success_stays_nonretryable_and_never_f
     assert execution.retryable is False
     assert bridge._recovery.recover_calls == 1
     assert legacy.execute_calls == 0
+
+
+def test_rejected_work_admission_is_definitive_failure_and_never_falls_back() -> None:
+    projection = _projection()
+    projection.status = KernelProjectionStatus.REJECTED
+    projection.kernel_work_admission_status = "portfolio-rejected"
+    projection.kernel_execution_status = None
+    projection.kernel_execution_ref = None
+    bridge = FakeBridge(projection, _resolution())
+    legacy = ForbiddenLegacyProvider()
+    provider = KernelCutoverEffectProvider(legacy, bridge)
+
+    execution = provider.execute(_effect(projection), {})
+
+    assert execution.status is ProviderExecutionStatus.FAILED
+    assert execution.retryable is False
+    assert "portfolio-rejected" in (execution.error or "")
+    assert legacy.execute_calls == 0
