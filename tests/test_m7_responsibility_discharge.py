@@ -35,6 +35,7 @@ from administrative_orchestrator.integrations.kernel.models import (
     KernelShadowProjection,
     KernelWorkAdmissionStatus,
 )
+from administrative_orchestrator.integrations.kernel.recovery import KernelRecoveryError
 from administrative_orchestrator.obligations import (
     AdministrativeObligation,
     AdministrativeObligationSet,
@@ -262,11 +263,12 @@ class _Client:
 class _Bridge:
     cutover = True
 
-    def __init__(self, projections, client):
+    def __init__(self, projections, client, recovery_client=None):
         self.repository = SimpleNamespace(
             list_projections_for_case=lambda case_id: projections
         )
         self._client = client
+        self._recovery_client = recovery_client
         self.compatibility_calls = 0
 
     def compatibility(self):
@@ -275,6 +277,34 @@ class _Bridge:
 
     def client(self):
         return self._client
+
+    def recovery_client(self):
+        if self._recovery_client is None:
+            raise AssertionError("test bridge recovery client was not configured")
+        return self._recovery_client
+
+
+class _RecoveryClient:
+    def __init__(
+        self,
+        *,
+        responsibility_ref: str,
+        status: str = "recovered-completed",
+        error: Exception | None = None,
+    ):
+        self.responsibility_ref = responsibility_ref
+        self.status = status
+        self.error = error
+        self.inspect_calls: list[tuple[str, str | None]] = []
+
+    def inspect(self, execution_ref, *, expected_work_ref=None):
+        self.inspect_calls.append((execution_ref, expected_work_ref))
+        if self.error is not None:
+            raise self.error
+        return SimpleNamespace(
+            current_status=self.status,
+            responsibility_ref=self.responsibility_ref,
+        )
 
 
 def test_completion_must_be_satisfied_before_kernel_discharge() -> None:
@@ -318,6 +348,142 @@ def test_assessment_and_decision_keep_active_until_transition_then_discharge() -
     assert client.decision_calls == ["resp:1"]
     assert client.transition_calls == ["resp:1"]
     assert client.status_calls.count("resp:1") == 4
+
+
+def test_recovered_unknown_execution_can_discharge_without_rewriting_projection() -> None:
+    store, case, obligation = _fixture()
+    projection = _projection(case, obligation.obligation_id, ref="resp:recovered").model_copy(
+        update={
+            "status": KernelProjectionStatus.ADMITTED,
+            "kernel_execution_status": KernelExecutionStatus.EXECUTION_UNKNOWN,
+            "kernel_execution_ref": "execution:recovered",
+            "kernel_execution_responsibility_ref": None,
+            "kernel_outcome_ref": None,
+            "kernel_evidence_ref": None,
+            "kernel_execution_processed_at": None,
+        }
+    )
+    client = _Client()
+    recovery = _RecoveryClient(responsibility_ref="resp:recovered")
+    bridge = _Bridge([projection], client, recovery)
+
+    result = AdministrativeResponsibilityDischargeService(store, bridge).discharge(case)
+
+    assert result.status is ResponsibilityDischargeStatus.DISCHARGED
+    assert recovery.inspect_calls == [("execution:recovered", "work:resp:recovered")]
+    assert projection.status is KernelProjectionStatus.ADMITTED
+    assert projection.kernel_execution_status is KernelExecutionStatus.EXECUTION_UNKNOWN
+    assert client.transition_calls == ["resp:recovered"]
+
+
+def test_historical_recovered_unknown_execution_is_verified_before_discharge() -> None:
+    store, case, obligation = _fixture()
+    historical = _projection(case, uuid4(), ref="resp:old-unknown", epoch=1).model_copy(
+        update={
+            "status": KernelProjectionStatus.ADMITTED,
+            "kernel_execution_status": KernelExecutionStatus.EXECUTION_UNKNOWN,
+            "kernel_execution_ref": "execution:old-unknown",
+            "kernel_execution_responsibility_ref": None,
+            "kernel_outcome_ref": None,
+            "kernel_evidence_ref": None,
+            "kernel_execution_processed_at": None,
+        }
+    )
+    current = _projection(case, obligation.obligation_id, ref="resp:new-completed")
+    client = _Client()
+    recovery = _RecoveryClient(responsibility_ref="resp:old-unknown")
+    bridge = _Bridge([historical, current], client, recovery)
+
+    result = AdministrativeResponsibilityDischargeService(store, bridge).discharge(case)
+
+    assert result.status is ResponsibilityDischargeStatus.DISCHARGED
+    assert recovery.inspect_calls == [("execution:old-unknown", "work:resp:old-unknown")]
+    assert client.transition_calls == ["resp:new-completed", "resp:old-unknown"]
+    assert historical.status is KernelProjectionStatus.ADMITTED
+    assert historical.kernel_execution_status is KernelExecutionStatus.EXECUTION_UNKNOWN
+
+
+def _unknown_current_projection(case, obligation_id, *, ref: str):
+    return _projection(case, obligation_id, ref=ref).model_copy(
+        update={
+            "status": KernelProjectionStatus.ADMITTED,
+            "kernel_execution_status": KernelExecutionStatus.EXECUTION_UNKNOWN,
+            "kernel_execution_ref": f"execution:{ref}",
+            "kernel_execution_responsibility_ref": None,
+            "kernel_outcome_ref": None,
+            "kernel_evidence_ref": None,
+            "kernel_execution_processed_at": None,
+        }
+    )
+
+
+def test_recovery_pending_blocks_discharge_without_kernel_mutation() -> None:
+    store, case, obligation = _fixture()
+    projection = _unknown_current_projection(case, obligation.obligation_id, ref="resp:pending")
+    client = _Client()
+    recovery = _RecoveryClient(responsibility_ref="resp:pending", status="recovery-pending")
+    bridge = _Bridge([projection], client, recovery)
+
+    result = AdministrativeResponsibilityDischargeService(store, bridge).discharge(case)
+
+    assert result.status is ResponsibilityDischargeStatus.PENDING
+    assert result.blocker == "historical_external_responsibility_not_completed"
+    assert recovery.inspect_calls == [("execution:resp:pending", "work:resp:pending")]
+    assert client.transition_calls == []
+
+
+def test_recovery_transport_error_blocks_discharge_without_kernel_mutation() -> None:
+    store, case, obligation = _fixture()
+    projection = _unknown_current_projection(case, obligation.obligation_id, ref="resp:error")
+    client = _Client()
+    recovery = _RecoveryClient(
+        responsibility_ref="resp:error",
+        error=KernelRecoveryError("simulated resolution outage"),
+    )
+    bridge = _Bridge([projection], client, recovery)
+
+    result = AdministrativeResponsibilityDischargeService(store, bridge).discharge(case)
+
+    assert result.status is ResponsibilityDischargeStatus.PENDING
+    assert result.blocker == "kernel_recovery_resolution_unavailable:KernelRecoveryError"
+    assert client.transition_calls == []
+
+
+def test_recovery_responsibility_identity_mismatch_blocks_discharge() -> None:
+    store, case, obligation = _fixture()
+    projection = _unknown_current_projection(case, obligation.obligation_id, ref="resp:expected")
+    client = _Client()
+    recovery = _RecoveryClient(responsibility_ref="resp:other")
+    bridge = _Bridge([projection], client, recovery)
+
+    result = AdministrativeResponsibilityDischargeService(store, bridge).discharge(case)
+
+    assert result.status is ResponsibilityDischargeStatus.PENDING
+    assert result.blocker == "kernel_recovery_responsibility_identity_rebound"
+    assert client.transition_calls == []
+
+
+def test_noncompleted_admitted_projection_blocks_discharge() -> None:
+    store, case, obligation = _fixture()
+    projection = _projection(case, obligation.obligation_id, ref="resp:not-executed").model_copy(
+        update={
+            "status": KernelProjectionStatus.ADMITTED,
+            "kernel_execution_status": None,
+            "kernel_execution_ref": None,
+            "kernel_execution_responsibility_ref": None,
+            "kernel_outcome_ref": None,
+            "kernel_evidence_ref": None,
+            "kernel_execution_processed_at": None,
+        }
+    )
+    client = _Client()
+    bridge = _Bridge([projection], client)
+
+    result = AdministrativeResponsibilityDischargeService(store, bridge).discharge(case)
+
+    assert result.status is ResponsibilityDischargeStatus.PENDING
+    assert result.blocker == "current_external_responsibility_not_completed"
+    assert client.transition_calls == []
 
 
 def test_historical_responsibility_is_not_ignored() -> None:
