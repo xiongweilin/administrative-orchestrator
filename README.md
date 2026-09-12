@@ -97,9 +97,9 @@ Planned vertical slices:
 
 The first executable slice is **employee onboarding** because it forces multi-actor coordination, long-lived state, identity, policy, approvals, multiple external systems, semantic verification, and bounded completion.
 
-# Current state: M6 accepted; M7 in progress
+# Current state: M6 and M7 accepted for their recorded staging scopes
 
-M0–M4 established the semantic foundation, durable governed execution, organizational authority/policy, administrative correctness, and Agent Kernel convergence/cut-over invariants. M5 makes that reference architecture production-shaped without collapsing those ownership boundaries. M6 added trusted perception and admission and is accepted for the recorded staging scope (`docs/acceptance/M6-staging-acceptance.md`). M7 is in progress on the employee lifecycle responsibility boundary (ADR 0004, `docs/milestones/M7.md`).
+M0–M4 established the semantic foundation, durable governed execution, organizational authority/policy, administrative correctness, and Agent Kernel convergence/cut-over invariants. M5 makes that reference architecture production-shaped without collapsing those ownership boundaries. M6 added trusted perception and admission and is accepted for the recorded staging scope (`docs/acceptance/M6-staging-acceptance.md`). M7 adds the employee lifecycle responsibility boundary and is accepted for the recorded isolated real-staging scope (`docs/acceptance/M7-staging-acceptance.md`, ADR 0004, `docs/milestones/M7.md`).
 
 The M5 implementation now includes:
 
@@ -151,6 +151,15 @@ exercised on merged revisions and recorded in
 alone still do not constitute real provider results; see that record for the
 exact staging evidence and residual risks.
 
+M7 is **complete for the recorded isolated staging scope**: the real
+employee-offboarding intake, independent HR authority, effective-time wait,
+Kernel-owned IAM/HRIS effects, independent verification, governance
+counterexamples, recovery boundary, completion, and explicit responsibility
+discharge are recorded in `docs/acceptance/M7-staging-acceptance.md`. The
+record keeps verifier-unavailable partial physical progress distinct from
+completion and leaves M6 containers stopped as an intentional topology
+boundary.
+
 See:
 
 - `docs/architecture.md` for the current M4/M5 ownership topology;
@@ -164,7 +173,8 @@ See:
 - `docs/production-operations.md` for deployment, observability, backup/restore, incident, and staging procedures.
 - `docs/acceptance/M6-staging-acceptance.md` for the recorded real-staging evidence.
 - `docs/acceptance/M6-staging-acceptance-template.md` for the no-secrets/no-body template.
-- `docs/acceptance/M7-staging-acceptance-template.md` for the employee-lifecycle staging evidence record.
+- `docs/acceptance/M7-staging-acceptance.md` for the recorded M7 real-staging evidence and closure.
+- `docs/acceptance/M7-staging-acceptance-template.md` for the no-secrets/no-body template.
 
 ## Development principles
 
