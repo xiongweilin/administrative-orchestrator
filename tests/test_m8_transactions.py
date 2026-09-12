@@ -7,6 +7,7 @@ from uuid import uuid4
 import pytest
 
 from administrative_orchestrator.admission import IntakeAssessmentService
+from administrative_orchestrator.authority import ApprovalSatisfaction
 from administrative_orchestrator.domain import (
     AdministrativeRequest,
     CaseStatus,
@@ -14,7 +15,10 @@ from administrative_orchestrator.domain import (
     DecisionDisposition,
     FactSnapshot,
     PolicyRef,
+    Principal,
+    PrincipalKind,
     ReopenReason,
+    RoleAssignment,
 )
 from administrative_orchestrator.effect_provider import (
     ProviderExecutionResult,
@@ -40,6 +44,7 @@ from administrative_orchestrator.financial_admission import (
     CandidateProcurementAdmissionService,
 )
 from administrative_orchestrator.financial_execution import FinancialExecutionEngine
+from administrative_orchestrator.governance import GovernanceRepository
 from administrative_orchestrator.intake.models import (
     CandidateAdministrativeRequest,
     CandidateAuthority,
@@ -68,7 +73,10 @@ from administrative_orchestrator.service import (
     record_decision,
     start_policy_evaluation,
 )
-from administrative_orchestrator.transaction_repository import TransactionRepository
+from administrative_orchestrator.transaction_repository import (
+    TransactionRecordConflict,
+    TransactionRepository,
+)
 from administrative_orchestrator.unit_of_work import AdministrativeUnitOfWork
 from administrative_orchestrator.verification import (
     VerificationDisposition,
@@ -612,3 +620,180 @@ def test_financial_execution_waits_for_qualification_then_replays() -> None:
     completed = FinancialExecutionEngine(store, provider).run(waiting.case_id)
     assert completed.status is CaseStatus.COMPLETED
     assert len(provider.payloads) == 2
+
+
+def test_superseding_mismatch_cannot_satisfy_financial_gate() -> None:
+    store = SqlStore("sqlite+pysqlite:///:memory:")
+    store.init_schema()
+    uow = AdministrativeUnitOfWork(store)
+    request, original, facts = _financial_case()
+    store.create_case(request, original)
+    ready = start_policy_evaluation(original)
+    evaluation = ProcurementPolicy(original.policy_ref).evaluate(facts)
+    awaiting = apply_policy_evaluation(ready, evaluation)
+    uow.apply_policy_transition(original, awaiting, evaluation)
+    decision = Decision(
+        case_id=awaiting.case_id,
+        case_version=awaiting.version,
+        authority_epoch=awaiting.authority_epoch,
+        principal_id="person:approver",
+        decision_role="procurement_approver",
+        disposition=DecisionDisposition.APPROVE,
+        rationale="bounded transaction preparation approved",
+        policy_ref=original.policy_ref,
+    )
+    authorized = record_decision(awaiting, decision)
+    uow.apply_decision_transition(
+        awaiting,
+        authorized,
+        decision,
+        organization_scope="*",
+    )
+
+    repository = TransactionRepository(store)
+    qualified = repository.append_assessment(
+        TransactionQualificationAssessment(
+            case_id=authorized.case_id,
+            authority_epoch=authorized.authority_epoch,
+            assessment_kind="vendor_qualification",
+            input_refs=("vendor:42",),
+            rule_ref="m8-vendor-master-v1",
+            result=TransactionQualificationResult.QUALIFIED,
+        )
+    )
+    mismatch = repository.append_assessment(
+        TransactionQualificationAssessment(
+            case_id=authorized.case_id,
+            authority_epoch=authorized.authority_epoch,
+            assessment_kind="vendor_qualification",
+            supersedes_assessment_id=qualified.assessment_id,
+            input_refs=("vendor:42",),
+            rule_ref="m8-vendor-master-v1",
+            result=TransactionQualificationResult.MISMATCH,
+            blocking_reasons=("vendor record changed",),
+        )
+    )
+    assert mismatch.supersedes_assessment_id == qualified.assessment_id
+    assert [item.assessment_id for item in repository.list_current_assessments(
+        authorized.case_id, authorized.authority_epoch
+    )] == [mismatch.assessment_id]
+
+    provider = _FinancialProvider()
+    blocked = FinancialExecutionEngine(store, provider).run(authorized.case_id)
+    assert blocked.status is CaseStatus.AUTHORIZED
+    assert provider.payloads == {}
+    assert ObligationRepository(store).get_current(
+        blocked.case_id, blocked.authority_epoch
+    ) is None
+
+
+def test_new_same_kind_qualification_requires_explicit_supersession() -> None:
+    store = SqlStore("sqlite+pysqlite:///:memory:")
+    store.init_schema()
+    request, original, _ = _financial_case()
+    store.create_case(request, original)
+    repository = TransactionRepository(store)
+    assessment = TransactionQualificationAssessment(
+        case_id=original.case_id,
+        authority_epoch=original.authority_epoch,
+        assessment_kind="vendor_qualification",
+        input_refs=("vendor:42",),
+        rule_ref="m8-vendor-master-v1",
+        result=TransactionQualificationResult.QUALIFIED,
+    )
+    repository.append_assessment(assessment)
+    with pytest.raises(TransactionRecordConflict, match="must supersede"):
+        repository.append_assessment(
+            assessment.model_copy(update={"assessment_id": uuid4()})
+        )
+
+
+def test_bound_governance_basis_becomes_stale_after_qualification_supersession() -> None:
+    store = SqlStore("sqlite+pysqlite:///:memory:")
+    store.init_schema()
+    PolicyRepository(store).put_version(
+        default_procurement_policy_version().model_copy(update={"owner": "test"})
+    )
+    uow = AdministrativeUnitOfWork(store)
+    uow.authority.put_principal(
+        Principal(
+            principal_id="person:approver",
+            kind=PrincipalKind.PERSON,
+            display_name="approver",
+        )
+    )
+    uow.authority.put_role_assignment(
+        RoleAssignment(
+            principal_id="person:approver",
+            role="procurement_approver",
+            organization_scope="*",
+            valid_from=datetime(2026, 9, 1, tzinfo=UTC),
+        )
+    )
+    request, original, facts = _financial_case()
+    store.create_case(request, original)
+    ready = start_policy_evaluation(original)
+    evaluation = ProcurementPolicy(original.policy_ref).evaluate(facts)
+    awaiting = apply_policy_evaluation(ready, evaluation)
+    uow.apply_policy_transition(original, awaiting, evaluation)
+    decision = Decision(
+        case_id=awaiting.case_id,
+        case_version=awaiting.version,
+        authority_epoch=awaiting.authority_epoch,
+        principal_id="person:approver",
+        decision_role="procurement_approver",
+        disposition=DecisionDisposition.APPROVE,
+        rationale="bounded transaction preparation approved",
+        policy_ref=original.policy_ref,
+    )
+    authorized = record_decision(awaiting, decision)
+    uow.apply_decision_transition(
+        awaiting,
+        authorized,
+        decision,
+        organization_scope="*",
+        approval_satisfaction=ApprovalSatisfaction(
+            satisfaction_id=uuid4(),
+            case_id=authorized.case_id,
+            authority_epoch=authorized.authority_epoch,
+            policy_ref=original.policy_ref,
+            decision_ids=(decision.decision_id,),
+            satisfied_roles=("procurement_approver",),
+        ),
+    )
+    repository = TransactionRepository(store)
+    qualified = repository.append_assessment(
+        TransactionQualificationAssessment(
+            case_id=authorized.case_id,
+            authority_epoch=authorized.authority_epoch,
+            assessment_kind="vendor_qualification",
+            input_refs=("vendor:42",),
+            rule_ref="m8-vendor-master-v1",
+            result=TransactionQualificationResult.QUALIFIED,
+        )
+    )
+    provider = _FinancialProvider()
+    completed = FinancialExecutionEngine(store, provider).run(authorized.case_id)
+    assert completed.status is CaseStatus.COMPLETED
+    basis = GovernanceRepository(store).get_current_for_case(
+        completed.case_id, completed.authority_epoch
+    )
+    assert basis is not None
+    assert basis.transaction_qualifications
+
+    repository.append_assessment(
+        TransactionQualificationAssessment(
+            case_id=authorized.case_id,
+            authority_epoch=authorized.authority_epoch,
+            assessment_kind="vendor_qualification",
+            supersedes_assessment_id=qualified.assessment_id,
+            input_refs=("vendor:42",),
+            rule_ref="m8-vendor-master-v1",
+            result=TransactionQualificationResult.MISMATCH,
+            blocking_reasons=("vendor record changed",),
+        )
+    )
+    current_case = store.get_case(authorized.case_id)
+    validation = GovernanceRepository(store).revalidate(basis, current_case)
+    assert not validation.valid
+    assert "transaction qualification basis changed" in validation.reasons

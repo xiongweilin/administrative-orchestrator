@@ -215,6 +215,7 @@ class TransactionQualificationAssessment(UtcModel):
     case_id: UUID
     authority_epoch: int = Field(ge=1)
     assessment_kind: str = Field(min_length=1, max_length=128)
+    supersedes_assessment_id: UUID | None = None
     input_refs: tuple[str, ...] = Field(min_length=1)
     rule_ref: str = Field(min_length=1, max_length=512)
     result: TransactionQualificationResult
