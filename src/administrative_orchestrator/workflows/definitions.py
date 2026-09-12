@@ -10,6 +10,7 @@ from ..config import get_settings
 from ..domain import CaseStatus, utcnow
 from ..effect_provider import EffectProvider, HttpEffectProvider
 from ..fact_acquisition import build_hris_source
+from ..financial_execution import FINANCIAL_CASE_KINDS, FinancialExecutionEngine
 from ..integrations.kernel.bridge import KernelExecutionBridge
 from ..integrations.kernel.effect_provider import KernelCutoverEffectProvider
 from ..integrations.kernel.onboarding import prepare_onboarding_kernel_shadow
@@ -59,7 +60,11 @@ def drive_onboarding_case_step(case_id: str) -> dict[str, Any]:
         bridge: KernelExecutionBridge | None = None
         if settings.kernel_bridge_mode != "disabled":
             bridge = KernelExecutionBridge(store, settings=settings)
-            prepare_onboarding_kernel_shadow(store, UUID(case_id), bridge=bridge)
+            # Financial effects are dependency ordered by the execution
+            # engine.  Prepare their Kernel projection at dispatch time so a
+            # dependent confirmation intent can freeze the prior draft ref.
+            if case.case_kind not in FINANCIAL_CASE_KINDS:
+                prepare_onboarding_kernel_shadow(store, UUID(case_id), bridge=bridge)
 
         if not settings.external_effects_enabled:
             return {
@@ -76,10 +81,13 @@ def drive_onboarding_case_step(case_id: str) -> dict[str, Any]:
         if bridge is not None and bridge.cutover:
             provider = KernelCutoverEffectProvider(provider, bridge)
 
-        hris_source = build_hris_source(settings)
-        if hris_source is None:
-            engine = OnboardingExecutionEngine(store, provider)
+        if case.case_kind in FINANCIAL_CASE_KINDS:
+            engine = FinancialExecutionEngine(store, provider)
         else:
+            hris_source = build_hris_source(settings)
+        if case.case_kind not in FINANCIAL_CASE_KINDS and hris_source is None:
+            engine = OnboardingExecutionEngine(store, provider)
+        elif case.case_kind not in FINANCIAL_CASE_KINDS:
             engine = ProductionTrustOnboardingExecutionEngine(
                 store,
                 provider,

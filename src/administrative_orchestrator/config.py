@@ -7,9 +7,8 @@ from pydantic import SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 DEFAULT_KERNEL_RESPONSIBILITY_ADMISSION_POLICY_REF = (
-    "responsibility-admission:administrative-public@2"
+    "responsibility-admission:administrative-public@3"
 )
-SUPPORTED_KERNEL_REVISION = "1f8497087b6a95632b1ae179d9ffd6c3e8fe6bb8"
 
 
 class Settings(BaseSettings):
@@ -40,11 +39,13 @@ class Settings(BaseSettings):
     feishu_app_secret: SecretStr | None = None
     feishu_app_secret_file: str = ""
     feishu_verification_token: SecretStr | None = None
+    feishu_verification_token_file: str = ""
     # Secret used only by the trusted gateway-to-Administrative metadata
     # handoff. Feishu's official long connection does not provide the HTTP
     # callback token on every event, so this transport credential is separate
     # from the callback verification material.
     feishu_ingress_shared_secret: SecretStr | None = None
+    feishu_ingress_shared_secret_file: str = ""
     feishu_encrypt_key: SecretStr | None = None
     # Explicit test/manual override. Production/staging should use the app
     # credential pair above and the dynamic tenant-token provider.
@@ -63,6 +64,20 @@ class Settings(BaseSettings):
     intake_model_instruction: str = (
         "Extract a candidate administrative intent and candidate facts only. "
         "Never authorize, execute, or communicate on behalf of the system. "
+        "For document-driven M8 work, use only these candidate intent values: "
+        "procurement-request, invoice-ap-preparation, expense-reimbursement, or unknown. "
+        "For procurement-request documents, use only these additional candidate fact keys: "
+        "description, requested_quantity, estimated_amount, candidate_vendor, vendor_ref, "
+        "vendor_tax_id, cost_center, needed_by, quote_ref. "
+        "For invoice-ap-preparation documents, use only these additional candidate fact keys: "
+        "vendor_name, vendor_ref, vendor_tax_id, invoice_number, invoice_date, total, "
+        "po_number, line_items, document_revision, document_digest. "
+        "For expense-reimbursement documents, use only these additional candidate fact keys: "
+        "employee_ref, merchant, expense_date, amount, category, business_purpose, receipt_ref. "
+        "For monetary values use an object with amount as a decimal string and currency as a "
+        "three-letter code; never use binary floating point. For quantities use decimal strings. "
+        "Use evidence_span_refs only from the evidence catalog included in the source text. "
+        "Candidate facts are claims, never authoritative facts. "
         "For employee-onboarding requests, use only these candidate fact keys: "
         "employee_ref, department_ref, manager_principal_id, start_date, "
         "employment_type, requested_systems, requires_privileged_access. "
@@ -80,7 +95,9 @@ class Settings(BaseSettings):
     kernel_bridge_mode: Literal["disabled", "shadow", "admission", "cutover"] = "disabled"
     kernel_base_url: str = "http://127.0.0.1:8020"
     kernel_contract_timeout_seconds: float = 3.0
-    kernel_supported_revision: str = SUPPORTED_KERNEL_REVISION
+    # Deployment supplies this from the canonical AGENT_KERNEL_REF value.
+    # There is intentionally no application-owned revision default.
+    kernel_supported_revision: str = ""
     kernel_responsibility_admission_policy_ref: str = (
         DEFAULT_KERNEL_RESPONSIBILITY_ADMISSION_POLICY_REF
     )
@@ -117,6 +134,10 @@ class Settings(BaseSettings):
     odoo_writer_secret_env: str = "ADMIN_ODOO_WRITER_SECRET"
     odoo_verifier_username: str = ""
     odoo_verifier_secret_env: str = "ADMIN_ODOO_VERIFIER_SECRET"
+    odoo_financial_writer_username: str = ""
+    odoo_financial_writer_secret_env: str = "ADMIN_ODOO_FINANCIAL_WRITER_SECRET"
+    odoo_financial_verifier_username: str = ""
+    odoo_financial_verifier_secret_env: str = "ADMIN_ODOO_FINANCIAL_VERIFIER_SECRET"
     odoo_request_ref_field: str = "x_administrative_request_ref"
     odoo_deactivate_request_ref_field: str = (
         "x_administrative_deactivate_request_ref"
@@ -127,6 +148,11 @@ class Settings(BaseSettings):
     )
     odoo_employment_episode_field: str = "x_administrative_employment_episode_ref"
     odoo_principal_id_field: str = "x_administrative_principal_id"
+    odoo_transaction_request_ref_field: str = "x_administrative_transaction_request_ref"
+    odoo_transaction_confirm_request_ref_field: str = (
+        "x_administrative_transaction_confirm_request_ref"
+    )
+    odoo_transaction_subject_ref_field: str = "x_administrative_transaction_subject_ref"
 
     iam_source_kind: Literal["disabled", "keycloak"] = "disabled"
     keycloak_base_url: str = ""

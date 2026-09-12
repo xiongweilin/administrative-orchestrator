@@ -7,12 +7,12 @@ from administrative_orchestrator.config import (
 )
 
 
-def test_admission_mode_defaults_to_kernel_administrative_public_v2_profile() -> None:
+def test_admission_mode_defaults_to_kernel_administrative_public_v3_profile() -> None:
     settings = Settings(kernel_bridge_mode="admission")
 
     assert (
         DEFAULT_KERNEL_RESPONSIBILITY_ADMISSION_POLICY_REF
-        == "responsibility-admission:administrative-public@2"
+        == "responsibility-admission:administrative-public@3"
     )
     assert (
         settings.kernel_responsibility_admission_policy_ref

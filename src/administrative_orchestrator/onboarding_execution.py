@@ -3,7 +3,7 @@ from __future__ import annotations
 from uuid import NAMESPACE_URL, UUID, uuid5
 
 from .authority import AuthorityRepository
-from .completion import assess_onboarding_completion
+from .completion import assess_administrative_completion, assess_onboarding_completion
 from .config import get_settings
 from .domain import (
     AdministrativeCase,
@@ -24,11 +24,13 @@ from .execution_transitions import (
     fail_execution,
     resume_verification,
 )
+from .financial import TransactionQualificationResult
 from .governance import GovernanceRepository, GovernanceValidation
 from .obligations import (
     AdministrativeObligation,
     ObligationRepository,
     OnboardingObligationSet,
+    derive_financial_obligations,
     derive_onboarding_obligations,
 )
 from .persistence import SqlStore
@@ -41,7 +43,23 @@ from .service import (
     plan_effect,
     require_reopen,
 )
-from .verification import VerificationDisposition, verify_onboarding_observation
+from .transaction_repository import TransactionRepository
+from .verification import (
+    VerificationDisposition,
+    verify_financial_observation,
+    verify_onboarding_observation,
+)
+
+
+class FinancialQualificationPending(TransitionError):
+    """Execution is authorized but must wait for current qualification evidence."""
+
+    def __init__(self, missing: tuple[str, ...]) -> None:
+        self.missing = missing
+        super().__init__(
+            "financial execution requires current qualified assessments: "
+            + ", ".join(missing)
+        )
 
 
 class OnboardingExecutionEngine:
@@ -74,7 +92,14 @@ class OnboardingExecutionEngine:
             return self._reopen_for_governance(case, governance)
 
         if case.status == CaseStatus.AUTHORIZED:
-            self._plan_current_effects(case)
+            try:
+                self._plan_current_effects(case)
+            except FinancialQualificationPending:
+                # Qualification is an expected asynchronous prerequisite. Keep
+                # the authorization intact and let the durable workflow wait;
+                # the qualification repository emits a case_changed wake-up
+                # when the evidence is committed.
+                return case
             executing = begin_execution(case)
             self._persist_case_transition(case, executing, "case.execution_started")
             case = executing
@@ -145,13 +170,20 @@ class OnboardingExecutionEngine:
                 return self._reopen_for_governance(case, governance)
 
             outcomes = self.repository.list_outcomes(case.case_id, case.authority_epoch)
+            realizations = self.repository.list_realizations(
+                case.case_id, case.authority_epoch
+            )
             if obligation_set is None:
                 if get_settings().authority_enforcement_enabled:
                     raise TransitionError("governed completion requires an obligation set")
-                completion = assess_onboarding_completion(effects, outcomes)
+                completion = assess_onboarding_completion(
+                    effects,
+                    outcomes,
+                    realizations=realizations,
+                )
             else:
                 completion = self._assess_completion(
-                    obligation_set, effects, outcomes, links
+                    obligation_set, effects, outcomes, realizations, links
                 )
             if not completion.satisfied:
                 return self._handle_completion_blocked(case, completion)
@@ -181,6 +213,11 @@ class OnboardingExecutionEngine:
     def _plan_current_effects(self, case: AdministrativeCase) -> None:
         if case.fact_snapshot is None:
             raise TransitionError("onboarding execution requires a current fact snapshot")
+        if case.case_kind in {
+            "procurement-request",
+            "invoice-ap-preparation",
+        }:
+            self._require_financial_qualifications(case)
         evaluation = self.store.get_latest_policy_evaluation(case.case_id)
         if evaluation is None or evaluation.policy_ref != case.policy_ref:
             raise TransitionError("onboarding execution requires the current policy evaluation")
@@ -223,11 +260,26 @@ class OnboardingExecutionEngine:
                 raise TransitionError("latest onboarding decision is stale")
             governance_basis_id = self._stable_id("legacy-governance", case)
 
-        obligation_set = derive_onboarding_obligations(
-            case,
-            evaluation,
-            governance_basis_id=governance_basis_id,
-        )
+        if case.case_kind == "employee-onboarding":
+            obligation_set = derive_onboarding_obligations(
+                case,
+                evaluation,
+                governance_basis_id=governance_basis_id,
+            )
+        elif case.case_kind in {
+            "procurement-request",
+            "invoice-ap-preparation",
+            "expense-reimbursement",
+        }:
+            obligation_set = derive_financial_obligations(
+                case,
+                evaluation,
+                governance_basis_id=governance_basis_id,
+            )
+        else:
+            raise TransitionError(
+                f"execution engine does not support case kind {case.case_kind!r}"
+            )
         self.obligations.put(obligation_set)
 
         for obligation in obligation_set.obligations:
@@ -286,6 +338,28 @@ class OnboardingExecutionEngine:
             effect = self.repository.put_effect(effect)
             self.obligations.link_effect(effect, obligation)
 
+    def _require_financial_qualifications(self, case: AdministrativeCase) -> None:
+        required_by_case = {
+            "procurement-request": {"vendor_qualification"},
+            "invoice-ap-preparation": {
+                "vendor_qualification",
+                "duplicate_invoice_check",
+                "three_way_match",
+            },
+        }
+        required = required_by_case.get(case.case_kind, set())
+        assessments = TransactionRepository(self.store).list_assessments(
+            case.case_id, case.authority_epoch
+        )
+        qualified = {
+            item.assessment_kind
+            for item in assessments
+            if item.result is TransactionQualificationResult.QUALIFIED
+        }
+        missing = sorted(required - qualified)
+        if missing:
+            raise FinancialQualificationPending(tuple(missing))
+
     def _drive_dispatch(
         self,
         case: AdministrativeCase,
@@ -295,7 +369,7 @@ class OnboardingExecutionEngine:
     ) -> str:
         payload = case.fact_snapshot.facts if case.fact_snapshot else {}
         saw_unknown = False
-        for planned in effects:
+        for planned in sorted(effects, key=self._effect_dispatch_order):
             effect = self.repository.get_effect(planned.effect_id) or planned
             obligation = self._obligation_for_effect(effect.effect_id, obligation_set, links)
             if effect.status == EffectStatus.FAILED:
@@ -304,7 +378,8 @@ class OnboardingExecutionEngine:
                 continue
             if effect.status in {EffectStatus.DISPATCHED, EffectStatus.OUTCOME_UNKNOWN}:
                 observation = self.provider.observe(effect)
-                verification = verify_onboarding_observation(
+                verification = self._verify_observation(
+                    case,
                     effect,
                     observation,
                     payload,
@@ -341,7 +416,11 @@ class OnboardingExecutionEngine:
                     continue
 
             self.repository.set_effect_status(effect.effect_id, status=EffectStatus.DISPATCHED)
-            result = self.provider.execute(effect, payload)
+            dispatch_payload = self._payload_for_effect(effect, effects, payload)
+            if dispatch_payload is None:
+                saw_unknown = True
+                continue
+            result = self.provider.execute(effect, dispatch_payload)
             if result.status == ProviderExecutionStatus.SUCCEEDED:
                 self.repository.set_effect_status(
                     effect.effect_id,
@@ -363,6 +442,34 @@ class OnboardingExecutionEngine:
                 )
                 return "failed"
         return "outcome_unknown" if saw_unknown else "succeeded"
+
+    def _payload_for_effect(self, effect, effects, payload):
+        """Add only a prior durable draft identity to a confirm operation."""
+        if effect.operation != "purchase_order.confirm":
+            return payload
+        draft = None
+        for item in effects:
+            current = self.repository.get_effect(item.effect_id) or item
+            if (
+                current.operation == "purchase_order.create_draft"
+                and current.status == EffectStatus.SUCCEEDED
+                and current.provider_ref
+            ):
+                draft = current
+                break
+        if draft is None:
+            return None
+        return {**payload, "purchase_order_ref": draft.provider_ref}
+
+    @staticmethod
+    def _effect_dispatch_order(effect):
+        if effect.operation == "purchase_order.create_draft":
+            return (0, "", "", str(effect.effect_id))
+        if effect.operation == "purchase_order.confirm":
+            return (1, "", "", str(effect.effect_id))
+        # Preserve the caller's established order for onboarding/offboarding;
+        # only procurement draft/confirm has a new dependency order.
+        return (2, "", "", "")
 
     def _verify_all(
         self,
@@ -414,7 +521,8 @@ class OnboardingExecutionEngine:
                 continue
 
             observation = self.provider.observe(effect)
-            verification = verify_onboarding_observation(
+            verification = self._verify_observation(
+                case,
                 effect,
                 observation,
                 facts,
@@ -493,12 +601,54 @@ class OnboardingExecutionEngine:
             return None
         return self.governance.revalidate(basis, case)
 
-    def _assess_completion(self, obligation_set, effects, outcomes, links):
+    def _assess_completion(
+        self, obligation_set, effects, outcomes, realizations, links
+    ):
+        if self._require_case(obligation_set.case_id).case_kind in {
+            "procurement-request",
+            "invoice-ap-preparation",
+            "expense-reimbursement",
+        }:
+            return assess_administrative_completion(
+                obligation_set,
+                effects,
+                outcomes,
+                realizations=realizations,
+                links=links,
+            )
         return assess_onboarding_completion(
             obligation_set,
             effects,
             outcomes,
+            realizations=realizations,
             links=links,
+        )
+
+    @staticmethod
+    def _verify_observation(
+        case: AdministrativeCase,
+        effect,
+        observation,
+        facts,
+        *,
+        expected_postcondition,
+    ):
+        if case.case_kind in {
+            "procurement-request",
+            "invoice-ap-preparation",
+            "expense-reimbursement",
+        }:
+            return verify_financial_observation(
+                effect,
+                observation,
+                facts,
+                expected_postcondition=expected_postcondition,
+            )
+        return verify_onboarding_observation(
+            effect,
+            observation,
+            facts,
+            expected_postcondition=expected_postcondition,
         )
 
     def _handle_completion_blocked(self, case, completion):
@@ -520,6 +670,10 @@ class OnboardingExecutionEngine:
             "missing_outcome_kinds": list(completion.missing_outcome_kinds),
             "missing_obligation_ids": [
                 str(item) for item in completion.missing_obligation_ids
+            ],
+            "missing_realization_obligation_ids": [
+                str(item)
+                for item in completion.missing_realization_obligation_ids
             ],
             "uncovered_obligation_ids": [
                 str(item) for item in completion.uncovered_obligation_ids

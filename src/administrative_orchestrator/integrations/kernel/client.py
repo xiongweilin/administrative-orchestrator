@@ -47,7 +47,16 @@ class KernelWorkAdmissionError(RuntimeError):
 
 
 class KernelExecutionError(RuntimeError):
-    pass
+    def __init__(
+        self,
+        message: str,
+        *,
+        retryable: bool = False,
+        status_code: int | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.retryable = retryable
+        self.status_code = status_code
 
 
 class KernelResponsibilityDischargeError(RuntimeError):
@@ -94,6 +103,7 @@ class KernelExecutionReceipt:
     request_ref: str | None = None
     authorization_ref: str | None = None
     provider_id: str | None = None
+    external_operation_ref: str | None = None
     action_ref: str | None = None
     outcome_ref: str | None = None
     evidence_ref: str | None = None
@@ -410,8 +420,20 @@ class HttpKernelResponsibilityClient:
             )
             response.raise_for_status()
             raw = response.json()
+        except httpx.HTTPStatusError as exc:
+            detail = exc.response.text[:500]
+            status_code = exc.response.status_code
+            raise KernelExecutionError(
+                "agent-kernel bounded execution failed: "
+                f"HTTP {status_code}: {detail}",
+                retryable=500 <= status_code < 600,
+                status_code=status_code,
+            ) from exc
         except (httpx.HTTPError, ValueError) as exc:
-            raise KernelExecutionError(f"agent-kernel bounded execution failed: {exc}") from exc
+            raise KernelExecutionError(
+                f"agent-kernel bounded execution failed: {exc}",
+                retryable=True,
+            ) from exc
         return self._execution_receipt(raw, expected_work_ref=work_ref)
 
     def inspect_execution(
@@ -772,13 +794,19 @@ class HttpKernelResponsibilityClient:
             "request_ref": optional_ref("request_ref"),
             "authorization_ref": optional_ref("authorization_ref"),
             "provider_id": optional_ref("provider_id"),
+            "external_operation_ref": optional_ref("external_operation_ref"),
             "action_ref": optional_ref("action_ref"),
             "outcome_ref": optional_ref("outcome_ref"),
             "evidence_ref": optional_ref("evidence_ref"),
             "responsibility_ref": optional_ref("responsibility_ref"),
         }
         if status == "completed":
-            missing = [name for name, value in refs.items() if not value]
+            required_refs = {
+                name: value
+                for name, value in refs.items()
+                if name != "external_operation_ref"
+            }
+            missing = [name for name, value in required_refs.items() if not value]
             if missing:
                 raise KernelExecutionError(
                     "completed execution receipt lacks refs: " + ", ".join(missing)
@@ -800,6 +828,7 @@ class HttpKernelResponsibilityClient:
             request_ref=refs["request_ref"],
             authorization_ref=refs["authorization_ref"],
             provider_id=refs["provider_id"],
+            external_operation_ref=refs["external_operation_ref"],
             action_ref=refs["action_ref"],
             outcome_ref=refs["outcome_ref"],
             evidence_ref=refs["evidence_ref"],

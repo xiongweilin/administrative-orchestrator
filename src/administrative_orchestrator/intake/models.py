@@ -133,6 +133,7 @@ class SourceArtifact(UtcModel):
 class EvidenceSpan(UtcModel):
     evidence_span_id: UUID = Field(default_factory=uuid4)
     artifact_ref: UUID
+    representation_ref: UUID | None = None
     representation_digest: str = Field(min_length=1, max_length=128)
     locator_kind: str = Field(min_length=1, max_length=128)
     locator: dict[str, Any] = Field(min_length=1)
@@ -149,6 +150,34 @@ class EvidenceSpan(UtcModel):
         _require_text(self.representation_digest, "representation_digest")
         _require_text(self.locator_kind, "locator_kind")
         _require_text(self.extractor_ref, "extractor_ref")
+        return self
+
+
+class DocumentRepresentation(UtcModel):
+    """Immutable, content-addressed parser/OCR output for one raw artifact."""
+
+    representation_id: UUID = Field(default_factory=uuid4)
+    source_artifact_ref: UUID
+    representation_kind: str = Field(min_length=1, max_length=128)
+    extractor_ref: str = Field(min_length=1, max_length=512)
+    extractor_version: str = Field(min_length=1, max_length=256)
+    content_digest: str = Field(min_length=1, max_length=128)
+    storage_ref: str = Field(min_length=1, max_length=2000)
+    size: int = Field(ge=0)
+    created_at: datetime = Field(default_factory=utcnow)
+    page_count: int | None = Field(default=None, ge=0)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_identity(self) -> DocumentRepresentation:
+        for name in (
+            "representation_kind",
+            "extractor_ref",
+            "extractor_version",
+            "content_digest",
+            "storage_ref",
+        ):
+            _require_text(getattr(self, name), name)
         return self
 
 
@@ -288,6 +317,7 @@ __all__ = [
     "CandidateCaseUpdateStatus",
     "CandidateFactAssertion",
     "CandidateStatus",
+    "DocumentRepresentation",
     "EvidenceSpan",
     "IntakeAssessment",
     "IntakeDisposition",

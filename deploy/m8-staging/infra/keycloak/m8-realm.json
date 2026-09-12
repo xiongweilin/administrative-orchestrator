@@ -1,0 +1,221 @@
+{
+  "realm": "m8",
+  "enabled": true,
+  "sslRequired": "NONE",
+  "registrationAllowed": false,
+  "loginWithEmailAllowed": true,
+  "clients": [
+    {
+      "clientId": "administrative-operations-console",
+      "name": "Administrative M8 Operations Console",
+      "enabled": true,
+      "publicClient": true,
+      "protocol": "openid-connect",
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": true,
+      "redirectUris": [
+        "http://localhost:18103/*",
+        "http://127.0.0.1:18103/*",
+        "http://host.docker.internal:18103/*"
+      ],
+      "webOrigins": [
+        "http://localhost:18103",
+        "http://127.0.0.1:18103",
+        "http://host.docker.internal:18103"
+      ],
+      "defaultClientScopes": [
+        "openid",
+        "basic",
+        "profile",
+        "email",
+        "administrative-audience"
+      ]
+    },
+    {
+      "clientId": "administrative-reader",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "m8-keycloak-reader-secret"
+    },
+    {
+      "clientId": "administrative-kernel-writer",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "m8-keycloak-writer-secret"
+    },
+    {
+      "clientId": "administrative-kernel-verifier",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "m8-keycloak-verifier-secret"
+    }
+  ],
+  "clientScopes": [
+    {
+      "name": "basic",
+      "description": "OpenID Connect scope for add standard JWT claims: sub, auth_time, acr",
+      "protocol": "openid-connect",
+      "attributes": {
+        "include.in.token.scope": "false",
+        "display.on.consent.screen": "false"
+      },
+      "protocolMappers": [
+        {
+          "name": "sub",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-sub-mapper",
+          "consentRequired": false,
+          "config": {
+            "introspection.token.claim": "true",
+            "access.token.claim": "true"
+          }
+        },
+        {
+          "name": "auth_time",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usersessionmodel-note-mapper",
+          "consentRequired": false,
+          "config": {
+            "user.session.note": "AUTH_TIME",
+            "id.token.claim": "true",
+            "introspection.token.claim": "true",
+            "access.token.claim": "true",
+            "claim.name": "auth_time",
+            "jsonType.label": "long"
+          }
+        },
+        {
+          "name": "acr",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-acr-mapper",
+          "consentRequired": false,
+          "config": {
+            "id.token.claim": "true",
+            "introspection.token.claim": "true",
+            "access.token.claim": "true"
+          }
+        }
+      ]
+    },
+    {
+      "name": "administrative-audience",
+      "description": "Audience used by the isolated Administrative staging API",
+      "protocol": "openid-connect",
+      "attributes": {
+        "include.in.token.scope": "false",
+        "display.on.consent.screen": "false"
+      },
+      "protocolMappers": [
+        {
+          "name": "administrative-operations-console-audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": {
+            "included.client.audience": "administrative-operations-console",
+            "id.token.claim": "false",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "false"
+          }
+        }
+      ]
+    }
+  ],
+  "components": {
+    "org.keycloak.userprofile.UserProfileProvider": [
+      {
+        "id": "6f5d25cb-2d4f-4b3d-ae86-9b6d5c4d3a21",
+        "providerId": "declarative-user-profile",
+        "subComponents": {},
+        "config": {
+          "kc.user.profile.config": [
+            "{\"attributes\":[{\"name\":\"username\",\"displayName\":\"${username}\",\"validations\":{\"length\":{\"min\":3,\"max\":255},\"username-prohibited-characters\":{},\"up-username-not-idn-homograph\":{}},\"permissions\":{\"view\":[\"admin\",\"user\"],\"edit\":[\"admin\",\"user\"]},\"multivalued\":false},{\"name\":\"email\",\"displayName\":\"${email}\",\"validations\":{\"email\":{},\"length\":{\"max\":255}},\"required\":{\"roles\":[\"user\"]},\"permissions\":{\"view\":[\"admin\",\"user\"],\"edit\":[\"admin\",\"user\"]},\"multivalued\":false},{\"name\":\"firstName\",\"displayName\":\"${firstName}\",\"validations\":{\"length\":{\"max\":255},\"person-name-prohibited-characters\":{}},\"required\":{\"roles\":[\"user\"]},\"permissions\":{\"view\":[\"admin\",\"user\"],\"edit\":[\"admin\",\"user\"]},\"multivalued\":false},{\"name\":\"lastName\",\"displayName\":\"${lastName}\",\"validations\":{\"length\":{\"max\":255},\"person-name-prohibited-characters\":{}},\"required\":{\"roles\":[\"user\"]},\"permissions\":{\"view\":[\"admin\",\"user\"],\"edit\":[\"admin\",\"user\"]},\"multivalued\":false}],\"groups\":[{\"name\":\"user-metadata\",\"displayHeader\":\"User metadata\",\"displayDescription\":\"Attributes, which refer to user metadata\"}],\"unmanagedAttributePolicy\":\"ENABLED\"}"
+          ]
+        }
+      }
+    ]
+  },
+  "users": [
+    {
+      "id": "m8-reviewer",
+      "username": "m8-reviewer",
+      "firstName": "M8",
+      "lastName": "Reviewer",
+      "enabled": true,
+      "email": "m8-reviewer@staging.invalid",
+      "emailVerified": true,
+      "credentials": [
+        {
+          "type": "password",
+          "value": "m8-reviewer-password",
+          "temporary": false
+        }
+      ]
+    },
+    {
+      "id": "m8-subject",
+      "username": "m8-subject",
+      "firstName": "M8",
+      "lastName": "Subject",
+      "enabled": true,
+      "email": "m8-subject@staging.invalid",
+      "emailVerified": true,
+      "credentials": [
+        {
+          "type": "password",
+          "value": "m8-subject-password",
+          "temporary": false
+        }
+      ]
+    },
+    {
+      "username": "service-account-administrative-reader",
+      "serviceAccountClientId": "administrative-reader",
+      "clientRoles": {
+        "realm-management": [
+          "view-realm",
+          "query-users",
+          "view-users"
+        ]
+      }
+    },
+    {
+      "username": "service-account-administrative-kernel-writer",
+      "serviceAccountClientId": "administrative-kernel-writer",
+      "clientRoles": {
+        "realm-management": [
+          "view-realm",
+          "manage-users",
+          "query-users",
+          "view-users"
+        ]
+      }
+    },
+    {
+      "username": "service-account-administrative-kernel-verifier",
+      "serviceAccountClientId": "administrative-kernel-verifier",
+      "clientRoles": {
+        "realm-management": [
+          "view-realm",
+          "manage-users",
+          "query-users",
+          "view-users"
+        ]
+      }
+    }
+  ]
+}

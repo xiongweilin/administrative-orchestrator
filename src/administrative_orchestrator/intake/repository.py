@@ -140,6 +140,7 @@ class EvidenceSpanRow(Base):
     artifact_ref: Mapped[UUID] = mapped_column(
         ForeignKey("administrative_source_artifact.artifact_id"), nullable=False
     )
+    representation_ref: Mapped[UUID | None] = mapped_column(Uuid, nullable=True)
     representation_digest: Mapped[str] = mapped_column(String(128), nullable=False)
     locator_kind: Mapped[str] = mapped_column(String(128), nullable=False)
     locator_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
@@ -306,6 +307,7 @@ def _span_from_row(row: EvidenceSpanRow) -> EvidenceSpan:
         {
             "evidence_span_id": row.evidence_span_id,
             "artifact_ref": row.artifact_ref,
+            "representation_ref": row.representation_ref,
             "representation_digest": row.representation_digest,
             "locator_kind": row.locator_kind,
             "locator": row.locator_json,
@@ -635,6 +637,7 @@ class IntakeRepository:
                 EvidenceSpanRow(
                     evidence_span_id=span.evidence_span_id,
                     artifact_ref=span.artifact_ref,
+                    representation_ref=span.representation_ref,
                     representation_digest=span.representation_digest,
                     locator_kind=span.locator_kind,
                     locator_json=span.locator,

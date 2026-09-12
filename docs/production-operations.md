@@ -1,10 +1,11 @@
 # Production operations and disaster recovery
 
-This runbook describes the M5 production-shaped deployment and the M6 intake
-additions. It preserves the Administrative/Agent Kernel authority split and
-deliberately treats recovery as reconciliation of durable facts, not as
-permission to improvise or blindly replay provider writes. M6 intake is an
-upstream perception path; it does not create another execution authority.
+This runbook describes the M5 production-shaped deployment, M6 intake
+additions, and M8 document-driven transaction preparation. It preserves the
+Administrative/Agent Kernel authority split and deliberately treats recovery
+as reconciliation of durable facts, not as permission to improvise or blindly
+replay provider writes. M6 intake is an upstream perception path; M8 adds
+bounded ERP preparation without creating another execution authority.
 
 ## Reference topology
 
@@ -63,7 +64,11 @@ The production control plane must satisfy all of these before startup:
 - `ADMIN_AUTH_MODE=oidc` with HTTPS issuer and asymmetric JWKS verification;
 - `ADMIN_KERNEL_BRIDGE_MODE=cutover`;
 - `ADMIN_EXTERNAL_EFFECTS_ENABLED=true`;
-- `ADMIN_KERNEL_SUPPORTED_REVISION` equals the revision supported by the deployed Administrative build;
+- `AGENT_KERNEL_REF` is the single deployment-level Kernel revision source;
+- `ADMIN_KERNEL_SUPPORTED_REVISION`, the Kernel image build argument, and
+  `PORTABLE_RUNTIME_BUILD_REVISION` all resolve from that same value;
+- readiness proves the running Kernel `/v1/contracts.build_revision` equals
+  `AGENT_KERNEL_REF`; missing or mismatched revision fails closed;
 - `ADMIN_AUTO_CREATE_SCHEMA=false`; migrations run explicitly through Alembic;
 - Administrative, worker, and DBOS durable stores use PostgreSQL;
 - Odoo and Keycloak production endpoints use HTTPS;
@@ -114,6 +119,38 @@ transport authentication header; a long-connection event may omit the HTTP
 callback token. A direct Feishu callback, if separately enabled, still uses the
 callback token and optional signature path.
 
+## M8 transaction operations
+
+M8 staging is isolated under `deploy/m8-staging/` and uses the Compose project
+`administrative-m8-staging`, separate PostgreSQL/Odoo/Keycloak/Kernel/artifact
+volumes, and ports `18101`–`18105`. Its migration head is
+`0026_m8_transaction_evidence`.
+
+The supported financial capabilities are deliberately limited to:
+
+```text
+administrative.erp.purchase-order.create-draft.v1
+administrative.erp.purchase-order.confirm.v1
+administrative.erp.vendor-bill.create-draft.v1
+administrative.erp.expense-report.create.v1
+```
+
+They may create or confirm bounded ERP records, but cannot transfer funds,
+post/pay/settle vendor bills, reimburse employees, move money through a bank,
+or invoke a payment provider. Procurement confirmation is a separate effect
+and receives only the durable draft reference produced by the preceding draft
+effect. A missing reference, unknown provider result, stale qualification, or
+independent readback mismatch fails closed and leaves the case unresolved.
+
+For production, configure distinct financial ERP writer and verifier identities
+and distinct secret references in addition to the HRIS identities. Configure
+the three custom Odoo transaction identity fields used only for durable
+request/reconciliation and subject correlation. Qualification assessments must
+be bound to the current case authority epoch; vendor ambiguity, duplicate
+invoice identity, or deterministic three-way mismatch prevents the ERP effect.
+Back up the Administrative database, DBOS database, Kernel state, and M8
+artifact store together. Do not use M7 volumes as an M8 rollback target.
+
 Run the static deployment gate before starting the application processes:
 
 ```bash
@@ -132,6 +169,8 @@ Use separate service identities for these trust domains:
 | Odoo | reader | authoritative HR facts required by policy/governance |
 | Odoo | writer | only the bounded HRIS mutations delegated to Kernel |
 | Odoo | verifier | read-only independent postcondition observation |
+| Odoo ERP | financial writer | only bounded M8 draft/confirm capabilities delegated to Kernel |
+| Odoo ERP | financial verifier | read-only vendor-bill/PO/expense readback |
 | Keycloak | reader | directory/identity facts required by Administrative logic |
 | Keycloak | writer | bounded IAM mutations delegated to Kernel |
 | Keycloak | verifier | read-only independent postcondition observation |
@@ -148,7 +187,7 @@ Secret values belong in the deployment secret manager/environment. Domain record
 3. Run `alembic upgrade head` against the Administrative PostgreSQL database.
 4. Ensure the DBOS system database exists and is reachable.
 5. Run `scripts/production_preflight.py`.
-6. Start Agent Kernel at the supported pinned revision using the production bounded-effect factory:
+6. Start Agent Kernel at the exact `AGENT_KERNEL_REF` revision using the production bounded-effect factory:
 
    ```bash
    PORTABLE_RUNTIME_BOUNDED_DOMAIN_EFFECT_FACTORY=scripts.production_kernel_stack:build \

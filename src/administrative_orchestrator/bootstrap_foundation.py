@@ -11,8 +11,11 @@ from .domain import Delegation, Principal, PrincipalKind, RoleAssignment
 from .persistence import SqlStore
 from .policy_plane import (
     PolicyRepository,
+    default_expense_policy_version,
+    default_invoice_ap_policy_version,
     default_offboarding_policy_version,
     default_onboarding_policy_version,
+    default_procurement_policy_version,
 )
 
 _BASELINE = datetime(2026, 1, 1, tzinfo=UTC)
@@ -27,6 +30,9 @@ def bootstrap_foundation(store: SqlStore, payload: dict[str, Any] | None = None)
     policies = PolicyRepository(store)
     policies.put_version(default_onboarding_policy_version())
     policies.put_version(default_offboarding_policy_version())
+    policies.put_version(default_procurement_policy_version())
+    policies.put_version(default_invoice_ap_policy_version())
+    policies.put_version(default_expense_policy_version())
 
     payload = payload or {}
     for item in payload.get("principals", []):

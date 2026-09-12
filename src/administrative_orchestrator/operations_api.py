@@ -22,7 +22,14 @@ from .candidate_admission import CandidateAdministrativeAdmissionService
 from .completion import CompletionAssessment, assess_administrative_completion
 from .config import get_settings
 from .conversation import ConversationMessageRow, ConversationRow
-from .domain import AdministrativeCase, AdministrativeRequest, CaseStatus, utcnow
+from .domain import (
+    AdministrativeCase,
+    AdministrativeRequest,
+    CaseStatus,
+    FactAuthority,
+    FactSnapshot,
+    utcnow,
+)
 from .execution_repository import ExecutionRepository
 from .fact_acquisition import (
     FactAcquisitionError,
@@ -31,6 +38,20 @@ from .fact_acquisition import (
     merge_authoritative_onboarding_facts,
 )
 from .fact_transitions import replace_facts_for_reevaluation
+from .financial import (
+    AdministrativeCaseEvidenceLink,
+    ExpenseFacts,
+    InvoiceFacts,
+    ProcurementFacts,
+    TransactionQualificationAssessment,
+    TransactionQualificationResult,
+    has_material_financial_revision,
+)
+from .financial_admission import (
+    CandidateExpenseAdmissionService,
+    CandidateInvoiceAPAdmissionService,
+    CandidateProcurementAdmissionService,
+)
 from .governance import GovernanceRepository
 from .inspection import list_authorizations, list_decisions, list_realizations
 from .intake.models import (
@@ -60,14 +81,22 @@ from .policy import OffboardingFacts, OnboardingFacts, PolicyEvaluation
 from .policy_plane import (
     PolicyPlaneError,
     PolicyRepository,
+    compile_expense_policy,
+    compile_invoice_ap_policy,
     compile_offboarding_policy,
     compile_onboarding_policy,
+    compile_procurement_policy,
+)
+from .production_readiness import (
+    ProductionReadinessError,
+    validate_kernel_runtime_compatibility,
 )
 from .responsibility_discharge import (
     AdministrativeResponsibilityDischargeService,
     ResponsibilityDischargeBlocked,
 )
 from .service import TransitionError, apply_policy_evaluation, start_policy_evaluation
+from .transaction_repository import TransactionRepository
 from .transfer import TransferRequirementRepository
 from .unit_of_work import AdministrativeUnitOfWork
 
@@ -83,6 +112,7 @@ _execution = ExecutionRepository(_store)
 _governance = GovernanceRepository(_store)
 _obligations = ObligationRepository(_store)
 _policies = PolicyRepository(_store)
+_transactions = TransactionRepository(_store)
 _uow = AdministrativeUnitOfWork(_store)
 _intake = IntakeRepository(_store)
 _intake_assessments = IntakeAssessmentService(_intake)
@@ -122,6 +152,23 @@ class BindIdentityBody(BaseModel):
 
 class ReasonBody(BaseModel):
     reason: str = Field(min_length=1, max_length=2000)
+
+
+class QualificationAssessmentBody(BaseModel):
+    assessment_kind: str = Field(min_length=1, max_length=128)
+    input_refs: tuple[str, ...] = Field(min_length=1)
+    rule_ref: str = Field(min_length=1, max_length=512)
+    result: TransactionQualificationResult
+    blocking_reasons: tuple[str, ...] = ()
+
+
+class FinancialDocumentRevisionBody(BaseModel):
+    facts: dict[str, Any]
+    source_ref: str = Field(min_length=1, max_length=1000)
+    source_version: str = Field(min_length=1, max_length=256)
+    artifact_ref: UUID | None = None
+    representation_ref: UUID | None = None
+    declared_role: str = Field(default="material-revision", min_length=1, max_length=128)
 
 
 class OutboxReplayResponse(BaseModel):
@@ -167,6 +214,7 @@ class IntakePromotionBody(BaseModel):
     case_kind: str = Field(default="intake", min_length=1, max_length=128)
     subject_ref: str | None = Field(default=None, max_length=512)
     bridge_to_m5: bool = False
+    bridge_to_m8: bool = False
     promotion_policy_ref: str = Field(
         default="m6-human-confirmed-v1", min_length=1, max_length=512
     )
@@ -212,6 +260,17 @@ def healthz() -> dict[str, str]:
 
 @app.get("/readyz")
 def readyz() -> dict[str, str]:
+    if (
+        _settings.runtime_profile in {"staging", "production"}
+        and _settings.kernel_bridge_mode != "disabled"
+    ):
+        try:
+            validate_kernel_runtime_compatibility(_settings)
+        except ProductionReadinessError as exc:
+            raise HTTPException(
+                status_code=503,
+                detail="Agent Kernel compatibility/readiness check failed",
+            ) from exc
     return {
         "status": "ready",
         "auth_mode": _settings.auth_mode,
@@ -219,6 +278,11 @@ def readyz() -> dict[str, str]:
         "hris_source": _settings.hris_source_kind,
         "iam_source": _settings.iam_source_kind,
         "authority_mutation_shortcuts": "forbidden",
+        "kernel_revision": (
+            _settings.kernel_supported_revision
+            if _settings.runtime_profile in {"staging", "production"}
+            else "not-required"
+        ),
     }
 
 
@@ -261,6 +325,7 @@ def case_detail(case_id: UUID, request: Request) -> dict:
     obligation_set = _obligations.get_current(case.case_id, case.authority_epoch)
     effects = _execution.list_effects(case.case_id, case.authority_epoch)
     outcomes = _execution.list_outcomes(case.case_id, case.authority_epoch)
+    realizations = _execution.list_realizations(case.case_id, case.authority_epoch)
     links = _obligations.list_links(case.case_id, case.authority_epoch)
     fulfillments = _obligations.list_domain_state_fulfillments(
         case.case_id, case.authority_epoch
@@ -269,6 +334,7 @@ def case_detail(case_id: UUID, request: Request) -> dict:
         obligation_set,
         effects,
         outcomes,
+        realizations=realizations,
         links=links,
         fulfillments=fulfillments,
     )
@@ -309,6 +375,14 @@ def case_detail(case_id: UUID, request: Request) -> dict:
         "authority": authority,
         "transfers": [item.model_dump(mode="json") for item in transfers],
         "domain_fulfillments": [item.model_dump(mode="json") for item in fulfillments],
+        "evidence_links": [
+            item.model_dump(mode="json")
+            for item in _transactions.list_evidence_links(case.case_id, case.authority_epoch)
+        ],
+        "qualification_assessments": [
+            item.model_dump(mode="json")
+            for item in _transactions.list_assessments(case.case_id, case.authority_epoch)
+        ],
         "completion_assessment": completion.model_dump(mode="json"),
         "kernel_projections": [_kernel_projection_snapshot(item) for item in projections],
         "responsibility_discharge": _responsibility_snapshot(
@@ -321,11 +395,133 @@ def case_detail(case_id: UUID, request: Request) -> dict:
     }
 
 
+@app.post(
+    "/v1/operations/cases/{case_id}/qualification-assessments",
+    response_model=TransactionQualificationAssessment,
+)
+def append_qualification_assessment(
+    case_id: UUID,
+    payload: QualificationAssessmentBody,
+    request: Request,
+) -> TransactionQualificationAssessment:
+    actor = _actor(request)
+    case = _store.get_case(case_id)
+    if case is None:
+        raise HTTPException(status_code=404, detail="case not found")
+    if case.case_kind not in {
+        "procurement-request",
+        "invoice-ap-preparation",
+        "expense-reimbursement",
+    }:
+        raise HTTPException(status_code=409, detail="case kind is not a transaction case")
+    _require(actor, AdministrativePermission.FACTS_ATTEST, case=case)
+    assessment = TransactionQualificationAssessment(
+        case_id=case.case_id,
+        authority_epoch=case.authority_epoch,
+        assessment_kind=payload.assessment_kind,
+        input_refs=payload.input_refs,
+        rule_ref=payload.rule_ref,
+        result=payload.result,
+        blocking_reasons=payload.blocking_reasons,
+    )
+    return _transactions.append_assessment(assessment)
+
+
+@app.post(
+    "/v1/operations/cases/{case_id}/document-revision",
+    response_model=AdministrativeCase,
+)
+def apply_financial_document_revision(
+    case_id: UUID,
+    payload: FinancialDocumentRevisionBody,
+    request: Request,
+) -> AdministrativeCase:
+    """Invalidate the current financial governance world for a new document revision."""
+
+    actor = _actor(request)
+    case = _store.get_case(case_id)
+    if case is None:
+        raise HTTPException(status_code=404, detail="case not found")
+    if case.case_kind not in {
+        "procurement-request",
+        "invoice-ap-preparation",
+        "expense-reimbursement",
+    }:
+        raise HTTPException(status_code=409, detail="case kind is not a transaction case")
+    _require(actor, AdministrativePermission.FACTS_ATTEST, case=case)
+    if case.fact_snapshot is None:
+        raise HTTPException(status_code=409, detail="case has no current document facts")
+    if case.status in {CaseStatus.COMPLETED, CaseStatus.CANCELLED}:
+        raise HTTPException(status_code=409, detail="terminal case cannot accept a document revision")
+
+    typed_facts: Any
+    if case.case_kind == "procurement-request":
+        typed_facts = ProcurementFacts.model_validate(payload.facts)
+    elif case.case_kind == "invoice-ap-preparation":
+        typed_facts = InvoiceFacts.model_validate(payload.facts)
+    else:
+        typed_facts = ExpenseFacts.model_validate(payload.facts)
+    facts = typed_facts.model_dump(mode="json")
+    try:
+        material = has_material_financial_revision(
+            case.case_kind,
+            case.fact_snapshot.facts,
+            facts,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if not material:
+        raise HTTPException(status_code=409, detail="document revision has no material financial change")
+
+    snapshot = FactSnapshot(
+        source=f"document-revision:{actor.principal_id}",
+        owner=actor.principal_id,
+        authority=FactAuthority.CLAIM,
+        source_ref=payload.source_ref,
+        source_version=payload.source_version,
+        facts=facts,
+    )
+    changed = replace_facts_for_reevaluation(case, snapshot)
+    try:
+        policy_record = _policies.resolve_current(
+            {
+                "procurement-request": "procurement-request",
+                "invoice-ap-preparation": "invoice-ap-preparation",
+                "expense-reimbursement": "expense-reimbursement",
+            }[case.case_kind]
+        )
+        if case.case_kind == "procurement-request":
+            evaluation = compile_procurement_policy(policy_record).evaluate(typed_facts)
+        elif case.case_kind == "invoice-ap-preparation":
+            evaluation = compile_invoice_ap_policy(policy_record).evaluate(typed_facts)
+        else:
+            evaluation = compile_expense_policy(policy_record).evaluate(typed_facts)
+        updated = apply_policy_evaluation(changed, evaluation)
+        _uow.replace_facts_and_apply_policy(case, updated, evaluation)
+    except (ConcurrencyConflict, TransitionError, PolicyPlaneError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    if payload.artifact_ref is not None:
+        _transactions.append_evidence_link(
+            AdministrativeCaseEvidenceLink(
+                case_id=updated.case_id,
+                authority_epoch=updated.authority_epoch,
+                artifact_ref=payload.artifact_ref,
+                representation_ref=payload.representation_ref,
+                declared_role=payload.declared_role,
+                source=payload.source_ref,
+                linked_by=actor.principal_id,
+            )
+        )
+    return updated
+
+
 def _case_completion_assessment(
     obligation_set,
     effects,
     outcomes,
     *,
+    realizations,
     links,
     fulfillments,
 ) -> CompletionAssessment:
@@ -339,6 +535,7 @@ def _case_completion_assessment(
         obligation_set,
         effects,
         outcomes,
+        realizations=realizations,
         links=links,
         fulfillments=fulfillments,
     )
@@ -608,8 +805,20 @@ def _admission_bridge(case_kind: str) -> CandidateAdministrativeAdmissionService
         return CandidateOffboardingAdmissionService(
             _store, _intake, _intake_promotions, policies=_policies, uow=_uow
         )
+    if case_kind == "procurement-request":
+        return CandidateProcurementAdmissionService(
+            _store, _intake, _intake_promotions, policies=_policies, uow=_uow
+        )
+    if case_kind == "invoice-ap-preparation":
+        return CandidateInvoiceAPAdmissionService(
+            _store, _intake, _intake_promotions, policies=_policies, uow=_uow
+        )
+    if case_kind == "expense-reimbursement":
+        return CandidateExpenseAdmissionService(
+            _store, _intake, _intake_promotions, policies=_policies, uow=_uow
+        )
     raise OnboardingAdmissionError(
-        f"bridge_to_m5 does not support case_kind={case_kind!r}"
+        f"typed admission does not support case_kind={case_kind!r}"
     )
 
 
@@ -631,10 +840,10 @@ def promote_intake_candidate(
     if assessment is None or assessment.candidate_ref != candidate_id:
         raise HTTPException(status_code=404, detail="intake assessment not found")
     try:
-        if payload.bridge_to_m5:
+        if payload.bridge_to_m5 or payload.bridge_to_m8:
             if payload.subject_ref is None:
                 raise OnboardingAdmissionError(
-                    "bridge_to_m5 promotion requires subject_ref"
+                    "typed promotion requires subject_ref"
                 )
             admission = _admission_bridge(payload.case_kind).promote_and_evaluate(
                 candidate,

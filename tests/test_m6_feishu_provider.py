@@ -206,6 +206,27 @@ def test_long_connection_handoff_requires_gateway_secret_when_callback_token_is_
     assert accepted.created is True
 
 
+def test_long_connection_handoff_can_use_gateway_secret_without_callback_token() -> None:
+    _, repository = _repository()
+    verifier = FeishuEventVerifier(
+        None,
+        gateway_shared_secret="gateway-secret",
+        clock=lambda: EVENT_TIME / 1000,
+    )
+    boundary = FeishuWebhookBoundary(repository, verifier)
+    decoded = json.loads(_event_body())
+    decoded["header"].pop("token")
+    body = json.dumps(decoded, separators=(",", ":")).encode()
+
+    accepted = boundary.accept(
+        body,
+        {"X-Administrative-Ingress-Token": "gateway-secret"},
+    )
+
+    assert isinstance(accepted, FeishuAcceptance)
+    assert accepted.created is True
+
+
 def test_long_connection_handoff_rejects_conflicting_provider_token() -> None:
     _, repository = _repository()
     verifier = FeishuEventVerifier(

@@ -152,8 +152,10 @@ class InterpretationClient:
         profile: InterpretationProfile,
         evidence_spans: Sequence[EvidenceSpan] = (),
         *,
+        source_artifacts: Sequence[SourceArtifact] = (),
         interpretation_id: UUID | None = None,
     ) -> InterpretationRecord:
+        artifact_refs = _unique_artifact_refs(artifact, source_artifacts)
         request = ModelRequest(
             artifact_ref=artifact.artifact_id,
             profile=profile,
@@ -163,28 +165,33 @@ class InterpretationClient:
             response = self.gateway.complete(request, timeout_seconds=self.timeout_seconds)
         except ModelTimeoutError:
             return self._persist_failure(
-                artifact, profile, "model_timeout", interpretation_id=interpretation_id
+                artifact_refs, profile, "model_timeout", interpretation_id=interpretation_id
             )
         except ModelProviderUnavailable:
             return self._persist_failure(
-                artifact, profile, "provider_unavailable", interpretation_id=interpretation_id
+                artifact_refs, profile, "provider_unavailable", interpretation_id=interpretation_id
             )
         except ModelGatewayError:
             return self._persist_failure(
-                artifact, profile, "provider_error", interpretation_id=interpretation_id
+                artifact_refs, profile, "provider_error", interpretation_id=interpretation_id
             )
 
         try:
             payload = self._parse_payload(response.raw_output)
-            bound_evidence = self._bind_evidence(payload, artifact, evidence_spans)
+            payload = self._bind_single_document_span_when_unambiguous(
+                payload,
+                primary_artifact_ref=artifact.artifact_id,
+                evidence_spans=evidence_spans,
+            )
+            bound_evidence = self._bind_evidence(payload, artifact_refs, evidence_spans)
         except (InterpretationValidationError, TypeError, ValueError):
             return self._persist_invalid(
-                artifact, profile, response, interpretation_id=interpretation_id
+                artifact_refs, profile, response, interpretation_id=interpretation_id
             )
 
         record = InterpretationRecord(
             interpretation_id=interpretation_id or uuid4(),
-            artifact_refs=(artifact.artifact_id,),
+            artifact_refs=artifact_refs,
             interpretation_profile_ref=profile.profile_ref,
             model_provider=response.provenance.provider,
             model_identity=response.provenance.model_identity,
@@ -196,6 +203,34 @@ class InterpretationClient:
             status=InterpretationStatus.SUCCEEDED,
         )
         return self._append(record)
+
+    @staticmethod
+    def _bind_single_document_span_when_unambiguous(
+        payload: CandidateInterpretationPayload,
+        *,
+        primary_artifact_ref: UUID,
+        evidence_spans: Sequence[EvidenceSpan],
+    ) -> CandidateInterpretationPayload:
+        """Bind claims to one unambiguous document page without inventing facts."""
+
+        document_spans = tuple(
+            span for span in evidence_spans if span.artifact_ref != primary_artifact_ref
+        )
+        if len(document_spans) != 1 or not payload.candidate_facts:
+            return payload
+        fallback_ref = document_spans[0].evidence_span_id
+        facts = tuple(
+            fact
+            if fact.evidence_span_refs
+            else fact.model_copy(update={"evidence_span_refs": (fallback_ref,)})
+            for fact in payload.candidate_facts
+        )
+        evidence_refs = tuple(
+            dict.fromkeys((*payload.evidence_span_refs, fallback_ref))
+        )
+        return payload.model_copy(
+            update={"candidate_facts": facts, "evidence_span_refs": evidence_refs}
+        )
 
     @staticmethod
     def _parse_payload(raw_output: str) -> CandidateInterpretationPayload:
@@ -211,12 +246,13 @@ class InterpretationClient:
     @staticmethod
     def _bind_evidence(
         payload: CandidateInterpretationPayload,
-        artifact: SourceArtifact,
+        artifact_refs: Sequence[UUID],
         evidence_spans: Sequence[EvidenceSpan],
     ) -> tuple[UUID, ...]:
+        trusted_artifacts = set(artifact_refs)
         spans_by_id: dict[UUID, EvidenceSpan] = {}
         for span in evidence_spans:
-            if span.artifact_ref != artifact.artifact_id:
+            if span.artifact_ref not in trusted_artifacts:
                 raise InterpretationValidationError("EvidenceSpan belongs to another artifact")
             if span.evidence_span_id in spans_by_id:
                 raise InterpretationValidationError("duplicate EvidenceSpan identity")
@@ -234,7 +270,7 @@ class InterpretationClient:
 
     def _persist_invalid(
         self,
-        artifact: SourceArtifact,
+        artifact_refs: tuple[UUID, ...],
         profile: InterpretationProfile,
         response: ModelResponse,
         *,
@@ -242,7 +278,7 @@ class InterpretationClient:
     ) -> InterpretationRecord:
         record = InterpretationRecord(
             interpretation_id=interpretation_id or uuid4(),
-            artifact_refs=(artifact.artifact_id,),
+            artifact_refs=artifact_refs,
             interpretation_profile_ref=profile.profile_ref,
             model_provider=response.provenance.provider,
             model_identity=response.provenance.model_identity,
@@ -257,7 +293,7 @@ class InterpretationClient:
 
     def _persist_failure(
         self,
-        artifact: SourceArtifact,
+        artifact_refs: tuple[UUID, ...],
         profile: InterpretationProfile,
         failure_code: str,
         *,
@@ -266,7 +302,7 @@ class InterpretationClient:
         provenance = self.gateway.provenance
         record = InterpretationRecord(
             interpretation_id=interpretation_id or uuid4(),
-            artifact_refs=(artifact.artifact_id,),
+            artifact_refs=artifact_refs,
             interpretation_profile_ref=profile.profile_ref,
             model_provider=provenance.provider,
             model_identity=provenance.model_identity,
@@ -287,6 +323,17 @@ class InterpretationClient:
 
 def _sha256_text(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _unique_artifact_refs(
+    primary: SourceArtifact,
+    additional: Sequence[SourceArtifact],
+) -> tuple[UUID, ...]:
+    refs: list[UUID] = []
+    for item in (primary, *additional):
+        if item.artifact_id not in refs:
+            refs.append(item.artifact_id)
+    return tuple(refs)
 
 
 __all__ = [

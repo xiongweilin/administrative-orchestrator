@@ -355,11 +355,14 @@ class OffboardingExecutionEngine(OnboardingExecutionEngine):
             )
         )
 
-    def _assess_completion(self, obligation_set, effects, outcomes, links):
+    def _assess_completion(
+        self, obligation_set, effects, outcomes, realizations, links
+    ):
         completion = assess_administrative_completion(
             obligation_set,
             effects,
             outcomes,
+            realizations=realizations,
             links=links,
             fulfillments=self.obligations.list_domain_state_fulfillments(
                 obligation_set.case_id, obligation_set.authority_epoch

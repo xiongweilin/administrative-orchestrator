@@ -81,6 +81,9 @@ def execute_outbox_action(action: WorkflowWakeAction) -> None:
     workflows = {
         "employee-onboarding": onboarding_case_workflow,
         "employee-offboarding": offboarding_case_workflow,
+        "procurement-request": onboarding_case_workflow,
+        "invoice-ap-preparation": onboarding_case_workflow,
+        "expense-reimbursement": onboarding_case_workflow,
     }
     workflow = workflows.get(case_kind)
     if workflow is None:

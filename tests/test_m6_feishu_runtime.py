@@ -33,6 +33,7 @@ from administrative_orchestrator.providers.feishu_runtime import (
     OpenAICompatibleResponsesModelGateway,
     _read_secret_file,
     build_feishu_runtime,
+    build_feishu_webhook_boundary,
 )
 
 
@@ -619,6 +620,23 @@ def test_feishu_runtime_loads_file_backed_app_credentials(tmp_path: Path) -> Non
     assert runtime is not None
     assert runtime.pipeline is not None
     runtime.close()
+
+
+def test_feishu_boundary_loads_file_backed_gateway_secret(tmp_path: Path) -> None:
+    shared_secret_file = tmp_path / "administrative_ingress_shared_secret"
+    shared_secret_file.write_text("gateway-secret", encoding="utf-8")
+
+    store = SqlStore("sqlite+pysqlite:///:memory:")
+    store.init_schema()
+    boundary = build_feishu_webhook_boundary(
+        store,
+        Settings(
+            database_url="sqlite+pysqlite:///:memory:",
+            feishu_ingress_shared_secret_file=str(shared_secret_file),
+        ),
+    )
+
+    assert boundary is not None
 
 
 def test_feishu_secret_file_reader_fails_closed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

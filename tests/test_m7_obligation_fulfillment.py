@@ -14,10 +14,12 @@ from administrative_orchestrator.domain import (
     AdministrativeRequest,
     AuthorityClass,
     ConfirmedOutcome,
+    EffectRealizationAssessment,
     EffectRecord,
     EffectReversibility,
     EffectStatus,
     EvidenceRef,
+    RealizationDisposition,
 )
 from administrative_orchestrator.obligations import (
     AdministrativeObligation,
@@ -168,12 +170,17 @@ def test_domain_state_fulfillment_completes_only_domain_state_obligations() -> N
         status=EffectStatus.SUCCEEDED,
     )
     evidence = EvidenceRef(source='test', owner='test', observed_at=datetime.now(UTC))
+    realization = EffectRealizationAssessment(
+        effect_id=effect.effect_id,
+        disposition=RealizationDisposition.VERIFIED,
+        evidence=[evidence],
+    )
     outcome = ConfirmedOutcome(
         case_id=case.case_id,
         case_version=case.version,
         authority_epoch=case.authority_epoch,
         effect_id=effect.effect_id,
-        realization_assessment_id=uuid4(),
+        realization_assessment_id=realization.assessment_id,
         outcome_kind=f"{external.target_system}.{external.required_operation}.verified",
         evidence=[evidence],
     )
@@ -186,6 +193,7 @@ def test_domain_state_fulfillment_completes_only_domain_state_obligations() -> N
         obligation_set,
         [effect],
         [outcome],
+        realizations=[realization],
         links=[link],
         fulfillments=fulfillments,
     )
@@ -195,6 +203,7 @@ def test_domain_state_fulfillment_completes_only_domain_state_obligations() -> N
         obligation_set,
         [effect],
         [outcome],
+        realizations=[realization],
         links=[link],
         fulfillments=fulfillments,
     )

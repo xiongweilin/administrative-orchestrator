@@ -5,9 +5,11 @@ from pathlib import Path
 from administrative_orchestrator.intake.artifacts import FilesystemArtifactStore
 from administrative_orchestrator.intake.documents import (
     DocumentAttachmentProcessor,
+    DocumentErrorCode,
     DocumentEvidenceDraft,
     DocumentExtraction,
     DocumentFactDraft,
+    DocumentParseError,
     DocumentProcessingStatus,
     MessageAttachment,
     PlainTextDocumentParser,
@@ -82,12 +84,15 @@ def test_parser_failure_retains_raw_artifact_and_emits_no_facts(tmp_path: Path) 
     class FailingParser:
         def parse(self, attachment, content):
             assert content == attachment.content
-            raise RuntimeError("OCR engine unavailable")
+            raise DocumentParseError(
+                "parser dependency is unavailable",
+                code=DocumentErrorCode.PARSER_UNAVAILABLE,
+            )
 
     result = DocumentAttachmentProcessor(store, FailingParser()).process(_attachment(b"binary"))
 
     assert result.status is DocumentProcessingStatus.FAILED
-    assert result.error_code == "parser_error"
+    assert result.error_code == DocumentErrorCode.PARSER_UNAVAILABLE.value
     assert result.evidence_spans == ()
     assert result.facts == ()
     assert store.get(result.artifact.storage_ref, result.artifact.content_digest) == b"binary"
@@ -114,7 +119,7 @@ def test_unbound_parser_fact_fails_closed_without_fabricating_lineage(tmp_path: 
     result = DocumentAttachmentProcessor(store, InvalidParser()).process(_attachment())
 
     assert result.status is DocumentProcessingStatus.FAILED
-    assert result.error_code == "lineage_validation_failed"
+    assert result.error_code == DocumentErrorCode.LINEAGE_INVALID.value
     assert result.evidence_spans == ()
     assert result.facts == ()
     assert store.get(result.artifact.storage_ref) == _attachment().content

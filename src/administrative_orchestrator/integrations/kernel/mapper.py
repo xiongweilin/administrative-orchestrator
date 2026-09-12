@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from typing import Any
 from uuid import NAMESPACE_URL, UUID, uuid5
 
@@ -68,11 +69,16 @@ def derive_execution_grant(
 def derive_effect_intent(
     case: AdministrativeCase,
     grant: AdministrativeExecutionGrant,
+    *,
+    parameter_overrides: Mapping[str, Any] | None = None,
 ) -> AdministrativeEffectIntent:
     if case.case_id != grant.case_id or case.authority_epoch != grant.authority_epoch:
         raise ValueError("effect intent requires a current administrative execution grant")
     if case.fact_snapshot is None:
         raise ValueError("effect intent requires a current fact snapshot")
+    parameters = dict(case.fact_snapshot.facts)
+    if parameter_overrides is not None:
+        parameters.update(dict(parameter_overrides))
     return AdministrativeEffectIntent(
         intent_id=_uuid("intent", grant.grant_id),
         grant_id=grant.grant_id,
@@ -84,7 +90,7 @@ def derive_effect_intent(
             f"{grant.operation.strip().lower().replace('_', '-')}.v1"
         ),
         subject_ref=grant.subject_ref,
-        parameters=dict(case.fact_snapshot.facts),
+        parameters={**parameters, "subject_ref": grant.subject_ref},
         expected_postcondition=dict(grant.expected_postcondition),
         created_at=grant.issued_at,
     )

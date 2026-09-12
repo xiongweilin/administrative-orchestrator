@@ -32,6 +32,8 @@ type CaseDetail = {
   policy: Record<string, unknown> | null;
   governance: Record<string, unknown> | null;
   obligations: Record<string, unknown> | null;
+  evidence_links?: Array<Record<string, unknown>>;
+  qualification_assessments?: Array<Record<string, unknown>>;
   effects: Array<Record<string, unknown>>;
   outcomes: Array<Record<string, unknown>>;
   audit: Array<Record<string, unknown>> | null;
@@ -191,6 +193,43 @@ async function selectCase(caseId: string): Promise<void> {
   }
 }
 
+async function appendQualificationAssessment(): Promise<void> {
+  if (!selectedId || !selected) return;
+  const assessmentKind = root.querySelector<HTMLSelectElement>("#qualification-kind")?.value;
+  const ruleRef = root.querySelector<HTMLInputElement>("#qualification-rule")?.value.trim();
+  const inputRefs = (root.querySelector<HTMLInputElement>("#qualification-inputs")?.value || "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+  const result = root.querySelector<HTMLSelectElement>("#qualification-result")?.value;
+  if (!assessmentKind || !ruleRef || inputRefs.length === 0 || !result) {
+    errorMessage = "Qualification kind, rule, input references, and result are required.";
+    render();
+    return;
+  }
+  busy = true;
+  errorMessage = "";
+  render();
+  try {
+    await api(`/v1/operations/cases/${selectedId}/qualification-assessments`, {
+      method: "POST",
+      body: JSON.stringify({
+        assessment_kind: assessmentKind,
+        input_refs: inputRefs,
+        rule_ref: ruleRef,
+        result,
+        blocking_reasons: [],
+      }),
+    });
+    selected = await api<CaseDetail>(`/v1/operations/cases/${selectedId}`);
+  } catch (error) {
+    errorMessage = error instanceof Error ? error.message : String(error);
+  } finally {
+    busy = false;
+    render();
+  }
+}
+
 async function loadIntakeQueue(): Promise<void> {
   busy = true;
   errorMessage = "";
@@ -293,8 +332,17 @@ async function promoteIntakeCandidate(): Promise<void> {
     bridge_to_m5: ["employee-onboarding", "employee-offboarding"].includes(
       value("intake-case-kind"),
     ),
+    bridge_to_m8: [
+      "procurement-request",
+      "invoice-ap-preparation",
+      "expense-reimbursement",
+    ].includes(value("intake-case-kind")),
     promotion_policy_ref:
-      value("intake-case-kind") === "employee-offboarding"
+      ["procurement-request", "invoice-ap-preparation", "expense-reimbursement"].includes(
+        value("intake-case-kind"),
+      )
+        ? "m8-human-confirmed-v1"
+        : value("intake-case-kind") === "employee-offboarding"
         ? "m7-human-confirmed-v1"
         : "m6-human-confirmed-v1",
   };
@@ -556,6 +604,9 @@ function render(): void {
   root.querySelector<HTMLButtonElement>("#authoritative-refresh")?.addEventListener("click", () =>
     void refreshAuthoritativeFacts(),
   );
+  root.querySelector<HTMLButtonElement>("#append-qualification")?.addEventListener("click", () =>
+    void appendQualificationAssessment(),
+  );
   root.querySelectorAll<HTMLButtonElement>("[data-case-id]").forEach((button) => {
     button.addEventListener("click", () => {
       const caseId = button.dataset.caseId;
@@ -573,6 +624,18 @@ function render(): void {
 function renderDetail(detail: CaseDetail): string {
   const caseValue = detail.case;
   const status = String(caseValue.status ?? "unknown") as CaseStatus;
+  const caseKind = String(caseValue.case_kind ?? "");
+  const qualificationKinds =
+    caseKind === "invoice-ap-preparation"
+      ? ["vendor_qualification", "three_way_match"]
+      : caseKind === "procurement-request"
+        ? ["vendor_qualification"]
+        : ["expense_policy_qualification"];
+  const isFinancial = [
+    "procurement-request",
+    "invoice-ap-preparation",
+    "expense-reimbursement",
+  ].includes(caseKind);
   return `
     <div class="detail-heading">
       <div>
@@ -592,6 +655,26 @@ function renderDetail(detail: CaseDetail): string {
       ${section("Obligations", detail.obligations)}
       ${section("Kernel-backed effects", detail.effects)}
       ${section("Confirmed outcomes", detail.outcomes)}
+      ${detail.evidence_links ? section("Evidence lineage", detail.evidence_links) : ""}
+      ${detail.qualification_assessments ? section("Qualification assessments", detail.qualification_assessments) : ""}
+      ${isFinancial ? `
+        <article class="card">
+          <h3>Record qualification assessment</h3>
+          <p class="muted">This records a current, scoped qualification input. It does not authorize payment or settlement.</p>
+          <label for="qualification-kind">Assessment kind</label>
+          <select id="qualification-kind">
+            ${qualificationKinds.map((item) => `<option value="${item}">${item}</option>`).join("")}
+          </select>
+          ${inputField("qualification-rule", "Rule reference", "", "m8-vendor-master-v1")}
+          ${inputField("qualification-inputs", "Input references", "", "artifact:uuid,representation:uuid")}
+          <label for="qualification-result">Result</label>
+          <select id="qualification-result">
+            ${["qualified", "incomplete", "mismatch", "ambiguous", "duplicate"]
+              .map((item) => `<option value="${item}" ${item === "qualified" ? "selected" : ""}>${item}</option>`)
+              .join("")}
+          </select>
+          <button id="append-qualification" ${busy ? "disabled" : ""}>Save qualification assessment</button>
+        </article>` : ""}
       ${detail.audit === null ? `<article class="card"><h3>Audit</h3><p class="muted">Not disclosed to this principal. Audit authority is separate from operations visibility.</p></article>` : section("Audit", detail.audit)}
     </div>
   `;

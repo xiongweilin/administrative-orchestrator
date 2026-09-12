@@ -93,6 +93,9 @@ class AdministrativeResponsibilityDischargeService:
 
         effects = self.execution.list_effects(case.case_id, case.authority_epoch)
         outcomes = self.execution.list_outcomes(case.case_id, case.authority_epoch)
+        realizations = self.execution.list_realizations(
+            case.case_id, case.authority_epoch
+        )
         links = self.obligations.list_links(case.case_id, case.authority_epoch)
         fulfillments = self.obligations.list_domain_state_fulfillments(
             case.case_id, case.authority_epoch
@@ -101,6 +104,7 @@ class AdministrativeResponsibilityDischargeService:
             obligation_set,
             effects,
             outcomes,
+            realizations=realizations,
             links=links,
             fulfillments=fulfillments,
         )
