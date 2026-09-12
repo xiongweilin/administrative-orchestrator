@@ -11,7 +11,7 @@
 - Compose project: `administrative-m8-staging`
 - Administrative repository SHA: `<sha>`
 - Agent Kernel revision: `<exact AGENT_KERNEL_REF candidate revision>`
-- Database migration head: `0026_m8_transaction_evidence`
+- Database migration head: `0027_m8_current_qualification`
 - Operator: `<principal-ref>`
 - Artifact/evidence backup reference: `<redacted-locator>`
 

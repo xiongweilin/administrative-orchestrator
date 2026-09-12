@@ -36,6 +36,10 @@ def _production_settings(**overrides) -> Settings:
         "odoo_reader_secret_env": "ADMIN_ODOO_READER_SECRET",
         "odoo_writer_secret_env": "ADMIN_ODOO_WRITER_SECRET",
         "odoo_verifier_secret_env": "ADMIN_ODOO_VERIFIER_SECRET",
+        "odoo_financial_writer_username": "financial-writer",
+        "odoo_financial_verifier_username": "financial-verifier",
+        "odoo_financial_writer_secret_env": "ADMIN_ODOO_FINANCIAL_WRITER_SECRET",
+        "odoo_financial_verifier_secret_env": "ADMIN_ODOO_FINANCIAL_VERIFIER_SECRET",
         "iam_source_kind": "keycloak",
         "keycloak_base_url": "https://keycloak.example.test",
         "keycloak_realm": "company",
@@ -121,6 +125,14 @@ def test_production_connector_isolation_rejects_shared_writer_verifier_identity(
             _production_settings(keycloak_verifier_client_id="kernel-writer")
         )
 
+    with pytest.raises(
+        ProductionReadinessError,
+        match="Odoo financial writer and verifier identities",
+    ):
+        validate_production_connector_isolation(
+            _production_settings(odoo_financial_verifier_username="financial-writer")
+        )
+
 
 def test_production_connector_isolation_rejects_shared_secret_reference():
     with pytest.raises(ProductionReadinessError, match="Odoo writer and verifier secret references"):
@@ -134,4 +146,14 @@ def test_production_connector_isolation_rejects_shared_secret_reference():
     ):
         validate_production_connector_isolation(
             _production_settings(keycloak_verifier_secret_env="ADMIN_KEYCLOAK_WRITER_SECRET")
+        )
+
+    with pytest.raises(
+        ProductionReadinessError,
+        match="Odoo financial writer and verifier secret references",
+    ):
+        validate_production_connector_isolation(
+            _production_settings(
+                odoo_financial_verifier_secret_env="ADMIN_ODOO_FINANCIAL_WRITER_SECRET"
+            )
         )

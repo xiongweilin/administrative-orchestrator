@@ -33,6 +33,30 @@ def validate_production_connector_isolation(settings: Settings) -> None:
         raise ProductionReadinessError("Odoo writer and verifier identities must be distinct")
     if settings.odoo_writer_secret_env == settings.odoo_verifier_secret_env:
         raise ProductionReadinessError("Odoo writer and verifier secret references must be distinct")
+    _require_nonempty(
+        settings.odoo_financial_writer_username,
+        "ADMIN_ODOO_FINANCIAL_WRITER_USERNAME",
+    )
+    _require_nonempty(
+        settings.odoo_financial_verifier_username,
+        "ADMIN_ODOO_FINANCIAL_VERIFIER_USERNAME",
+    )
+    if settings.odoo_financial_writer_username == settings.odoo_financial_verifier_username:
+        raise ProductionReadinessError(
+            "Odoo financial writer and verifier identities must be distinct"
+        )
+    _require_nonempty(
+        settings.odoo_financial_writer_secret_env,
+        "ADMIN_ODOO_FINANCIAL_WRITER_SECRET",
+    )
+    _require_nonempty(
+        settings.odoo_financial_verifier_secret_env,
+        "ADMIN_ODOO_FINANCIAL_VERIFIER_SECRET",
+    )
+    if settings.odoo_financial_writer_secret_env == settings.odoo_financial_verifier_secret_env:
+        raise ProductionReadinessError(
+            "Odoo financial writer and verifier secret references must be distinct"
+        )
     if not settings.odoo_request_ref_field.startswith("x_"):
         raise ProductionReadinessError("Odoo durable request identity must use a custom x_ field")
 

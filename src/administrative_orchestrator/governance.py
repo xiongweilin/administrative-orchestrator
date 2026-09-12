@@ -19,6 +19,10 @@ from .authority import (
 from .domain import AdministrativeCase, PolicyRef, UtcModel, normalize_datetime, utcnow
 from .persistence import Base, DecisionRow, SqlStore
 from .policy_plane import PolicyRepository, PolicyVersionRow
+from .transaction_repository import (
+    TransactionRecordConflict,
+    current_assessments_in_session,
+)
 
 
 class GovernanceError(RuntimeError):
@@ -30,6 +34,12 @@ class GovernanceQualification(UtcModel):
     principal_id: str
     role: str
     qualification_refs: tuple[str, ...]
+
+
+class TransactionQualificationBasis(UtcModel):
+    assessment_id: UUID
+    assessment_kind: str
+    assessment_digest: str
 
 
 class GovernanceBasis(UtcModel):
@@ -50,6 +60,7 @@ class GovernanceBasis(UtcModel):
     fact_dependency_keys: tuple[str, ...] | None = None
     fact_dependency_values: dict[str, Any] = Field(default_factory=dict)
     expected_change_keys: tuple[str, ...] = ()
+    transaction_qualifications: tuple[TransactionQualificationBasis, ...] = ()
 
     @model_validator(mode="after")
     def dependency_scope_is_unambiguous(self) -> GovernanceBasis:
@@ -87,6 +98,9 @@ class GovernanceBasisRow(Base):
     organization_scope: Mapped[str] = mapped_column(String(512), nullable=False)
     approval_satisfaction_id: Mapped[UUID] = mapped_column(Uuid, nullable=False, unique=True)
     qualifications_json: Mapped[list[dict[str, Any]]] = mapped_column(JSON, nullable=False)
+    transaction_qualifications_json: Mapped[list[dict[str, Any]] | None] = mapped_column(
+        JSON, nullable=True
+    )
     authority_digest: Mapped[str] = mapped_column(String(128), nullable=False)
     basis_digest: Mapped[str] = mapped_column(String(128), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
@@ -217,6 +231,18 @@ class GovernanceRepository:
 
         now = utcnow()
         with self.store.sessions() as db:
+            try:
+                current_transaction_qualifications = self._transaction_qualification_basis(
+                    db, case
+                )
+            except TransactionRecordConflict as exc:
+                reasons.append(f"current transaction qualifications are ambiguous: {exc}")
+                current_transaction_qualifications = ()
+            if (
+                basis.transaction_qualifications
+                and current_transaction_qualifications != basis.transaction_qualifications
+            ):
+                reasons.append("transaction qualification basis changed")
             for qualification in basis.qualifications:
                 refs = _select_qualification_basis(
                     db,
@@ -237,6 +263,57 @@ class GovernanceRepository:
                     )
 
         return GovernanceValidation(valid=not reasons, reasons=tuple(reasons), checked_at=now)
+
+    def bind_current_transaction_qualifications(
+        self,
+        basis: GovernanceBasis,
+        case: AdministrativeCase,
+    ) -> GovernanceBasis:
+        """Bind qualification evidence immediately before financial effect planning."""
+
+        if basis.case_id != case.case_id or basis.authority_epoch != case.authority_epoch:
+            raise GovernanceError("transaction qualification binding is stale")
+        with self.store.sessions.begin() as db:
+            row = db.get(GovernanceBasisRow, basis.basis_id)
+            if row is None:
+                raise GovernanceError("governance basis is not persisted")
+            restored = self._from_row(row)
+            try:
+                current = self._transaction_qualification_basis(db, case)
+            except TransactionRecordConflict as exc:
+                raise GovernanceError(str(exc)) from exc
+            if not current:
+                return restored
+            if restored.transaction_qualifications:
+                if restored.transaction_qualifications != current:
+                    raise GovernanceError("transaction qualification basis is stale")
+                return restored
+
+            updated = restored.model_copy(update={"transaction_qualifications": current})
+            basis_payload = {
+                "case_id": str(updated.case_id),
+                "authority_epoch": updated.authority_epoch,
+                "fact_snapshot_id": str(updated.fact_snapshot_id),
+                "fact_digest": updated.fact_digest,
+                "policy": updated.policy_ref.model_dump(mode="json"),
+                "policy_definition_digest": updated.policy_definition_digest,
+                "organization_scope": updated.organization_scope,
+                "approval_satisfaction_id": str(updated.approval_satisfaction_id),
+                "authority_digest": updated.authority_digest,
+                "transaction_qualifications": [
+                    item.model_dump(mode="json") for item in updated.transaction_qualifications
+                ],
+            }
+            if updated.fact_dependency_keys is not None:
+                basis_payload["fact_dependency_keys"] = list(updated.fact_dependency_keys)
+                basis_payload["expected_change_keys"] = list(updated.expected_change_keys)
+            updated = updated.model_copy(update={"basis_digest": _digest(basis_payload)})
+            row.transaction_qualifications_json = [
+                item.model_dump(mode="json") for item in updated.transaction_qualifications
+            ]
+            row.basis_digest = updated.basis_digest
+            db.flush()
+            return updated
 
     def _build_basis(
         self,
@@ -299,6 +376,7 @@ class GovernanceRepository:
             }
         )
         policy_definition_digest = _digest(policy_row.definition_json)
+        transaction_qualifications = self._transaction_qualification_basis(db, case)
         basis_payload = {
             "case_id": str(case.case_id),
             "authority_epoch": case.authority_epoch,
@@ -309,6 +387,9 @@ class GovernanceRepository:
             "organization_scope": organization_scope,
             "approval_satisfaction_id": str(satisfaction.satisfaction_id),
             "authority_digest": authority_digest,
+            "transaction_qualifications": [
+                item.model_dump(mode="json") for item in transaction_qualifications
+            ],
         }
         if fact_dependency_keys is not None:
             basis_payload["fact_dependency_keys"] = list(fact_dependency_keys)
@@ -337,6 +418,7 @@ class GovernanceRepository:
             fact_dependency_keys=fact_dependency_keys,
             fact_dependency_values=dependency_values,
             expected_change_keys=expected_change_keys,
+            transaction_qualifications=transaction_qualifications,
         )
 
     @staticmethod
@@ -360,6 +442,9 @@ class GovernanceRepository:
                 organization_scope=basis.organization_scope,
                 approval_satisfaction_id=basis.approval_satisfaction_id,
                 qualifications_json=[item.model_dump(mode="json") for item in basis.qualifications],
+                transaction_qualifications_json=[
+                    item.model_dump(mode="json") for item in basis.transaction_qualifications
+                ],
                 authority_digest=basis.authority_digest,
                 basis_digest=basis.basis_digest,
                 created_at=basis.created_at,
@@ -400,6 +485,30 @@ class GovernanceRepository:
             ),
             fact_dependency_values=dict(row.fact_dependency_values_json or {}),
             expected_change_keys=tuple(row.expected_change_keys_json or ()),
+            transaction_qualifications=tuple(
+                TransactionQualificationBasis.model_validate(item)
+                for item in (row.transaction_qualifications_json or ())
+            ),
+        )
+
+    @staticmethod
+    def _transaction_qualification_basis(
+        db: Session,
+        case: AdministrativeCase,
+    ) -> tuple[TransactionQualificationBasis, ...]:
+        assessments = current_assessments_in_session(db, case.case_id, case.authority_epoch)
+        return tuple(
+            TransactionQualificationBasis(
+                assessment_id=assessment.assessment_id,
+                assessment_kind=assessment.assessment_kind,
+                assessment_digest=_digest(
+                    assessment.model_dump(mode="json", exclude={"assessment_id"})
+                ),
+            )
+            for assessment in sorted(
+                assessments,
+                key=lambda item: (item.assessment_kind, str(item.assessment_id)),
+            )
         )
 
 
@@ -503,4 +612,5 @@ __all__ = [
     "GovernanceQualification",
     "GovernanceRepository",
     "GovernanceValidation",
+    "TransactionQualificationBasis",
 ]
