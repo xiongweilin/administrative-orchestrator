@@ -131,7 +131,7 @@ jobs:
         env:
           ADMIN_SANDBOX_DATABASE_URL: sqlite+pysqlite:///./m5-pinned-sandbox.db
           ADMIN_SANDBOX_BASE_URL: http://127.0.0.1:8010
-          PORTABLE_RUNTIME_RESPONSIBILITY_ADMISSION_PROFILE: administrative-public-v2
+          PORTABLE_RUNTIME_RESPONSIBILITY_ADMISSION_PROFILE: administrative-public-v3
           PORTABLE_RUNTIME_BOUNDED_DOMAIN_EFFECT_FACTORY: scripts.kernel_cutover_stack:build
           PORTABLE_RUNTIME_ADMIN_E2E_STATE_PATH: ./m5-pinned-kernel.db
         run: |

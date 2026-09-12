@@ -18,8 +18,16 @@ jobs:
       - uses: astral-sh/setup-uv@v6
         with:
           python-version: "3.12"
+      - name: Checkout M8 Agent Kernel candidate
+        uses: actions/checkout@v4
+        with:
+          repository: xiongweilin/agent-kernel
+          ref: 0bb90afa4cf8517018e3e5b3715da12d28908c79
+          path: .integration/agent-kernel
       - name: Install
-        run: uv sync --extra dev
+        run: |
+          uv sync --extra dev
+          uv pip install --python .venv/bin/python -e .integration/agent-kernel
       - name: Ruff
         run: uv run ruff check .
       - name: Pytest
@@ -108,11 +116,11 @@ jobs:
     steps:
       - name: Checkout Administrative Orchestrator
         uses: actions/checkout@v4
-      - name: Checkout Agent Kernel main
+      - name: Checkout M8 Agent Kernel candidate
         uses: actions/checkout@v4
         with:
           repository: xiongweilin/agent-kernel
-          ref: main
+          ref: 0bb90afa4cf8517018e3e5b3715da12d28908c79
           path: .integration/agent-kernel
       - uses: astral-sh/setup-uv@v6
         with:
@@ -127,7 +135,7 @@ jobs:
         env:
           ADMIN_SANDBOX_DATABASE_URL: sqlite+pysqlite:///./kernel-cutover-sandbox.db
           ADMIN_SANDBOX_BASE_URL: http://127.0.0.1:8010
-          PORTABLE_RUNTIME_RESPONSIBILITY_ADMISSION_PROFILE: administrative-public-v2
+          PORTABLE_RUNTIME_RESPONSIBILITY_ADMISSION_PROFILE: administrative-public-v3
           PORTABLE_RUNTIME_BOUNDED_DOMAIN_EFFECT_FACTORY: scripts.kernel_cutover_stack:build
           PORTABLE_RUNTIME_ADMIN_E2E_STATE_PATH: ./kernel-cutover-kernel.db
           PORTABLE_RUNTIME_ADMIN_E2E_PRE_RECEIPT_FAIL_ONCE_PATH: ./kernel-pre-receipt-fault.marker
@@ -159,7 +167,7 @@ jobs:
           ADMIN_SANDBOX_BASE_URL: http://127.0.0.1:8010
           ADMIN_LOST_ACK_DB_PATH: ./kernel-lost-ack-admin.db
           ADMIN_LOST_ACK_RECEIPT_PATH: ./kernel-lost-ack-first-receipt.json
-          PORTABLE_RUNTIME_RESPONSIBILITY_ADMISSION_PROFILE: administrative-public-v2
+          PORTABLE_RUNTIME_RESPONSIBILITY_ADMISSION_PROFILE: administrative-public-v3
           PORTABLE_RUNTIME_BOUNDED_DOMAIN_EFFECT_FACTORY: scripts.kernel_cutover_stack:build
           PORTABLE_RUNTIME_ADMIN_E2E_STATE_PATH: ./kernel-cutover-kernel.db
           PORTABLE_RUNTIME_ADMIN_E2E_PRE_RECEIPT_FAIL_ONCE_PATH: ./kernel-pre-receipt-fault.marker
@@ -207,7 +215,7 @@ jobs:
           ADMIN_KERNEL_BASE_URL: http://127.0.0.1:8020
           ADMIN_SANDBOX_BASE_URL: http://127.0.0.1:8010
           ADMIN_PRE_RECEIPT_DB_PATH: ./kernel-pre-receipt-admin.db
-          PORTABLE_RUNTIME_RESPONSIBILITY_ADMISSION_PROFILE: administrative-public-v2
+          PORTABLE_RUNTIME_RESPONSIBILITY_ADMISSION_PROFILE: administrative-public-v3
           PORTABLE_RUNTIME_BOUNDED_DOMAIN_EFFECT_FACTORY: scripts.kernel_cutover_stack:build
           PORTABLE_RUNTIME_ADMIN_E2E_STATE_PATH: ./kernel-cutover-kernel.db
           PORTABLE_RUNTIME_ADMIN_E2E_PRE_RECEIPT_FAIL_ONCE_PATH: ./kernel-pre-receipt-fault.marker
@@ -276,7 +284,7 @@ jobs:
           fi
 
           rm -f kernel-ambiguous-admin.db kernel-ambiguous-kernel.db kernel-ambiguous-kernel.db-wal kernel-ambiguous-kernel.db-shm kernel-ambiguous-result.marker kernel-ambiguous-fault.log kernel-ambiguous-restart.log
-          PORTABLE_RUNTIME_RESPONSIBILITY_ADMISSION_PROFILE=administrative-public-v2 \
+          PORTABLE_RUNTIME_RESPONSIBILITY_ADMISSION_PROFILE=administrative-public-v3 \
           PORTABLE_RUNTIME_BOUNDED_DOMAIN_EFFECT_FACTORY=scripts.kernel_cutover_stack:build \
           PORTABLE_RUNTIME_ADMIN_E2E_STATE_PATH=./kernel-ambiguous-kernel.db \
           PORTABLE_RUNTIME_ADMIN_E2E_RESULT_COMMIT_FAIL_ONCE_PATH=./kernel-ambiguous-result.marker \
@@ -301,7 +309,7 @@ jobs:
             exit 1
           fi
 
-          PORTABLE_RUNTIME_RESPONSIBILITY_ADMISSION_PROFILE=administrative-public-v2 \
+          PORTABLE_RUNTIME_RESPONSIBILITY_ADMISSION_PROFILE=administrative-public-v3 \
           PORTABLE_RUNTIME_BOUNDED_DOMAIN_EFFECT_FACTORY=scripts.kernel_cutover_stack:build \
           PORTABLE_RUNTIME_ADMIN_E2E_STATE_PATH=./kernel-ambiguous-kernel.db \
           uv run uvicorn portable_runtime.public_contracts.http:create_configured_public_app --factory --host 127.0.0.1 --port 8020 >kernel-ambiguous-restart.log 2>&1 &
