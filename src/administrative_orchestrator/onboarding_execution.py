@@ -43,7 +43,7 @@ from .service import (
     plan_effect,
     require_reopen,
 )
-from .transaction_repository import TransactionRepository
+from .transaction_repository import TransactionRecordConflict, TransactionRepository
 from .verification import (
     VerificationDisposition,
     verify_financial_observation,
@@ -247,6 +247,11 @@ class OnboardingExecutionEngine:
                     raise TransitionError(
                         "governance basis is stale: " + "; ".join(validation.reasons)
                     )
+                if case.case_kind in {
+                    "procurement-request",
+                    "invoice-ap-preparation",
+                }:
+                    basis = self.governance.bind_current_transaction_qualifications(basis, case)
                 governance_basis_id = basis.basis_id
         else:
             if get_settings().authority_enforcement_enabled:
@@ -348,9 +353,12 @@ class OnboardingExecutionEngine:
             },
         }
         required = required_by_case.get(case.case_kind, set())
-        assessments = TransactionRepository(self.store).list_assessments(
-            case.case_id, case.authority_epoch
-        )
+        try:
+            assessments = TransactionRepository(self.store).list_current_assessments(
+                case.case_id, case.authority_epoch
+            )
+        except TransactionRecordConflict as exc:
+            raise TransitionError(str(exc)) from exc
         qualified = {
             item.assessment_kind
             for item in assessments

@@ -18,11 +18,11 @@ jobs:
       - uses: astral-sh/setup-uv@v6
         with:
           python-version: "3.12"
-      - name: Checkout M8 Agent Kernel candidate
+      - name: Checkout promoted Agent Kernel baseline
         uses: actions/checkout@v4
         with:
           repository: xiongweilin/agent-kernel
-          ref: 0bb90afa4cf8517018e3e5b3715da12d28908c79
+          ref: 729082888f5a875db2df2a2e59517ca6d80e4be8
           path: .integration/agent-kernel
       - name: Install
         run: |
@@ -41,6 +41,8 @@ jobs:
           uv run alembic upgrade head
       - name: Compose config
         run: docker compose config --quiet
+      - name: Production Compose config
+        run: docker compose --env-file .env.production.example -f compose.production.yaml config --quiet
       - name: SonarQube Cloud Scan
         uses: SonarSource/sonarqube-scan-action@v8.2.1
         env:
@@ -116,11 +118,11 @@ jobs:
     steps:
       - name: Checkout Administrative Orchestrator
         uses: actions/checkout@v4
-      - name: Checkout M8 Agent Kernel candidate
+      - name: Checkout promoted Agent Kernel baseline
         uses: actions/checkout@v4
         with:
           repository: xiongweilin/agent-kernel
-          ref: 0bb90afa4cf8517018e3e5b3715da12d28908c79
+          ref: 729082888f5a875db2df2a2e59517ca6d80e4be8
           path: .integration/agent-kernel
       - uses: astral-sh/setup-uv@v6
         with:

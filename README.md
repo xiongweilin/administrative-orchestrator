@@ -123,11 +123,11 @@ The M5 implementation now includes:
 Production does not take its Agent Kernel revision from this README. The
 deployment-level canonical source is `AGENT_KERNEL_REF`; production Compose,
 the Kernel image build, Administrative expected revision, and the runtime
-`build_revision` evidence must all use that same value. The promoted M8 Agent
-Kernel revision is:
+`build_revision` evidence must all use that same value. The current promoted
+production Agent Kernel baseline is:
 
 ```text
-0bb90afa4cf8517018e3e5b3715da12d28908c79
+729082888f5a875db2df2a2e59517ca6d80e4be8
 ```
 
 M5 has an explicit acceptance boundary: repository CI can prove code, migration, restart, cut-over, DR, ambiguity semantics, and static/security quality gates, while the external checklist proves enterprise OIDC/Odoo/Keycloak credentials and network behavior. The isolated real-staging checklist, final exact-head CI, squash merge, and post-merge main CI were recorded on the historical M5 baseline `fe4b3f4bf2e376bd7105caf7d15d77e2483c7197`; M5 is **complete for the recorded scope**. The previous accepted Kernel baseline `14758ccbb50c3eafae9e80333aa6f238e1d1791b` remains historical; the M8 revision was promoted through merged PR #99 and is accepted for its recorded scope.

@@ -49,6 +49,10 @@ class TransactionQualificationAssessmentRow(Base):
     )
     authority_epoch: Mapped[int] = mapped_column(Integer, nullable=False)
     assessment_kind: Mapped[str] = mapped_column(String(128), nullable=False)
+    supersedes_assessment_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("administrative_transaction_qualification_assessment.assessment_id"),
+        nullable=True,
+    )
     input_refs_json: Mapped[list[str]] = mapped_column(JSON, nullable=False)
     rule_ref: Mapped[str] = mapped_column(String(512), nullable=False)
     result: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -78,6 +82,7 @@ def _assessment_from_row(
         case_id=row.case_id,
         authority_epoch=row.authority_epoch,
         assessment_kind=row.assessment_kind,
+        supersedes_assessment_id=row.supersedes_assessment_id,
         input_refs=tuple(row.input_refs_json),
         rule_ref=row.rule_ref,
         result=row.result,
@@ -208,12 +213,64 @@ class TransactionRepository:
                         "qualification assessment identity was reused with different semantics"
                     )
                 return restored
+            superseded = None
+            if assessment.supersedes_assessment_id is not None:
+                superseded = db.get(
+                    TransactionQualificationAssessmentRow,
+                    assessment.supersedes_assessment_id,
+                )
+                if superseded is None:
+                    raise TransactionRecordConflict(
+                        "qualification assessment supersession target does not exist"
+                    )
+                if (
+                    superseded.case_id != assessment.case_id
+                    or superseded.authority_epoch != assessment.authority_epoch
+                    or superseded.assessment_kind != assessment.assessment_kind
+                ):
+                    raise TransactionRecordConflict(
+                        "qualification assessment supersession target has incompatible identity"
+                    )
+                successor_exists = db.execute(
+                    select(TransactionQualificationAssessmentRow.assessment_id).where(
+                        TransactionQualificationAssessmentRow.supersedes_assessment_id
+                        == assessment.supersedes_assessment_id
+                    )
+                ).first()
+                if successor_exists is not None:
+                    raise TransactionRecordConflict(
+                        "qualification assessment supersession target is already superseded"
+                    )
+            else:
+                same_kind_rows = db.execute(
+                    select(TransactionQualificationAssessmentRow).where(
+                        TransactionQualificationAssessmentRow.case_id == assessment.case_id,
+                        TransactionQualificationAssessmentRow.authority_epoch
+                        == assessment.authority_epoch,
+                        TransactionQualificationAssessmentRow.assessment_kind
+                        == assessment.assessment_kind,
+                    )
+                ).scalars().all()
+                superseded_ids = {
+                    row.supersedes_assessment_id
+                    for row in same_kind_rows
+                    if row.supersedes_assessment_id is not None
+                }
+                current_same_kind = next(
+                    (row for row in same_kind_rows if row.assessment_id not in superseded_ids),
+                    None,
+                )
+                if current_same_kind is not None:
+                    raise TransactionRecordConflict(
+                        "new qualification assessment must supersede the current assessment"
+                    )
             db.add(
                 TransactionQualificationAssessmentRow(
                     assessment_id=assessment.assessment_id,
                     case_id=assessment.case_id,
                     authority_epoch=assessment.authority_epoch,
                     assessment_kind=assessment.assessment_kind,
+                    supersedes_assessment_id=assessment.supersedes_assessment_id,
                     input_refs_json=list(assessment.input_refs),
                     rule_ref=assessment.rule_ref,
                     result=assessment.result.value,
@@ -279,10 +336,65 @@ class TransactionRepository:
             )
             return [_assessment_from_row(row) for row in rows]
 
+    def list_current_assessments(
+        self, case_id: UUID, authority_epoch: int
+    ) -> list[TransactionQualificationAssessment]:
+        with self.store.sessions() as db:
+            rows = (
+                db.execute(
+                    select(TransactionQualificationAssessmentRow).where(
+                        TransactionQualificationAssessmentRow.case_id == case_id,
+                        TransactionQualificationAssessmentRow.authority_epoch == authority_epoch,
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            return _current_assessments_from_rows(rows)
+
+
+def _current_assessments_from_rows(
+    rows: list[TransactionQualificationAssessmentRow],
+) -> list[TransactionQualificationAssessment]:
+    assessments = [_assessment_from_row(row) for row in rows]
+    superseded_ids = {
+        item.supersedes_assessment_id
+        for item in assessments
+        if item.supersedes_assessment_id is not None
+    }
+    current = [item for item in assessments if item.assessment_id not in superseded_ids]
+    by_kind: dict[str, list[TransactionQualificationAssessment]] = {}
+    for item in current:
+        by_kind.setdefault(item.assessment_kind, []).append(item)
+    ambiguous = sorted(kind for kind, items in by_kind.items() if len(items) > 1)
+    if ambiguous:
+        raise TransactionRecordConflict(
+            "multiple current qualification assessments exist for: "
+            + ", ".join(ambiguous)
+        )
+    return current
+
+
+def current_assessments_in_session(
+    db, case_id: UUID, authority_epoch: int
+) -> list[TransactionQualificationAssessment]:
+    rows = (
+        db.execute(
+            select(TransactionQualificationAssessmentRow).where(
+                TransactionQualificationAssessmentRow.case_id == case_id,
+                TransactionQualificationAssessmentRow.authority_epoch == authority_epoch,
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return _current_assessments_from_rows(rows)
+
 
 __all__ = [
     "AdministrativeCaseEvidenceLinkRow",
     "TransactionQualificationAssessmentRow",
     "TransactionRecordConflict",
     "TransactionRepository",
+    "current_assessments_in_session",
 ]

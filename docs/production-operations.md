@@ -124,7 +124,7 @@ callback token and optional signature path.
 M8 staging is isolated under `deploy/m8-staging/` and uses the Compose project
 `administrative-m8-staging`, separate PostgreSQL/Odoo/Keycloak/Kernel/artifact
 volumes, and ports `18101`–`18105`. Its migration head is
-`0026_m8_transaction_evidence`.
+`0027_m8_current_qualification`.
 
 The supported financial capabilities are deliberately limited to:
 
@@ -146,8 +146,10 @@ For production, configure distinct financial ERP writer and verifier identities
 and distinct secret references in addition to the HRIS identities. Configure
 the three custom Odoo transaction identity fields used only for durable
 request/reconciliation and subject correlation. Qualification assessments must
-be bound to the current case authority epoch; vendor ambiguity, duplicate
-invoice identity, or deterministic three-way mismatch prevents the ERP effect.
+be bound to the current case authority epoch and an explicit supersession chain;
+only the current assessment for each required kind can satisfy the gate, and
+vendor ambiguity, duplicate invoice identity, or deterministic three-way
+mismatch prevents the ERP effect.
 Back up the Administrative database, DBOS database, Kernel state, and M8
 artifact store together. Do not use M7 volumes as an M8 rollback target.
 

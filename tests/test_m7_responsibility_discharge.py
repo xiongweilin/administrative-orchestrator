@@ -47,6 +47,7 @@ from administrative_orchestrator.responsibility_discharge import (
     ResponsibilityDischargeStatus,
     ResponsibilityHandle,
 )
+from administrative_orchestrator.transaction_repository import TransactionRepository
 
 NOW = datetime(2026, 9, 11, 9, 0, tzinfo=UTC)
 
@@ -550,6 +551,7 @@ def test_operations_detail_exposes_completion_and_read_only_lifecycle_state(monk
     monkeypatch.setattr(operations_api, "_governance", GovernanceRepository(store))
     monkeypatch.setattr(operations_api, "_obligations", ObligationRepository(store))
     monkeypatch.setattr(operations_api, "_execution", ExecutionRepository(store))
+    monkeypatch.setattr(operations_api, "_transactions", TransactionRepository(store))
     monkeypatch.setattr(
         operations_api,
         "_settings",
