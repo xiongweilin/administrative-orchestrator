@@ -591,4 +591,6 @@ class SqlStore:
 # already-stable M0-M5 persistence definitions out of this module. The import
 # occurs after Base and SqlStore are fully initialized, so intake/repository.py
 # can safely reuse the existing database/session boundary.
+from . import transaction_repository as _transaction_repository  # noqa: E402, F401
+from .intake import document_repository as _document_repository  # noqa: E402, F401
 from .intake import repository as _intake_repository  # noqa: E402, F401

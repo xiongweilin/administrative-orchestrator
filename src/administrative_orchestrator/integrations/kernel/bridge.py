@@ -1,13 +1,18 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
+from typing import Any
+
+from ...authority import AuthorityRepository
 from ...config import Settings, get_settings
-from ...domain import AdministrativeCase
-from ...governance import GovernanceBasis
-from ...obligations import AdministrativeObligation
+from ...domain import AdministrativeCase, EffectRecord
+from ...governance import GovernanceBasis, GovernanceRepository
+from ...obligations import AdministrativeObligation, ObligationRepository
 from ...persistence import SqlStore
 from .capabilities import (
     ADMINISTRATIVE_HRIS_EMPLOYEE_CREATE,
     ADMINISTRATIVE_IAM_IDENTITY_CREATE,
+    FINANCIAL_CUTOVER_CAPABILITIES,
     OFFBOARDING_CUTOVER_CAPABILITIES,
 )
 from .client import HttpKernelResponsibilityClient, KernelResponsibilityClient
@@ -34,6 +39,7 @@ KERNEL_CUTOVER_CAPABILITIES = frozenset(
         ADMINISTRATIVE_HRIS_EMPLOYEE_CREATE,
         ADMINISTRATIVE_IAM_IDENTITY_CREATE,
         *OFFBOARDING_CUTOVER_CAPABILITIES,
+        *FINANCIAL_CUTOVER_CAPABILITIES,
     }
 )
 
@@ -67,6 +73,7 @@ class KernelExecutionBridge:
         self._evidence_client = evidence_client
         self._recovery_client = recovery_client
         self._require_responsibility_discharge = require_responsibility_discharge
+        self._external_operation_refs: dict[str, str] = {}
 
     @property
     def enabled(self) -> bool:
@@ -102,6 +109,11 @@ class KernelExecutionBridge:
             self._compatibility = HttpKernelContractProbe(
                 self.settings.kernel_base_url,
                 timeout_seconds=self.settings.kernel_contract_timeout_seconds,
+                expected_build_revision=(
+                    self.settings.kernel_supported_revision.strip() or None
+                ),
+                require_build_revision=self.settings.runtime_profile
+                in {"staging", "production"},
                 require_work_admission=self.requires_work_admission,
                 require_responsibility_discharge=self.requires_responsibility_discharge,
                 require_domain_effect_execution=self.cutover,
@@ -184,6 +196,8 @@ class KernelExecutionBridge:
         case: AdministrativeCase,
         obligation: AdministrativeObligation,
         governance: GovernanceBasis,
+        *,
+        parameter_overrides: Mapping[str, Any] | None = None,
     ) -> KernelShadowProjection | None:
         if not self.enabled:
             return None
@@ -192,7 +206,13 @@ class KernelExecutionBridge:
         grant = self.repository.put_grant(
             derive_execution_grant(case, obligation, governance)
         )
-        intent = self.repository.put_intent(derive_effect_intent(case, grant))
+        intent = self.repository.put_intent(
+            derive_effect_intent(
+                case,
+                grant,
+                parameter_overrides=parameter_overrides,
+            )
+        )
         planned = project_to_kernel(grant, intent, identity)
         projection = self.repository.put_projection(planned)
 
@@ -235,7 +255,101 @@ class KernelExecutionBridge:
             return projection
 
         execution = self.client().execute(projection, grant, intent)
+        if execution.external_operation_ref:
+            self._external_operation_refs[str(projection.projection_id)] = (
+                execution.external_operation_ref
+            )
         return self.repository.mark_execution(projection, execution)
+
+    def external_operation_ref_for(
+        self,
+        projection: KernelShadowProjection | None,
+    ) -> str | None:
+        if projection is None:
+            return None
+        return self._external_operation_refs.get(str(projection.projection_id))
+
+    def prepare_effect(
+        self,
+        effect: EffectRecord,
+        payload: Mapping[str, Any],
+    ) -> KernelShadowProjection | None:
+        """Prepare and execute one effect with its final dispatch payload.
+
+        Financial effects are dependency ordered by the Administrative engine.
+        Their Kernel projections therefore cannot all be materialized from the
+        case fact snapshot before dispatch: a purchase-order confirmation needs
+        the durable provider reference returned by the preceding draft effect.
+        This entry point creates the projection just-in-time, so that frozen
+        Kernel intent parameters include that dependency without rebinding an
+        existing intent.
+        """
+
+        if effect.obligation_id is None:
+            raise KernelCompatibilityError("Kernel-owned effect lacks an obligation identity")
+        case = self.store.get_case(effect.case_id)
+        if case is None:
+            raise KernelCompatibilityError(f"case {effect.case_id} not found for Kernel effect")
+        if case.authority_epoch != effect.authority_epoch:
+            raise KernelCompatibilityError("Kernel effect authority epoch is stale")
+
+        evaluation = self.store.get_latest_policy_evaluation(case.case_id)
+        if evaluation is None or evaluation.policy_ref != case.policy_ref:
+            raise KernelCompatibilityError("Kernel effect requires the current policy evaluation")
+        satisfaction = AuthorityRepository(self.store).get_approval_satisfaction(
+            case.case_id,
+            case.authority_epoch,
+        )
+        if satisfaction is None or satisfaction.policy_ref != case.policy_ref:
+            raise KernelCompatibilityError("Kernel effect requires current approval satisfaction")
+        if not set(evaluation.required_decision_roles).issubset(
+            set(satisfaction.satisfied_roles)
+        ):
+            raise KernelCompatibilityError(
+                "Kernel effect approval satisfaction does not cover required roles"
+            )
+        governance = GovernanceRepository(self.store).get_for_approval(
+            satisfaction.satisfaction_id
+        )
+        if governance is None:
+            raise KernelCompatibilityError("Kernel effect requires a governance basis")
+        validation = GovernanceRepository(self.store).revalidate(governance, case)
+        if not validation.valid:
+            raise KernelCompatibilityError(
+                "Kernel effect governance basis is stale: "
+                + "; ".join(validation.reasons)
+            )
+
+        obligation_set = ObligationRepository(self.store).get_current(
+            case.case_id,
+            case.authority_epoch,
+        )
+        if obligation_set is None:
+            raise KernelCompatibilityError("Kernel effect requires a current obligation set")
+        obligation = next(
+            (
+                item
+                for item in obligation_set.obligations
+                if item.obligation_id == effect.obligation_id
+            ),
+            None,
+        )
+        if obligation is None:
+            raise KernelCompatibilityError("Kernel effect obligation is not in the current set")
+        if (
+            obligation.target_system != effect.target_system
+            or obligation.required_operation != effect.operation
+            or obligation.subject_ref != effect.subject_ref
+            or obligation.authority_class != effect.authority_class
+        ):
+            raise KernelCompatibilityError("Kernel effect does not implement its obligation")
+
+        return self.prepare(
+            case,
+            obligation,
+            governance,
+            parameter_overrides=payload,
+        )
 
     def projection_for_obligation(
         self,

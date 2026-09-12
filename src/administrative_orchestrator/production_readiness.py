@@ -2,7 +2,12 @@ from __future__ import annotations
 
 from urllib.parse import urlparse
 
-from .config import SUPPORTED_KERNEL_REVISION, Settings
+from .config import Settings
+from .integrations.kernel.compatibility import (
+    HttpKernelContractProbe,
+    KernelCompatibilityError,
+    KernelContractIdentity,
+)
 
 
 class ProductionReadinessError(RuntimeError):
@@ -57,9 +62,9 @@ def validate_production_control_plane(settings: Settings) -> None:
         raise ProductionReadinessError("production external effects require Kernel cutover mode")
     if not settings.external_effects_enabled:
         raise ProductionReadinessError("production cutover requires external effects to be enabled")
-    if settings.kernel_supported_revision != SUPPORTED_KERNEL_REVISION:
+    if not settings.kernel_supported_revision.strip():
         raise ProductionReadinessError(
-            "production Kernel revision does not match the Administrative supported revision"
+            "production requires ADMIN_KERNEL_SUPPORTED_REVISION derived from AGENT_KERNEL_REF"
         )
     if settings.auto_create_schema:
         raise ProductionReadinessError("production schema auto-create must be disabled; use Alembic")
@@ -67,6 +72,46 @@ def validate_production_control_plane(settings: Settings) -> None:
     _require_postgres(settings.database_url, "ADMIN_DATABASE_URL")
     _require_postgres(settings.worker_database_url or "", "ADMIN_WORKER_DATABASE_URL")
     _require_postgres(settings.dbos_system_database_url or "", "ADMIN_DBOS_SYSTEM_DATABASE_URL")
+
+
+def validate_kernel_runtime_compatibility(
+    settings: Settings,
+    *,
+    identity: KernelContractIdentity | None = None,
+) -> KernelContractIdentity:
+    """Fail closed unless the running Kernel proves the expected build revision."""
+
+    if settings.runtime_profile not in {"staging", "production"}:
+        raise ProductionReadinessError(
+            "Kernel runtime compatibility checks require staging or production"
+        )
+    expected = settings.kernel_supported_revision.strip()
+    if not expected:
+        raise ProductionReadinessError(
+            "expected Kernel revision is missing; derive it from AGENT_KERNEL_REF"
+        )
+    if identity is None:
+        try:
+            identity = HttpKernelContractProbe(
+                settings.kernel_base_url,
+                timeout_seconds=settings.kernel_contract_timeout_seconds,
+                expected_build_revision=expected,
+                require_build_revision=True,
+                require_work_admission=settings.kernel_bridge_mode
+                in {"admission", "cutover"},
+                require_domain_effect_execution=settings.kernel_bridge_mode == "cutover",
+                require_domain_effect_recovery=settings.kernel_bridge_mode == "cutover",
+                require_domain_effect_evidence=settings.kernel_bridge_mode == "cutover",
+            ).fetch_identity()
+        except KernelCompatibilityError as exc:
+            raise ProductionReadinessError(
+                "running Agent Kernel failed compatibility/readiness verification"
+            ) from exc
+    if identity.build_revision != expected:
+        raise ProductionReadinessError(
+            "running Agent Kernel build revision does not match AGENT_KERNEL_REF"
+        )
+    return identity
 
 
 def _require_nonempty(value: str, setting_name: str) -> None:
@@ -89,4 +134,5 @@ __all__ = [
     "ProductionReadinessError",
     "validate_production_connector_isolation",
     "validate_production_control_plane",
+    "validate_kernel_runtime_compatibility",
 ]

@@ -33,6 +33,7 @@ class KernelContractIdentity:
     runtime_protocol: str
     persistent_responsibility_contract: str
     domain_responsibility_proposal_contract: str
+    build_revision: str | None = None
     responsibility_work_admission_contract: str | None = None
     responsibility_assessment_record_contract: str | None = None
     responsibility_discharge_decision_record_contract: str | None = None
@@ -47,6 +48,8 @@ class KernelContractIdentity:
 def validate_kernel_catalog(
     raw: dict[str, object],
     *,
+    expected_build_revision: str | None = None,
+    require_build_revision: bool = False,
     require_work_admission: bool = False,
     require_responsibility_discharge: bool = False,
     require_domain_effect_execution: bool = False,
@@ -117,12 +120,19 @@ def validate_kernel_catalog(
                     raise TypeError("domain_effect_verification_evidence view must be an object")
                 evidence_view = str(domain_evidence["current"])
 
+        raw_build_revision = raw.get("build_revision")
+        build_revision = (
+            str(raw_build_revision).strip()
+            if raw_build_revision is not None and str(raw_build_revision).strip()
+            else None
+        )
         identity = KernelContractIdentity(
             catalog_version=str(raw["catalog_version"]),
             owner=str(raw["owner"]),
             runtime_protocol=str(raw["runtime_protocol"]),
             persistent_responsibility_contract=str(persistent),
             domain_responsibility_proposal_contract=str(domain_proposal),
+            build_revision=build_revision,
             responsibility_work_admission_contract=work_admission_contract,
             responsibility_assessment_record_contract=discharge_contracts[
                 "responsibility_assessment_record"
@@ -143,6 +153,15 @@ def validate_kernel_catalog(
         raise KernelCompatibilityError("kernel contract catalog is structurally incomplete") from exc
 
     mismatches: list[str] = []
+    if require_build_revision and not identity.build_revision:
+        mismatches.append("build_revision is required for this deployment profile")
+    if (
+        expected_build_revision is not None
+        and identity.build_revision != expected_build_revision
+    ):
+        mismatches.append(
+            f"build_revision={identity.build_revision!r}, expected {expected_build_revision!r}"
+        )
     if identity.catalog_version != EXPECTED_CATALOG_VERSION:
         mismatches.append(
             f"catalog_version={identity.catalog_version!r}, expected {EXPECTED_CATALOG_VERSION!r}"
@@ -300,6 +319,8 @@ class HttpKernelContractProbe:
         base_url: str,
         *,
         timeout_seconds: float = 3.0,
+        expected_build_revision: str | None = None,
+        require_build_revision: bool = False,
         require_work_admission: bool = False,
         require_responsibility_discharge: bool = False,
         require_domain_effect_execution: bool = False,
@@ -308,6 +329,8 @@ class HttpKernelContractProbe:
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.timeout_seconds = timeout_seconds
+        self.expected_build_revision = expected_build_revision
+        self.require_build_revision = require_build_revision
         self.require_work_admission = require_work_admission
         self.require_responsibility_discharge = require_responsibility_discharge
         self.require_domain_effect_execution = require_domain_effect_execution
@@ -330,6 +353,8 @@ class HttpKernelContractProbe:
             raise KernelCompatibilityError("agent-kernel contract catalog must be a JSON object")
         return validate_kernel_catalog(
             payload,
+            expected_build_revision=self.expected_build_revision,
+            require_build_revision=self.require_build_revision,
             require_work_admission=self.require_work_admission,
             require_responsibility_discharge=self.require_responsibility_discharge,
             require_domain_effect_execution=self.require_domain_effect_execution,

@@ -125,6 +125,97 @@ def verify_onboarding_observation(
     )
 
 
+def verify_financial_observation(
+    effect: EffectRecord,
+    observation: RealityObservation,
+    facts: dict[str, Any] | None = None,
+    *,
+    expected_postcondition: dict[str, Any] | None = None,
+) -> SemanticVerificationResult:
+    """Verify a bounded ERP preparation result without permitting settlement."""
+    del facts
+    if observation.availability == ObservationAvailability.UNAVAILABLE:
+        return SemanticVerificationResult(
+            disposition=VerificationDisposition.UNAVAILABLE,
+            reason="authoritative ERP reality source is currently unavailable",
+        )
+    if observation.availability == ObservationAvailability.UNKNOWN:
+        return SemanticVerificationResult(
+            disposition=VerificationDisposition.UNKNOWN,
+            reason="ERP observation did not establish authoritative availability",
+        )
+    if observation.freshness == ObservationFreshness.STALE:
+        return SemanticVerificationResult(
+            disposition=VerificationDisposition.STALE,
+            reason="authoritative ERP observation is stale",
+        )
+    if observation.freshness == ObservationFreshness.UNKNOWN:
+        return SemanticVerificationResult(
+            disposition=VerificationDisposition.UNKNOWN,
+            reason="ERP observation freshness is unknown",
+        )
+    if observation.presence == ObservationPresence.ABSENT:
+        return SemanticVerificationResult(
+            disposition=VerificationDisposition.ABSENT,
+            reason="authoritative ERP source reports that the preparation is absent",
+        )
+    if observation.presence != ObservationPresence.PRESENT:
+        return SemanticVerificationResult(
+            disposition=VerificationDisposition.UNKNOWN,
+            reason="ERP observation does not establish preparation presence",
+        )
+
+    expected = expected_postcondition or {
+        "target_system": effect.target_system,
+        "operation": effect.operation,
+        "subject_ref": effect.subject_ref,
+    }
+    differences: dict[str, Any] = {}
+    for field in ("target_system", "operation", "subject_ref"):
+        expected_value = expected.get(field, getattr(effect, field))
+        actual = getattr(observation, field)
+        if actual != expected_value:
+            differences[field] = {"expected": expected_value, "actual": actual}
+
+    state = observation.state
+    expected_payload = expected.get("payload", {})
+    payload = state.get("payload")
+    if expected_payload:
+        if not isinstance(payload, dict):
+            differences["payload"] = {
+                "expected": "mapping",
+                "actual": type(payload).__name__,
+            }
+        else:
+            for field, expected_value in expected_payload.items():
+                if payload.get(field) != expected_value:
+                    differences[f"payload.{field}"] = {
+                        "expected": expected_value,
+                        "actual": payload.get(field),
+                    }
+
+    if expected.get("settlement") == "forbidden":
+        settlement = state.get("settlement")
+        if settlement in {"paid", "settled", "executed"} or state.get(
+            "settlement_executed"
+        ) is True:
+            differences["settlement"] = {
+                "expected": "not settled",
+                "actual": settlement or True,
+            }
+
+    if differences:
+        return SemanticVerificationResult(
+            disposition=VerificationDisposition.MISMATCH,
+            reason="authoritative ERP reality does not satisfy the frozen preparation postcondition",
+            differences=differences,
+        )
+    return SemanticVerificationResult(
+        disposition=VerificationDisposition.VERIFIED,
+        reason="fresh authoritative ERP reality satisfies the frozen preparation postcondition",
+    )
+
+
 def _legacy_expected_postcondition(effect: EffectRecord, facts: dict[str, Any]) -> dict[str, Any]:
     expected_payload = {
         field: facts.get(field)
@@ -152,5 +243,6 @@ def _legacy_expected_postcondition(effect: EffectRecord, facts: dict[str, Any]) 
 __all__ = [
     "SemanticVerificationResult",
     "VerificationDisposition",
+    "verify_financial_observation",
     "verify_onboarding_observation",
 ]

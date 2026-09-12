@@ -9,6 +9,7 @@ from administrative_orchestrator.integrations.kernel.bridge import KernelExecuti
 from administrative_orchestrator.integrations.kernel.models import KernelShadowProjection
 from administrative_orchestrator.obligations import (
     ObligationRepository,
+    derive_financial_obligations,
     derive_onboarding_obligations,
 )
 from administrative_orchestrator.persistence import SqlStore
@@ -73,11 +74,26 @@ def prepare_onboarding_kernel_shadow(
     obligations = ObligationRepository(store)
     obligation_set = obligations.get_current(case.case_id, case.authority_epoch)
     if obligation_set is None:
-        obligation_set = derive_onboarding_obligations(
-            case,
-            evaluation,
-            governance_basis_id=governance.basis_id,
-        )
+        if case.case_kind == "employee-onboarding":
+            obligation_set = derive_onboarding_obligations(
+                case,
+                evaluation,
+                governance_basis_id=governance.basis_id,
+            )
+        elif case.case_kind in {
+            "procurement-request",
+            "invoice-ap-preparation",
+            "expense-reimbursement",
+        }:
+            obligation_set = derive_financial_obligations(
+                case,
+                evaluation,
+                governance_basis_id=governance.basis_id,
+            )
+        else:
+            raise TransitionError(
+                f"kernel shadow does not support case kind {case.case_kind!r}"
+            )
         obligations.put(obligation_set)
     elif obligation_set.governance_basis_id != governance.basis_id:
         raise TransitionError("kernel bridge obligation set binds a different governance basis")
@@ -90,4 +106,10 @@ def prepare_onboarding_kernel_shadow(
     return projections
 
 
-__all__ = ["prepare_onboarding_kernel_shadow"]
+prepare_transaction_kernel_shadow = prepare_onboarding_kernel_shadow
+
+
+__all__ = [
+    "prepare_onboarding_kernel_shadow",
+    "prepare_transaction_kernel_shadow",
+]

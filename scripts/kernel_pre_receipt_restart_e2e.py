@@ -133,7 +133,7 @@ def _inputs() -> tuple[AdministrativeCase, GovernanceBasis, AdministrativeObliga
             "operation": "employee.create",
             "subject_ref": SUBJECT_REF,
             "active": True,
-            "payload": facts,
+            "payload": {**facts, "subject_ref": SUBJECT_REF},
         },
         authority_class=AuthorityClass.EMPLOYMENT,
     )

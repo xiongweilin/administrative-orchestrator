@@ -2,12 +2,16 @@ from __future__ import annotations
 
 import pytest
 
-from administrative_orchestrator.config import SUPPORTED_KERNEL_REVISION, Settings
+from administrative_orchestrator.config import Settings
+from administrative_orchestrator.integrations.kernel.compatibility import KernelContractIdentity
 from administrative_orchestrator.production_readiness import (
     ProductionReadinessError,
+    validate_kernel_runtime_compatibility,
     validate_production_connector_isolation,
     validate_production_control_plane,
 )
+
+TEST_KERNEL_REVISION = "kernel-revision-a"
 
 
 def _production_settings(**overrides) -> Settings:
@@ -22,7 +26,7 @@ def _production_settings(**overrides) -> Settings:
         "auto_create_schema": False,
         "external_effects_enabled": True,
         "kernel_bridge_mode": "cutover",
-        "kernel_supported_revision": SUPPORTED_KERNEL_REVISION,
+        "kernel_supported_revision": TEST_KERNEL_REVISION,
         "hris_source_kind": "odoo",
         "odoo_base_url": "https://odoo.example.test",
         "odoo_database": "company",
@@ -59,6 +63,51 @@ def test_production_control_plane_rejects_non_cutover_or_sqlite():
 
     with pytest.raises(ProductionReadinessError, match="ADMIN_DATABASE_URL must use PostgreSQL"):
         validate_production_control_plane(_production_settings(database_url="sqlite:///admin.db"))
+
+
+def _kernel_identity(build_revision: str | None) -> KernelContractIdentity:
+    return KernelContractIdentity(
+        catalog_version="portable-runtime-contracts-v1",
+        owner="portable-runtime/contracts",
+        runtime_protocol="2.0",
+        persistent_responsibility_contract="persistent-responsibility-v1",
+        domain_responsibility_proposal_contract="domain-responsibility-proposal-v1",
+        build_revision=build_revision,
+    )
+
+
+def test_kernel_runtime_revision_matches_expected_value():
+    settings = _production_settings(kernel_supported_revision=TEST_KERNEL_REVISION)
+    identity = validate_kernel_runtime_compatibility(
+        settings,
+        identity=_kernel_identity(TEST_KERNEL_REVISION),
+    )
+    assert identity.build_revision == TEST_KERNEL_REVISION
+
+
+def test_kernel_runtime_revision_mismatch_fails_closed():
+    settings = _production_settings(kernel_supported_revision=TEST_KERNEL_REVISION)
+    with pytest.raises(ProductionReadinessError, match="does not match"):
+        validate_kernel_runtime_compatibility(
+            settings,
+            identity=_kernel_identity("kernel-revision-b"),
+        )
+
+
+def test_kernel_runtime_revision_missing_fails_closed():
+    settings = _production_settings(kernel_supported_revision=TEST_KERNEL_REVISION)
+    with pytest.raises(ProductionReadinessError, match="does not match"):
+        validate_kernel_runtime_compatibility(
+            settings,
+            identity=_kernel_identity(None),
+        )
+
+
+def test_production_control_plane_requires_a_deployment_revision():
+    with pytest.raises(ProductionReadinessError, match="AGENT_KERNEL_REF"):
+        validate_production_control_plane(
+            _production_settings(kernel_supported_revision="")
+        )
 
 
 def test_production_connector_isolation_rejects_shared_writer_verifier_identity():

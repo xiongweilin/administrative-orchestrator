@@ -56,6 +56,10 @@ from .policy_plane import (
     PolicyVersionRecord,
     compile_onboarding_policy,
 )
+from .production_readiness import (
+    ProductionReadinessError,
+    validate_kernel_runtime_compatibility,
+)
 from .providers.feishu import (
     FeishuAcceptance,
     FeishuChallenge,
@@ -244,6 +248,17 @@ async def receive_feishu_event(request: Request) -> JSONResponse:
 
 @app.get("/readyz")
 def readyz() -> dict[str, str]:
+    if (
+        _settings.runtime_profile in {"staging", "production"}
+        and _settings.kernel_bridge_mode != "disabled"
+    ):
+        try:
+            validate_kernel_runtime_compatibility(_settings)
+        except ProductionReadinessError as exc:
+            raise HTTPException(
+                status_code=503,
+                detail="Agent Kernel compatibility/readiness check failed",
+            ) from exc
     return {
         "status": "ready",
         "storage": "sql-m3",
@@ -254,6 +269,11 @@ def readyz() -> dict[str, str]:
             "enabled" if _settings.authority_enforcement_enabled else "disabled"
         ),
         "resource_authorization": "enabled",
+        "kernel_revision": (
+            _settings.kernel_supported_revision
+            if _settings.runtime_profile in {"staging", "production"}
+            else "not-required"
+        ),
     }
 
 
@@ -513,13 +533,19 @@ def get_case_completion(case_id: UUID, request: Request) -> CompletionAssessment
     _authorize(actor, AdministrativePermission.CASE_READ, case=case)
     effects = _execution.list_effects(case.case_id, case.authority_epoch)
     outcomes = _execution.list_outcomes(case.case_id, case.authority_epoch)
+    realizations = _execution.list_realizations(case.case_id, case.authority_epoch)
     obligation_set = _obligations.get_current(case.case_id, case.authority_epoch)
     if obligation_set is None:
-        return assess_onboarding_completion(effects, outcomes)
+        return assess_onboarding_completion(
+            effects,
+            outcomes,
+            realizations=realizations,
+        )
     return assess_administrative_completion(
         obligation_set,
         effects,
         outcomes,
+        realizations=realizations,
         links=_obligations.list_links(case.case_id, case.authority_epoch),
         fulfillments=_obligations.list_domain_state_fulfillments(
             case.case_id, case.authority_epoch

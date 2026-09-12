@@ -147,6 +147,32 @@ the approved HRIS reader through the existing refresh/revalidation path;
 request-only fields remain claims, and stale or changed authoritative
 dependencies are handled by the existing `GOVERNANCE_STALE` reopen boundary.
 
+For M8 transaction cases the same admission service accepts `bridge_to_m8` and
+selects the typed procurement, invoice/AP, or expense contract. Candidate
+financial values remain claims; qualification assessments, current policy, and
+approval/governance are separate durable dependencies before an ERP effect.
+
+M8 adds a document-driven transaction preparation plane above this chain. A
+raw source artifact is immutable evidence; parser output is a separate
+`DocumentRepresentation`; spans identify the exact representation and locator
+used for a claim. Human admission preserves transaction facts as claims until
+qualification assessments and current governance permit the case to proceed.
+The three M8 case kinds are typed policy inputs, not generic document tasks:
+
+```text
+procurement-request       -> ERP purchase-order draft / bounded confirmation
+invoice-ap-preparation    -> ERP vendor-bill draft
+expense-reimbursement     -> ERP expense-report preparation
+```
+
+Each ERP write is represented as an Administrative obligation and mapped to a
+Kernel capability. The ERP connector uses a durable request/subject identity,
+and an independent verifier reads back the external draft. Completion cannot
+be established by an unrelated outcome, an HTTP success, or a settlement
+record; payment, bank transfer, and settlement capabilities are outside M8.
+M8's current document and transaction migrations start at the actual repository
+head (`0023_outbox_replay_audit`) and are not a rewrite of M5–M7 history.
+
 ## 2. Ownership boundaries
 
 ### administrative-orchestrator owns
@@ -163,6 +189,9 @@ dependencies are handled by the existing `GOVERNANCE_STALE` reopen boundary.
 - the M6 Intake Plane's receipts, source/evidence lineage, interpretations,
   candidate records, assessments, promotion lineage, and the
   content-addressed `ArtifactStore` port/adapter contract.
+- M8 `DocumentRepresentation`, transaction evidence links, qualification
+  assessments, typed financial facts/policies, and the draft-only ERP
+  connector contract.
 
 ### agent-kernel owns
 

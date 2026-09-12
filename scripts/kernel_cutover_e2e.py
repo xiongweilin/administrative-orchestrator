@@ -145,7 +145,7 @@ def _inputs(
                 "operation": operation,
                 "subject_ref": case.subject_ref,
                 "active": True,
-                "payload": facts,
+                "payload": {**facts, "subject_ref": case.subject_ref},
             },
             authority_class=authority_class,
         )
