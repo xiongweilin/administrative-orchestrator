@@ -97,7 +97,7 @@ Planned vertical slices:
 
 The first executable slice is **employee onboarding** because it forces multi-actor coordination, long-lived state, identity, policy, approvals, multiple external systems, semantic verification, and bounded completion.
 
-# Current state: M6 and M7 accepted for their recorded staging scopes
+# Current state: M6 and M7 accepted; M8 local acceptance recorded and remote closure in progress
 
 M0–M4 established the semantic foundation, durable governed execution, organizational authority/policy, administrative correctness, and Agent Kernel convergence/cut-over invariants. M5 makes that reference architecture production-shaped without collapsing those ownership boundaries. M6 added trusted perception and admission and is accepted for the recorded staging scope (`docs/acceptance/M6-staging-acceptance.md`). M7 adds the employee lifecycle responsibility boundary and is accepted for the recorded isolated real-staging scope (`docs/acceptance/M7-staging-acceptance.md`, ADR 0004, `docs/milestones/M7.md`).
 
@@ -120,13 +120,17 @@ The M5 implementation now includes:
 - a pinned Agent Kernel production-baseline cutover lane plus the existing `agent-kernel/main` recovery canary;
 - SonarQube Cloud scan and new-code Quality Gate acceptance.
 
-The supported Agent Kernel revision is currently:
+Production does not take its Agent Kernel revision from this README. The
+deployment-level canonical source is `AGENT_KERNEL_REF`; production Compose,
+the Kernel image build, Administrative expected revision, and the runtime
+`build_revision` evidence must all use that same value. The current M8
+candidate under remote verification is:
 
 ```text
-1f8497087b6a95632b1ae179d9ffd6c3e8fe6bb8
+0bb90afa4cf8517018e3e5b3715da12d28908c79
 ```
 
-M5 has an explicit acceptance boundary: repository CI can prove code, migration, restart, cut-over, DR, ambiguity semantics, and static/security quality gates, while the external checklist proves enterprise OIDC/Odoo/Keycloak credentials and network behavior. The isolated real-staging checklist, final exact-head CI, squash merge, and post-merge main CI now pass on the supported Kernel revision `fe4b3f4bf2e376bd7105caf7d15d77e2483c7197`; M5 is **complete for the recorded scope**.
+M5 has an explicit acceptance boundary: repository CI can prove code, migration, restart, cut-over, DR, ambiguity semantics, and static/security quality gates, while the external checklist proves enterprise OIDC/Odoo/Keycloak credentials and network behavior. The isolated real-staging checklist, final exact-head CI, squash merge, and post-merge main CI were recorded on the historical M5 baseline `fe4b3f4bf2e376bd7105caf7d15d77e2483c7197`; M5 is **complete for the recorded scope**. The previous accepted Kernel baseline `14758ccbb50c3eafae9e80333aa6f238e1d1791b` remains historical until the M8 candidate is promoted.
 
 M6 is the upstream **Trusted Perception & Admission** milestone. The current
 implementation includes the Administrative Intake Plane contract and durable
@@ -160,6 +164,16 @@ record keeps verifier-unavailable partial physical progress distinct from
 completion and leaves M6 containers stopped as an intentional topology
 boundary.
 
+M8 provides the document representation lineage, bounded text-PDF
+parsing/error taxonomy, exact effect/realization/outcome completion binding,
+transaction evidence and qualification records, typed admission for
+`procurement-request`, `invoice-ap-preparation`, and `expense-reimbursement`,
+draft-only ERP capabilities, and an isolated staging surface. Local real-
+provider acceptance is recorded in
+`docs/acceptance/M8-staging-acceptance.md`; the template remains available for
+future isolated reruns. Remote candidate checks and acceptance-owner closure
+are tracked in the M8 record and do not expand the milestone into M9.
+
 See:
 
 - `docs/architecture.md` for the current M4/M5 ownership topology;
@@ -168,13 +182,17 @@ See:
 - `docs/milestones/M5.md` for milestone acceptance evidence, staging checklist, and SLO targets;
 - `docs/milestones/M6.md` for the Trusted Perception & Admission delivery plan and gates;
 - `docs/milestones/M7.md` for the Employee Lifecycle Responsibility plan and gates;
+- `docs/milestones/M8.md` for the Document-Driven Organizational Transactions plan and gates;
 - `docs/adr/0003-trusted-perception-and-admission.md` for the intake, candidate, and admission boundary;
 - `docs/adr/0004-employee-lifecycle-responsibility.md` for the offboarding lifecycle, effective-time, transfer, and responsibility-discharge boundary;
+- `docs/adr/0005-document-driven-transactions.md` for representation lineage, qualification, and draft-only ERP boundaries;
 - `docs/production-operations.md` for deployment, observability, backup/restore, incident, and staging procedures.
 - `docs/acceptance/M6-staging-acceptance.md` for the recorded real-staging evidence.
 - `docs/acceptance/M6-staging-acceptance-template.md` for the no-secrets/no-body template.
 - `docs/acceptance/M7-staging-acceptance.md` for the recorded M7 real-staging evidence and closure.
 - `docs/acceptance/M7-staging-acceptance-template.md` for the no-secrets/no-body template.
+- `docs/acceptance/M8-staging-acceptance.md` for the recorded M8 local staging evidence and closure state.
+- `docs/acceptance/M8-staging-acceptance-template.md` for the no-secrets/no-body transaction acceptance template.
 
 ## Development principles
 
@@ -222,6 +240,8 @@ src/administrative_orchestrator/
     workflows/               DBOS durability boundary
     providers/               provider authenticity and canonical-read adapters
     intake/                  M6 durable source, evidence, interpretation, candidate, and assessment core
+    financial.py             M8 typed transaction facts, Money, policies, and qualification primitives
+    transaction_repository.py M8 case evidence links and qualification assessment persistence
 operations-console/          OIDC human exception UI (TypeScript)
 docs/
     architecture.md
@@ -292,6 +312,6 @@ Keeping pinned-baseline and main-canary lanes separate prevents an upstream Kern
 
 ## Near-term direction
 
-M6 established trusted perception and admission, so natural-language intake already exists upstream of the governed execution core. The next work should expand Administrative responsibility depth rather than add another intake authority: additional administrative slices, richer Policy Plane operations, production dashboard/alert calibration, and—only if availability/concurrency measurements justify it—an Agent Kernel store-port implementation for a multi-writer-capable durable backend.
+M6 established trusted perception and admission, and M8 now extends that path into bounded document-driven transaction preparation without adding another intake or execution authority. Further work should deepen qualification/readback coverage and production calibration rather than broaden into payment, generic RAG, or another runtime; an Agent Kernel store-port implementation remains conditional on measured availability/concurrency needs.
 
 Natural-language and Agent-based intake remain above this governed execution core. They may improve interpretation and investigation, but they consume rather than bypass the same fact, policy, authority, effect, verification, reconciliation, and completion contracts.

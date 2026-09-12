@@ -121,7 +121,7 @@ jobs:
         run: |
           uv sync --extra dev
           uv pip install --python .venv/bin/python -e .integration/agent-kernel
-      - name: M7 Kernel capability profile contracts
+      - name: Kernel capability profile contracts
         run: uv run pytest -q tests/test_m7_kernel_capability_cutover.py
       - name: Start Administrative sandbox and Agent Kernel
         env:

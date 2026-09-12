@@ -108,6 +108,73 @@ def test_interpretation_binds_evidence_and_persists_provenance() -> None:
     assert repository.list_interpretations(artifact.artifact_id) == [interpretation]
 
 
+def test_interpretation_can_bind_evidence_from_multiple_source_artifacts() -> None:
+    message_artifact = _artifact()
+    document_artifact = _artifact()
+    message_span = _span(message_artifact)
+    document_span = _span(document_artifact)
+    output = json.dumps(
+        {
+            "candidate_intent": "invoice-ap-preparation",
+            "candidate_facts": [
+                {
+                    "fact_key": "invoice_number",
+                    "value": "INV-1",
+                    "evidence_span_refs": [str(document_span.evidence_span_id)],
+                }
+            ],
+            "evidence_span_refs": [str(message_span.evidence_span_id)],
+        }
+    )
+
+    interpretation = InterpretationClient(
+        StaticModelGateway(output, provenance=_provenance())
+    ).interpret(
+        message_artifact,
+        "message and document",
+        _profile(),
+        (message_span, document_span),
+        source_artifacts=(message_artifact, document_artifact),
+    )
+
+    assert interpretation.status is InterpretationStatus.SUCCEEDED
+    assert interpretation.artifact_refs == (message_artifact.artifact_id, document_artifact.artifact_id)
+    assert interpretation.evidence_span_refs == tuple(
+        sorted((message_span.evidence_span_id, document_span.evidence_span_id), key=str)
+    )
+
+
+def test_interpretation_binds_one_unambiguous_document_span_when_model_omits_refs() -> None:
+    message_artifact = _artifact()
+    document_artifact = _artifact()
+    message_span = _span(message_artifact)
+    document_span = _span(document_artifact)
+    output = json.dumps(
+        {
+            "candidate_intent": "expense-reimbursement",
+            "candidate_facts": [
+                {"fact_key": "amount", "value": {"amount": "42.00", "currency": "USD"}}
+            ],
+        }
+    )
+
+    interpretation = InterpretationClient(
+        StaticModelGateway(output, provenance=_provenance())
+    ).interpret(
+        message_artifact,
+        "message and document",
+        _profile(),
+        (message_span, document_span),
+        source_artifacts=(message_artifact, document_artifact),
+    )
+
+    assert interpretation.status is InterpretationStatus.SUCCEEDED
+    assert interpretation.evidence_span_refs == (document_span.evidence_span_id,)
+    assert interpretation.structured_output["candidate_facts"][0]["evidence_span_refs"] == [
+        str(document_span.evidence_span_id)
+    ]
+
+
 def test_same_artifact_and_different_models_are_append_only() -> None:
     artifact = _artifact()
     span = _span(artifact)

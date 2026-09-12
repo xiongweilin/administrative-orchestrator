@@ -4,7 +4,12 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
-from .domain import ConfirmedOutcome, EffectRecord
+from .domain import (
+    ConfirmedOutcome,
+    EffectRealizationAssessment,
+    EffectRecord,
+    RealizationDisposition,
+)
 from .obligations import (
     AdministrativeObligationSet,
     EffectObligationLink,
@@ -28,6 +33,7 @@ class CompletionAssessment(BaseModel):
     missing_outcome_kinds: tuple[str, ...] = ()
     missing_obligation_ids: tuple[UUID, ...] = ()
     uncovered_obligation_ids: tuple[UUID, ...] = ()
+    missing_realization_obligation_ids: tuple[UUID, ...] = ()
     missing_domain_state_obligation_ids: tuple[UUID, ...] = ()
     governance_basis_id: UUID | None = None
     blocking_reasons: tuple[str, ...] = Field(default_factory=tuple)
@@ -53,6 +59,7 @@ def assess_administrative_completion(
     effects: list[EffectRecord],
     outcomes: list[ConfirmedOutcome],
     *,
+    realizations: list[EffectRealizationAssessment] | None = None,
     links: list[EffectObligationLink] | None = None,
     fulfillments: list[ObligationDomainStateFulfillment] | None = None,
 ) -> CompletionAssessment:
@@ -68,6 +75,7 @@ def assess_administrative_completion(
         obligation_set,
         effects,
         outcomes,
+        realizations=realizations or [],
         links=links or [],
         fulfillments=fulfillments or [],
     )
@@ -78,6 +86,7 @@ def assess_onboarding_completion(
     effects_or_outcomes: list[EffectRecord] | list[ConfirmedOutcome],
     outcomes: list[ConfirmedOutcome] | None = None,
     *,
+    realizations: list[EffectRealizationAssessment] | None = None,
     links: list[EffectObligationLink] | None = None,
     fulfillments: list[ObligationDomainStateFulfillment] | None = None,
 ) -> CompletionAssessment:
@@ -88,7 +97,11 @@ def assess_onboarding_completion(
         legacy_effects = requirement_or_effects
         legacy_outcomes = effects_or_outcomes
         assert all(isinstance(item, ConfirmedOutcome) for item in legacy_outcomes)
-        return _assess_legacy(legacy_effects, legacy_outcomes)  # type: ignore[arg-type]
+        return _assess_legacy(  # type: ignore[arg-type]
+            legacy_effects,
+            legacy_outcomes,
+            realizations=realizations or [],
+        )
 
     obligation_set = requirement_or_effects
     effects = effects_or_outcomes
@@ -98,6 +111,7 @@ def assess_onboarding_completion(
         obligation_set,
         effects,  # type: ignore[arg-type]
         outcomes,
+        realizations=realizations,
         links=links,
         fulfillments=fulfillments,
     )
@@ -108,13 +122,18 @@ def _assess_obligations(
     effects: list[EffectRecord],
     outcomes: list[ConfirmedOutcome],
     *,
+    realizations: list[EffectRealizationAssessment],
     links: list[EffectObligationLink],
     fulfillments: list[ObligationDomainStateFulfillment],
 ) -> CompletionAssessment:
     required = {item.obligation_id: item for item in obligation_set.obligations if item.required}
     effect_by_id = {item.effect_id: item for item in effects}
-    outcome_effect_ids = {item.effect_id for item in outcomes}
-    outcome_kinds = {item.outcome_kind for item in outcomes}
+    outcomes_by_effect: dict[UUID, list[ConfirmedOutcome]] = {}
+    for outcome in outcomes:
+        outcomes_by_effect.setdefault(outcome.effect_id, []).append(outcome)
+    realization_by_id = {
+        realization.assessment_id: realization for realization in realizations
+    }
     link_by_obligation = {item.obligation_id: item for item in links}
     fulfillment_by_obligation = {
         item.obligation_id: item
@@ -126,6 +145,7 @@ def _assess_obligations(
     uncovered: list[UUID] = []
     missing_confirmed: list[UUID] = []
     missing_kinds: list[str] = []
+    missing_realizations: list[UUID] = []
     missing_domain_state: list[UUID] = []
     for obligation_id, obligation in required.items():
         if (
@@ -148,11 +168,24 @@ def _assess_obligations(
         ):
             uncovered.append(obligation_id)
             continue
-        if effect.effect_id not in outcome_effect_ids:
+        effect_outcomes = outcomes_by_effect.get(effect.effect_id, [])
+        if not effect_outcomes:
             missing_confirmed.append(obligation_id)
         required_kind = f"{obligation.target_system}.{obligation.required_operation}.verified"
-        if required_kind not in outcome_kinds:
+        matching_outcomes = [
+            item for item in effect_outcomes if item.outcome_kind == required_kind
+        ]
+        if not matching_outcomes:
             missing_kinds.append(required_kind)
+            continue
+        if not any(
+            (realization := realization_by_id.get(item.realization_assessment_id))
+            is not None
+            and realization.effect_id == effect.effect_id
+            and realization.disposition is RealizationDisposition.VERIFIED
+            for item in matching_outcomes
+        ):
+            missing_realizations.append(obligation_id)
 
     reasons: list[str] = []
     if uncovered:
@@ -161,6 +194,10 @@ def _assess_obligations(
         reasons.append("one or more required business obligations lack a confirmed outcome")
     if missing_kinds:
         reasons.append("one or more required business outcome kinds are not confirmed")
+    if missing_realizations:
+        reasons.append(
+            "one or more confirmed outcomes lack a verified realization for the same effect"
+        )
     if missing_domain_state:
         reasons.append(
             "one or more required domain-state obligations lack verified Administrative state"
@@ -172,6 +209,7 @@ def _assess_obligations(
         missing_obligation_ids=tuple(missing_confirmed),
         uncovered_obligation_ids=tuple(uncovered),
         missing_outcome_kinds=tuple(missing_kinds),
+        missing_realization_obligation_ids=tuple(missing_realizations),
         missing_domain_state_obligation_ids=tuple(missing_domain_state),
         governance_basis_id=obligation_set.governance_basis_id,
         blocking_reasons=tuple(reasons),
@@ -181,26 +219,55 @@ def _assess_obligations(
 def _assess_legacy(
     effects: list[EffectRecord],
     outcomes: list[ConfirmedOutcome],
+    *,
+    realizations: list[EffectRealizationAssessment],
 ) -> CompletionAssessment:
     requirement = onboarding_completion_requirement(effects)
-    outcome_effect_ids = {outcome.effect_id for outcome in outcomes}
-    outcome_kinds = {outcome.outcome_kind for outcome in outcomes}
-    missing_effect_ids = tuple(
-        effect_id for effect_id in requirement.required_effect_ids if effect_id not in outcome_effect_ids
-    )
-    missing_outcome_kinds = tuple(
-        kind for kind in requirement.required_outcome_kinds if kind not in outcome_kinds
-    )
+    realizations_by_id = {
+        realization.assessment_id: realization for realization in realizations
+    }
+    missing_effect_ids: list[UUID] = []
+    missing_outcome_kinds: list[str] = []
+    missing_realizations: list[UUID] = []
+    for effect, expected_kind in zip(
+        effects, requirement.required_outcome_kinds, strict=True
+    ):
+        effect_outcomes = [
+            outcome for outcome in outcomes if outcome.effect_id == effect.effect_id
+        ]
+        if not effect_outcomes:
+            missing_effect_ids.append(effect.effect_id)
+            missing_outcome_kinds.append(expected_kind)
+            continue
+        matching = [
+            outcome for outcome in effect_outcomes if outcome.outcome_kind == expected_kind
+        ]
+        if not matching:
+            missing_outcome_kinds.append(expected_kind)
+            continue
+        if not any(
+            (realization := realizations_by_id.get(outcome.realization_assessment_id))
+            is not None
+            and realization.effect_id == effect.effect_id
+            and realization.disposition is RealizationDisposition.VERIFIED
+            for outcome in matching
+        ):
+            missing_realizations.append(effect.effect_id)
     reasons: list[str] = []
     if missing_effect_ids:
         reasons.append("one or more planned effects lack a confirmed outcome")
     if missing_outcome_kinds:
         reasons.append("one or more declared business outcomes are not confirmed")
+    if missing_realizations:
+        reasons.append(
+            "one or more confirmed outcomes lack a verified realization for the same effect"
+        )
     return CompletionAssessment(
         requirement_id=requirement.requirement_id,
         satisfied=not reasons,
-        missing_effect_ids=missing_effect_ids,
-        missing_outcome_kinds=missing_outcome_kinds,
+        missing_effect_ids=tuple(missing_effect_ids),
+        missing_outcome_kinds=tuple(missing_outcome_kinds),
+        missing_realization_obligation_ids=tuple(missing_realizations),
         blocking_reasons=tuple(reasons),
     )
 

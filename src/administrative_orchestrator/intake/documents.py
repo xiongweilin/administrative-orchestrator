@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import io
 from datetime import datetime
 from enum import StrEnum
 from typing import Any, Protocol, runtime_checkable
@@ -9,8 +10,14 @@ from uuid import NAMESPACE_URL, uuid5
 from pydantic import AliasChoices, ConfigDict, Field, model_validator
 
 from ..domain import UtcModel, utcnow
-from .artifacts import ArtifactStore
-from .models import CandidateAuthority, CandidateFactAssertion, EvidenceSpan, SourceArtifact
+from .artifacts import ArtifactStore, ArtifactStoreError
+from .models import (
+    CandidateAuthority,
+    CandidateFactAssertion,
+    DocumentRepresentation,
+    EvidenceSpan,
+    SourceArtifact,
+)
 from .repository import IntakeRepository
 
 _DOCUMENT_NAMESPACE = uuid5(
@@ -27,12 +34,43 @@ class DocumentProcessingStatus(StrEnum):
     FAILED = "failed"
 
 
-class DocumentParseError(RuntimeError):
+class DocumentErrorCode(StrEnum):
+    UNSUPPORTED_MEDIA = "unsupported_media"
+    PARSER_UNAVAILABLE = "parser_unavailable"
+    PARSER_TIMEOUT = "parser_timeout"
+    MALFORMED_DOCUMENT = "malformed_document"
+    REPRESENTATION_INVALID = "representation_invalid"
+    LINEAGE_INVALID = "lineage_invalid"
+    ARTIFACT_INTEGRITY_FAILED = "artifact_integrity_failed"
+    RESOURCE_LIMIT_EXCEEDED = "resource_limit_exceeded"
+
+
+class DocumentProcessingError(RuntimeError):
+    """A bounded, safe-to-persist document processing failure."""
+
+    def __init__(self, code: DocumentErrorCode, safe_message: str) -> None:
+        self.code = code
+        self.safe_message = safe_message[:2000]
+        super().__init__(self.safe_message)
+
+
+class DocumentParseError(DocumentProcessingError):
     """The parser/OCR boundary could not produce a trusted representation."""
+
+    def __init__(
+        self,
+        safe_message: str = "document could not be parsed",
+        *,
+        code: DocumentErrorCode = DocumentErrorCode.MALFORMED_DOCUMENT,
+    ) -> None:
+        super().__init__(code, safe_message)
 
 
 class DocumentLineageError(DocumentParseError):
     """The parser output cannot be bound to exact EvidenceSpan lineage."""
+
+    def __init__(self, safe_message: str = "document lineage is invalid") -> None:
+        super().__init__(safe_message, code=DocumentErrorCode.LINEAGE_INVALID)
 
 
 class MessageAttachment(UtcModel):
@@ -148,6 +186,9 @@ class DocumentExtraction(UtcModel):
     representation: str = Field(min_length=1)
     representation_kind: str = Field(default="utf-8-text", min_length=1, max_length=128)
     extractor_ref: str = Field(min_length=1, max_length=512)
+    extractor_version: str = Field(default="1", min_length=1, max_length=256)
+    page_texts: tuple[str, ...] = ()
+    metadata: dict[str, Any] = Field(default_factory=dict)
     evidence: tuple[DocumentEvidenceDraft, ...] = ()
     facts: tuple[DocumentFactDraft, ...] = ()
 
@@ -174,6 +215,7 @@ class PlainTextDocumentParser:
         return DocumentExtraction(
             representation=representation,
             extractor_ref="plain-text-parser-v1",
+            page_texts=(representation,),
             evidence=(
                 DocumentEvidenceDraft(
                     text=representation,
@@ -184,6 +226,118 @@ class PlainTextDocumentParser:
         )
 
 
+class PdfTextDocumentParser:
+    """Bounded local parser for text-based PDFs.
+
+    OCR is intentionally outside this parser. A PDF with no extractable text
+    fails closed as unsupported media rather than becoming an unlineaged claim.
+    """
+
+    def __init__(
+        self,
+        *,
+        max_bytes: int = 10 * 1024 * 1024,
+        max_pages: int = 100,
+        max_text_chars: int = 2_000_000,
+    ) -> None:
+        if max_bytes <= 0 or max_pages <= 0 or max_text_chars <= 0:
+            raise ValueError("PDF parser limits must be positive")
+        self.max_bytes = max_bytes
+        self.max_pages = max_pages
+        self.max_text_chars = max_text_chars
+
+    def parse(self, attachment: MessageAttachment, content: bytes) -> DocumentExtraction:
+        if attachment.mime_type.lower() != "application/pdf" and not attachment.filename.lower().endswith(
+            ".pdf"
+        ):
+            raise DocumentParseError(
+                "attachment is not a supported PDF media type",
+                code=DocumentErrorCode.UNSUPPORTED_MEDIA,
+            )
+        if len(content) > self.max_bytes:
+            raise DocumentParseError(
+                "PDF exceeds the configured byte limit",
+                code=DocumentErrorCode.RESOURCE_LIMIT_EXCEEDED,
+            )
+        try:
+            from pypdf import PdfReader
+        except ImportError as exc:
+            raise DocumentParseError(
+                "PDF parser dependency is unavailable",
+                code=DocumentErrorCode.PARSER_UNAVAILABLE,
+            ) from exc
+
+        try:
+            reader = PdfReader(io.BytesIO(content), strict=False)
+            pages = list(reader.pages)
+        except Exception as exc:
+            raise DocumentParseError("PDF structure is malformed") from exc
+        if len(pages) > self.max_pages:
+            raise DocumentParseError(
+                "PDF exceeds the configured page limit",
+                code=DocumentErrorCode.RESOURCE_LIMIT_EXCEEDED,
+            )
+
+        page_texts: list[str] = []
+        evidence: list[DocumentEvidenceDraft] = []
+        cursor = 0
+        for page_number, page in enumerate(pages, start=1):
+            try:
+                text = (page.extract_text() or "").strip()
+            except Exception as exc:
+                raise DocumentParseError("PDF text extraction failed") from exc
+            page_texts.append(text)
+            if text:
+                evidence.append(
+                    DocumentEvidenceDraft(
+                        text=text,
+                        char_start=cursor,
+                        char_end=cursor + len(text),
+                        locator={"page": page_number},
+                    )
+                )
+            cursor += len(text) + (3 if page_number < len(pages) else 0)
+        if not any(page_texts):
+            raise DocumentParseError(
+                "PDF has no extractable text; scanned-document OCR is deferred",
+                code=DocumentErrorCode.UNSUPPORTED_MEDIA,
+            )
+        representation = "\n\f\n".join(page_texts)
+        if len(representation) > self.max_text_chars:
+            raise DocumentParseError(
+                "PDF representation exceeds the configured text limit",
+                code=DocumentErrorCode.RESOURCE_LIMIT_EXCEEDED,
+            )
+        return DocumentExtraction(
+            representation=representation,
+            representation_kind="pdf-text",
+            extractor_ref="pypdf-text-parser",
+            extractor_version="1",
+            page_texts=tuple(page_texts),
+            metadata={"parser": "pypdf", "page_count": len(pages)},
+            evidence=tuple(evidence),
+        )
+
+
+class ContentAwareDocumentParser:
+    """Select the bounded local parser from the attachment media type."""
+
+    def __init__(
+        self,
+        *,
+        plain_text_parser: DocumentParser | None = None,
+        pdf_parser: DocumentParser | None = None,
+    ) -> None:
+        self.plain_text_parser = plain_text_parser or PlainTextDocumentParser()
+        self.pdf_parser = pdf_parser or PdfTextDocumentParser()
+
+    def parse(self, attachment: MessageAttachment, content: bytes) -> DocumentExtraction:
+        mime_type = attachment.mime_type.lower().split(";", 1)[0].strip()
+        if mime_type == "application/pdf" or attachment.filename.lower().endswith(".pdf"):
+            return self.pdf_parser.parse(attachment, content)
+        return self.plain_text_parser.parse(attachment, content)
+
+
 class DocumentAttachmentResult(UtcModel):
     """Auditable result, including the raw artifact on parser failure."""
 
@@ -191,6 +345,7 @@ class DocumentAttachmentResult(UtcModel):
 
     status: DocumentProcessingStatus
     artifact: SourceArtifact
+    representation: DocumentRepresentation | None = None
     evidence_spans: tuple[EvidenceSpan, ...] = ()
     facts: tuple[CandidateFactAssertion, ...] = ()
     error_code: str | None = Field(default=None, max_length=128)
@@ -214,10 +369,16 @@ class DocumentAttachmentProcessor:
         artifact_store: ArtifactStore,
         parser: DocumentParser,
         repository: IntakeRepository | None = None,
+        document_repository: Any | None = None,
     ) -> None:
         self.artifact_store = artifact_store
         self.parser = parser
         self.repository = repository
+        if document_repository is None and repository is not None:
+            from .document_repository import DocumentRepository
+
+            document_repository = DocumentRepository(repository.store)
+        self.document_repository = document_repository
 
     def process(self, attachment: MessageAttachment) -> DocumentAttachmentResult:
         stored = self.artifact_store.put(
@@ -234,23 +395,66 @@ class DocumentAttachmentProcessor:
                 expected_digest=stored.content_digest,
             )
             extraction = self.parser.parse(attachment, raw_content)
-            spans, facts = self._bind_extraction(artifact, extraction)
-        except Exception as exc:
+            representation = self._persist_representation(artifact, extraction)
+            spans, facts = self._bind_extraction(artifact, extraction, representation)
+        except DocumentProcessingError as exc:
             return DocumentAttachmentResult(
                 status=DocumentProcessingStatus.FAILED,
                 artifact=artifact,
-                error_code=self._error_code(exc),
-                error_message=str(exc)[:2000] or exc.__class__.__name__,
+                error_code=exc.code.value,
+                error_message=exc.safe_message,
+            )
+        except ArtifactStoreError:
+            return DocumentAttachmentResult(
+                status=DocumentProcessingStatus.FAILED,
+                artifact=artifact,
+                error_code=DocumentErrorCode.ARTIFACT_INTEGRITY_FAILED.value,
+                error_message="document artifact integrity could not be verified",
             )
 
         if self.repository is not None:
             spans = tuple(self.repository.append_evidence_span(span) for span in spans)
             facts = tuple(self.repository.append_candidate_fact(fact) for fact in facts)
+        if self.document_repository is not None:
+            representation = self.document_repository.append_representation(representation)
         return DocumentAttachmentResult(
             status=DocumentProcessingStatus.SUCCEEDED,
             artifact=artifact,
+            representation=representation,
             evidence_spans=spans,
             facts=facts,
+        )
+
+    def _persist_representation(
+        self,
+        artifact: SourceArtifact,
+        extraction: DocumentExtraction,
+    ) -> DocumentRepresentation:
+        representation_bytes = extraction.representation.encode("utf-8")
+        stored = self.artifact_store.put(representation_bytes)
+        pages = extraction.page_texts or (extraction.representation,)
+        page_offsets: list[dict[str, int]] = []
+        cursor = 0
+        for page_index, page_text in enumerate(pages, start=1):
+            start = cursor
+            end = start + len(page_text)
+            page_offsets.append({"page": page_index, "char_start": start, "char_end": end})
+            cursor = end + (3 if page_index < len(pages) else 0)
+        return DocumentRepresentation(
+            representation_id=uuid5(
+                _DOCUMENT_NAMESPACE,
+                f"representation:{artifact.artifact_id}:{extraction.extractor_ref}:"
+                f"{extraction.extractor_version}:{stored.digest}",
+            ),
+            source_artifact_ref=artifact.artifact_id,
+            representation_kind=extraction.representation_kind,
+            extractor_ref=extraction.extractor_ref,
+            extractor_version=extraction.extractor_version,
+            content_digest=stored.digest,
+            storage_ref=stored.storage_ref,
+            size=stored.size,
+            page_count=len(pages),
+            metadata={**extraction.metadata, "page_offsets": page_offsets},
         )
 
     @staticmethod
@@ -285,6 +489,7 @@ class DocumentAttachmentProcessor:
     def _bind_extraction(
         artifact: SourceArtifact,
         extraction: DocumentExtraction,
+        representation: DocumentRepresentation,
     ) -> tuple[tuple[EvidenceSpan, ...], tuple[CandidateFactAssertion, ...]]:
         representation_bytes = extraction.representation.encode("utf-8")
         representation_digest = hashlib.sha256(representation_bytes).hexdigest()
@@ -309,6 +514,7 @@ class DocumentAttachmentProcessor:
                         f"span:{artifact.artifact_id}:{representation_digest}:{index}",
                     ),
                     artifact_ref=artifact.artifact_id,
+                    representation_ref=representation.representation_id,
                     representation_digest=representation_digest,
                     locator_kind=draft.locator_kind,
                     locator=locator,
@@ -337,17 +543,6 @@ class DocumentAttachmentProcessor:
             )
         return tuple(spans), tuple(facts)
 
-    @staticmethod
-    def _error_code(error: Exception) -> str:
-        if isinstance(error, DocumentLineageError):
-            return "lineage_validation_failed"
-        if isinstance(error, DocumentParseError):
-            return "parser_failed"
-        if isinstance(error, ValueError):
-            return "parser_output_invalid"
-        return "parser_error"
-
-
 def _sha256_text(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
@@ -360,14 +555,17 @@ DocumentAttachmentIntake = DocumentAttachmentProcessor
 
 
 __all__ = [
+    "ContentAwareDocumentParser",
     "DocumentAttachmentIntake",
     "DocumentAttachmentProcessor",
     "DocumentAttachmentResult",
+    "DocumentErrorCode",
     "DocumentEvidenceDraft",
     "DocumentExtraction",
     "DocumentFactDraft",
     "DocumentLineageError",
     "DocumentParseError",
+    "DocumentProcessingError",
     "DocumentParser",
     "DocumentProcessingStatus",
     "EvidenceDraft",
@@ -375,4 +573,5 @@ __all__ = [
     "MessageAttachment",
     "ParsedDocument",
     "PlainTextDocumentParser",
+    "PdfTextDocumentParser",
 ]

@@ -34,6 +34,10 @@ from portable_runtime.stores.bounded_domain_effect_recovery import (
 from administrative_orchestrator.config import get_settings
 from administrative_orchestrator.integrations.credentials import CredentialRef
 from administrative_orchestrator.integrations.kernel.capabilities import (
+    ADMINISTRATIVE_ERP_EXPENSE_REPORT_CREATE,
+    ADMINISTRATIVE_ERP_PURCHASE_ORDER_CONFIRM,
+    ADMINISTRATIVE_ERP_PURCHASE_ORDER_CREATE_DRAFT,
+    ADMINISTRATIVE_ERP_VENDOR_BILL_CREATE_DRAFT,
     ADMINISTRATIVE_HRIS_EMPLOYEE_CREATE,
     ADMINISTRATIVE_HRIS_EMPLOYEE_DEACTIVATE,
     ADMINISTRATIVE_IAM_IDENTITY_CREATE,
@@ -55,6 +59,8 @@ from administrative_orchestrator.integrations.production_effects import (
     OdooEmployeeDeactivateVerifier,
     OdooEmployeeEffectConnector,
     OdooEmployeeVerifier,
+    OdooFinancialEffectConnector,
+    OdooFinancialVerifier,
 )
 from administrative_orchestrator.production_verification import (
     complete_readback_postcondition,
@@ -75,9 +81,11 @@ class ProductionEffectProvider:
         credential_configuration_ref: str,
         network_domain: str,
         connector,
+        operation: str | None = None,
         reversibility: str = "compensatable",
     ) -> None:
         self.connector = connector
+        self.operation = operation
         self._descriptor = ProviderDescriptor(
             id=provider_id,
             name=name,
@@ -108,23 +116,33 @@ class ProductionEffectProvider:
         context: InvocationContext,
     ) -> CapabilityResult:
         del context
-        subject_ref = request.parameters.get("employee_ref")
+        # Kernel injects the governed subject identity into the frozen intent.
+        # Keep it separate from business payload fields such as employee_ref;
+        # financial transactions may legitimately have a transaction subject
+        # while targeting an existing employee record.
+        subject_ref = request.parameters.get("subject_ref")
         if not isinstance(subject_ref, str) or not subject_ref:
-            subject_ref = request.parameters.get("subject_ref")
+            subject_ref = request.parameters.get("employee_ref")
         if not isinstance(subject_ref, str) or not subject_ref:
             raise ValueError("production administrative effect requires subject identity")
-        result: ConnectorResult = await self.connector.invoke(
-            request_ref=request.id,
-            subject_ref=subject_ref,
-            parameters=dict(request.parameters),
-        )
+        invoke_kwargs = {
+            "request_ref": request.id,
+            "subject_ref": subject_ref,
+            "parameters": dict(request.parameters),
+        }
+        if self.operation is not None:
+            invoke_kwargs["operation"] = self.operation
+        result: ConnectorResult = await self.connector.invoke(**invoke_kwargs)
         return _capability_result(request.id, self.descriptor.id, result)
 
     async def cancel(self, request_id: str) -> None:
         del request_id
 
     async def reconcile(self, request_id: str) -> CapabilityResult | None:
-        result: ConnectorResult | None = await self.connector.reconcile(request_id)
+        reconcile_kwargs = {"request_ref": request_id}
+        if self.operation is not None:
+            reconcile_kwargs["operation"] = self.operation
+        result: ConnectorResult | None = await self.connector.reconcile(**reconcile_kwargs)
         if result is None:
             return None
         return _capability_result(request_id, self.descriptor.id, result)
@@ -311,6 +329,13 @@ def build() -> tuple[Runtime, BoundedDomainEffectExecutionService]:
                     ADMINISTRATIVE_IAM_SESSIONS_REVOKE,
                     reversibility="irreversible",
                 ),
+                _remote_contract(ADMINISTRATIVE_ERP_PURCHASE_ORDER_CREATE_DRAFT),
+                _remote_contract(
+                    ADMINISTRATIVE_ERP_PURCHASE_ORDER_CONFIRM,
+                    reversibility="irreversible",
+                ),
+                _remote_contract(ADMINISTRATIVE_ERP_VENDOR_BILL_CREATE_DRAFT),
+                _remote_contract(ADMINISTRATIVE_ERP_EXPENSE_REPORT_CREATE),
             ]
         ),
         reliability=ReliabilityControls(cooldown_seconds=0),
@@ -367,6 +392,63 @@ def build() -> tuple[Runtime, BoundedDomainEffectExecutionService]:
             session_revoke_request_ref_attribute=(
                 settings.keycloak_session_revoke_request_ref_attribute
             ),
+            timeout_seconds=settings.connector_timeout_seconds,
+            allow_insecure_http=settings.oidc_allow_insecure_http,
+        )
+    )
+    financial_writer_username = getattr(
+        settings, "odoo_financial_writer_username", settings.odoo_writer_username
+    )
+    financial_writer_secret_env = getattr(
+        settings, "odoo_financial_writer_secret_env", settings.odoo_writer_secret_env
+    )
+    financial_verifier_username = getattr(
+        settings, "odoo_financial_verifier_username", settings.odoo_verifier_username
+    )
+    financial_verifier_secret_env = getattr(
+        settings, "odoo_financial_verifier_secret_env", settings.odoo_verifier_secret_env
+    )
+    transaction_request_ref_field = getattr(
+        settings,
+        "odoo_transaction_request_ref_field",
+        "x_administrative_transaction_request_ref",
+    )
+    transaction_confirm_request_ref_field = getattr(
+        settings,
+        "odoo_transaction_confirm_request_ref_field",
+        "x_administrative_transaction_confirm_request_ref",
+    )
+    transaction_subject_ref_field = getattr(
+        settings,
+        "odoo_transaction_subject_ref_field",
+        "x_administrative_transaction_subject_ref",
+    )
+    odoo_financial_writer = OdooFinancialEffectConnector(
+        OdooEffectConnection(
+            base_url=settings.odoo_base_url,
+            database=settings.odoo_database,
+            username=financial_writer_username,
+            credential=CredentialRef(
+                "odoo:erp-writer", financial_writer_secret_env
+            ),
+            transaction_request_ref_field=transaction_request_ref_field,
+            transaction_confirm_request_ref_field=transaction_confirm_request_ref_field,
+            transaction_subject_ref_field=transaction_subject_ref_field,
+            timeout_seconds=settings.connector_timeout_seconds,
+            allow_insecure_http=settings.oidc_allow_insecure_http,
+        )
+    )
+    odoo_financial_verifier_connector = OdooFinancialEffectConnector(
+        OdooEffectConnection(
+            base_url=settings.odoo_base_url,
+            database=settings.odoo_database,
+            username=financial_verifier_username,
+            credential=CredentialRef(
+                "odoo:erp-verifier", financial_verifier_secret_env
+            ),
+            transaction_request_ref_field=transaction_request_ref_field,
+            transaction_confirm_request_ref_field=transaction_confirm_request_ref_field,
+            transaction_subject_ref_field=transaction_subject_ref_field,
             timeout_seconds=settings.connector_timeout_seconds,
             allow_insecure_http=settings.oidc_allow_insecure_http,
         )
@@ -472,6 +554,99 @@ def build() -> tuple[Runtime, BoundedDomainEffectExecutionService]:
         network_domain=_host(settings.keycloak_base_url),
         verifier=KeycloakSessionVerifier(keycloak_verifier_connector),
     )
+    procurement_draft_provider = ProductionEffectProvider(
+        provider_id="provider:administrative-production:odoo-purchase-order-draft-writer",
+        name="Administrative Odoo purchase order draft writer",
+        capability=ADMINISTRATIVE_ERP_PURCHASE_ORDER_CREATE_DRAFT,
+        family="odoo",
+        execution_domain="odoo:erp",
+        credential_configuration_ref="odoo:erp-writer",
+        network_domain=_host(settings.odoo_base_url),
+        connector=odoo_financial_writer,
+        operation="purchase_order.create_draft",
+    )
+    procurement_draft_verifier = ProductionReadbackVerifier(
+        provider_id="provider:administrative-production:odoo-purchase-order-draft-verifier",
+        name="Administrative Odoo purchase order draft verifier",
+        effect_capability=ADMINISTRATIVE_ERP_PURCHASE_ORDER_CREATE_DRAFT,
+        family="odoo-readback",
+        credential_configuration_ref="odoo:erp-verifier",
+        network_domain=_host(settings.odoo_base_url),
+        verifier=OdooFinancialVerifier(
+            odoo_financial_verifier_connector,
+            operation="purchase_order.create_draft",
+        ),
+    )
+    procurement_confirm_provider = ProductionEffectProvider(
+        provider_id="provider:administrative-production:odoo-purchase-order-confirm-writer",
+        name="Administrative Odoo purchase order confirmer",
+        capability=ADMINISTRATIVE_ERP_PURCHASE_ORDER_CONFIRM,
+        family="odoo",
+        execution_domain="odoo:erp",
+        credential_configuration_ref="odoo:erp-writer",
+        network_domain=_host(settings.odoo_base_url),
+        connector=odoo_financial_writer,
+        operation="purchase_order.confirm",
+        reversibility="irreversible",
+    )
+    procurement_confirm_verifier = ProductionReadbackVerifier(
+        provider_id="provider:administrative-production:odoo-purchase-order-confirm-verifier",
+        name="Administrative Odoo purchase order confirmation verifier",
+        effect_capability=ADMINISTRATIVE_ERP_PURCHASE_ORDER_CONFIRM,
+        family="odoo-readback",
+        credential_configuration_ref="odoo:erp-verifier",
+        network_domain=_host(settings.odoo_base_url),
+        verifier=OdooFinancialVerifier(
+            odoo_financial_verifier_connector,
+            operation="purchase_order.confirm",
+        ),
+    )
+    vendor_bill_provider = ProductionEffectProvider(
+        provider_id="provider:administrative-production:odoo-vendor-bill-draft-writer",
+        name="Administrative Odoo vendor bill draft writer",
+        capability=ADMINISTRATIVE_ERP_VENDOR_BILL_CREATE_DRAFT,
+        family="odoo",
+        execution_domain="odoo:erp",
+        credential_configuration_ref="odoo:erp-writer",
+        network_domain=_host(settings.odoo_base_url),
+        connector=odoo_financial_writer,
+        operation="vendor_bill.create_draft",
+    )
+    vendor_bill_verifier = ProductionReadbackVerifier(
+        provider_id="provider:administrative-production:odoo-vendor-bill-draft-verifier",
+        name="Administrative Odoo vendor bill draft verifier",
+        effect_capability=ADMINISTRATIVE_ERP_VENDOR_BILL_CREATE_DRAFT,
+        family="odoo-readback",
+        credential_configuration_ref="odoo:erp-verifier",
+        network_domain=_host(settings.odoo_base_url),
+        verifier=OdooFinancialVerifier(
+            odoo_financial_verifier_connector,
+            operation="vendor_bill.create_draft",
+        ),
+    )
+    expense_provider = ProductionEffectProvider(
+        provider_id="provider:administrative-production:odoo-expense-draft-writer",
+        name="Administrative Odoo expense draft writer",
+        capability=ADMINISTRATIVE_ERP_EXPENSE_REPORT_CREATE,
+        family="odoo",
+        execution_domain="odoo:erp",
+        credential_configuration_ref="odoo:erp-writer",
+        network_domain=_host(settings.odoo_base_url),
+        connector=odoo_financial_writer,
+        operation="expense_report.create",
+    )
+    expense_verifier = ProductionReadbackVerifier(
+        provider_id="provider:administrative-production:odoo-expense-draft-verifier",
+        name="Administrative Odoo expense draft verifier",
+        effect_capability=ADMINISTRATIVE_ERP_EXPENSE_REPORT_CREATE,
+        family="odoo-readback",
+        credential_configuration_ref="odoo:erp-verifier",
+        network_domain=_host(settings.odoo_base_url),
+        verifier=OdooFinancialVerifier(
+            odoo_financial_verifier_connector,
+            operation="expense_report.create",
+        ),
+    )
 
     registrations = (
         (hris_provider, "odoo-writer", _repeat_safe()),
@@ -484,6 +659,14 @@ def build() -> tuple[Runtime, BoundedDomainEffectExecutionService]:
         (iam_disable_verifier, "keycloak-disable-verifier", None),
         (session_revoke_provider, "keycloak-session-revoke-writer", _repeat_safe()),
         (session_revoke_verifier, "keycloak-session-revoke-verifier", None),
+        (procurement_draft_provider, "odoo-purchase-order-draft-writer", _repeat_safe()),
+        (procurement_draft_verifier, "odoo-purchase-order-draft-verifier", None),
+        (procurement_confirm_provider, "odoo-purchase-order-confirm-writer", _repeat_safe()),
+        (procurement_confirm_verifier, "odoo-purchase-order-confirm-verifier", None),
+        (vendor_bill_provider, "odoo-vendor-bill-draft-writer", _repeat_safe()),
+        (vendor_bill_verifier, "odoo-vendor-bill-draft-verifier", None),
+        (expense_provider, "odoo-expense-draft-writer", _repeat_safe()),
+        (expense_verifier, "odoo-expense-draft-verifier", None),
     )
     for provider, configured_name, repeatability in registrations:
         registry.register(
@@ -550,6 +733,50 @@ def build() -> tuple[Runtime, BoundedDomainEffectExecutionService]:
                 id="semantic:administrative-production:keycloak-identity-create",
                 version="1",
                 provider_id=iam_provider.descriptor.id,
+            ),
+            lease_owner="kernel:administrative-production",
+        ),
+        BoundedDomainEffectExecutionProfile(
+            capability=ADMINISTRATIVE_ERP_PURCHASE_ORDER_CREATE_DRAFT,
+            provider_id=procurement_draft_provider.descriptor.id,
+            verifier_provider_id=procurement_draft_verifier.descriptor.id,
+            semantic_contract=ProviderSemanticContract(
+                id="semantic:administrative-production:odoo-purchase-order-draft",
+                version="1",
+                provider_id=procurement_draft_provider.descriptor.id,
+            ),
+            lease_owner="kernel:administrative-production",
+        ),
+        BoundedDomainEffectExecutionProfile(
+            capability=ADMINISTRATIVE_ERP_PURCHASE_ORDER_CONFIRM,
+            provider_id=procurement_confirm_provider.descriptor.id,
+            verifier_provider_id=procurement_confirm_verifier.descriptor.id,
+            semantic_contract=ProviderSemanticContract(
+                id="semantic:administrative-production:odoo-purchase-order-confirm",
+                version="1",
+                provider_id=procurement_confirm_provider.descriptor.id,
+            ),
+            lease_owner="kernel:administrative-production",
+        ),
+        BoundedDomainEffectExecutionProfile(
+            capability=ADMINISTRATIVE_ERP_VENDOR_BILL_CREATE_DRAFT,
+            provider_id=vendor_bill_provider.descriptor.id,
+            verifier_provider_id=vendor_bill_verifier.descriptor.id,
+            semantic_contract=ProviderSemanticContract(
+                id="semantic:administrative-production:odoo-vendor-bill-draft",
+                version="1",
+                provider_id=vendor_bill_provider.descriptor.id,
+            ),
+            lease_owner="kernel:administrative-production",
+        ),
+        BoundedDomainEffectExecutionProfile(
+            capability=ADMINISTRATIVE_ERP_EXPENSE_REPORT_CREATE,
+            provider_id=expense_provider.descriptor.id,
+            verifier_provider_id=expense_verifier.descriptor.id,
+            semantic_contract=ProviderSemanticContract(
+                id="semantic:administrative-production:odoo-expense-draft",
+                version="1",
+                provider_id=expense_provider.descriptor.id,
             ),
             lease_owner="kernel:administrative-production",
         ),

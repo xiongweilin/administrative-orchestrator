@@ -148,6 +148,7 @@ class FakeKernelClient:
 
 def _compatibility(
     *,
+    build_revision: str | None = None,
     work_admission: bool = False,
     responsibility_discharge: bool = False,
     execution: bool = False,
@@ -160,6 +161,7 @@ def _compatibility(
         runtime_protocol="2.0",
         persistent_responsibility_contract="persistent-responsibility-v1",
         domain_responsibility_proposal_contract="domain-responsibility-proposal-v1",
+        build_revision=build_revision,
         responsibility_work_admission_contract=(
             "responsibility-work-admission-v1" if work_admission else None
         ),
@@ -270,6 +272,7 @@ def _projection_inputs():
 
 def _catalog(
     *,
+    build_revision: str | None = None,
     include_work_admission: bool = False,
     include_responsibility_discharge: bool = False,
     include_execution: bool = False,
@@ -318,6 +321,8 @@ def _catalog(
         "runtime_protocol": "2.0",
         "contracts": contracts,
     }
+    if build_revision is not None:
+        raw["build_revision"] = build_revision
     if include_evidence:
         raw["views"] = {
             "domain_effect_verification_evidence": {
@@ -397,6 +402,28 @@ def test_kernel_contract_gate_preserves_shadow_compatibility_and_gates_admission
     }
     with pytest.raises(KernelCompatibilityError, match="responsibility_work_admission"):
         validate_kernel_catalog(changed, require_work_admission=True)
+
+
+def test_kernel_build_revision_is_a_runtime_compatibility_invariant() -> None:
+    with pytest.raises(KernelCompatibilityError, match="build_revision"):
+        validate_kernel_catalog(
+            _catalog(),
+            expected_build_revision="kernel-revision-a",
+            require_build_revision=True,
+        )
+
+    assert validate_kernel_catalog(
+        _catalog(build_revision="kernel-revision-a"),
+        expected_build_revision="kernel-revision-a",
+        require_build_revision=True,
+    ).build_revision == "kernel-revision-a"
+
+    with pytest.raises(KernelCompatibilityError, match="expected 'kernel-revision-a'"):
+        validate_kernel_catalog(
+            _catalog(build_revision="kernel-revision-b"),
+            expected_build_revision="kernel-revision-a",
+            require_build_revision=True,
+        )
 
 
 def test_kernel_projection_is_deterministic_and_carries_no_runtime_authority() -> None:

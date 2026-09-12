@@ -19,6 +19,7 @@ dependencies = [
   "PyJWT[crypto]>=2.9,<3",
   "structlog>=24.4",
   "prometheus-client>=0.20",
+  "pypdf>=5.0,<7",
 ]
 
 [project.optional-dependencies]

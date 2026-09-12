@@ -23,13 +23,13 @@ from ..conversation import (
     ConversationService,
     ResolvedProviderIdentity,
 )
-from ..intake.artifacts import ArtifactStore
+from ..intake.artifacts import ArtifactStore, ArtifactStoreError
 from ..intake.documents import (
+    ContentAwareDocumentParser,
     DocumentAttachmentProcessor,
     DocumentAttachmentResult,
     DocumentProcessingStatus,
     MessageAttachment,
-    PlainTextDocumentParser,
 )
 from ..intake.interpretation import (
     InterpretationClient,
@@ -349,19 +349,21 @@ class FeishuEventVerifier:
 
     def __init__(
         self,
-        verification_token: str,
+        verification_token: str | None,
         *,
         gateway_shared_secret: str | None = None,
         encrypt_key: str | None = None,
         max_age_seconds: int = 300,
         clock: Callable[[], float] = time.time,
     ) -> None:
-        if not verification_token.strip():
-            raise ValueError("verification_token must not be blank")
+        verification_token = (verification_token or "").strip()
+        gateway_shared_secret = (gateway_shared_secret or "").strip()
+        if not verification_token and not gateway_shared_secret:
+            raise ValueError("verification_token or gateway_shared_secret is required")
         if max_age_seconds <= 0:
             raise ValueError("max_age_seconds must be positive")
         self._verification_token = verification_token
-        self._gateway_shared_secret = gateway_shared_secret
+        self._gateway_shared_secret = gateway_shared_secret or None
         self._encrypt_key = encrypt_key
         self._max_age_seconds = max_age_seconds
         self._clock = clock
@@ -792,7 +794,7 @@ class FeishuInboxPipeline:
         self.projection_service = projection_service or CandidateProjectionService()
         self.document_processor = document_processor or DocumentAttachmentProcessor(
             artifact_store,
-            PlainTextDocumentParser(),
+            ContentAwareDocumentParser(),
             repository,
         )
 
@@ -819,6 +821,10 @@ class FeishuInboxPipeline:
         attachment_artifacts = tuple(item.artifact for item in document_attachments)
         source_artifacts = (artifact, *attachment_artifacts)
         source_refs = tuple(item.artifact_id for item in source_artifacts)
+        evidence_spans = (
+            span,
+            *(item_span for item in document_attachments for item_span in item.evidence_spans),
+        )
         document_facts = tuple(
             fact
             for item in document_attachments
@@ -838,7 +844,12 @@ class FeishuInboxPipeline:
             tenant_ref=canonical.tenant_ref,
             at=canonical.occurred_at,
         )
-        interpretation = self._interpret(artifact, canonical.content, span)
+        interpretation = self._interpret(
+            artifact,
+            self._semantic_source_text(canonical, document_attachments, span),
+            evidence_spans=evidence_spans,
+            source_artifacts=source_artifacts,
+        )
         if interpretation.status is not InterpretationStatus.SUCCEEDED:
             return FeishuProcessResult(
                 receipt=self.repository.get_intake_receipt(
@@ -1015,15 +1026,27 @@ class FeishuInboxPipeline:
         self,
         artifact: SourceArtifact,
         content: str,
-        span: EvidenceSpan,
+        *,
+        evidence_spans: tuple[EvidenceSpan, ...],
+        source_artifacts: tuple[SourceArtifact, ...],
     ) -> InterpretationRecord:
         existing = [
             item
             for item in self.repository.list_interpretations(artifact.artifact_id)
             if item.interpretation_profile_ref == self.interpretation_profile.profile_ref
         ]
+        required_artifact_refs = {item.artifact_id for item in source_artifacts}
+        required_evidence_refs = {
+            item.evidence_span_id
+            for item in evidence_spans
+            if item.artifact_ref != artifact.artifact_id
+        }
         succeeded = [
-            item for item in existing if item.status is InterpretationStatus.SUCCEEDED
+            item
+            for item in existing
+            if item.status is InterpretationStatus.SUCCEEDED
+            and required_artifact_refs.issubset(item.artifact_refs)
+            and required_evidence_refs.issubset(item.evidence_span_refs)
         ]
         if succeeded:
             return sorted(succeeded, key=lambda item: item.interpreted_at)[-1]
@@ -1040,12 +1063,45 @@ class FeishuInboxPipeline:
             artifact,
             content,
             self.interpretation_profile,
-            (span,),
+            evidence_spans,
+            source_artifacts=source_artifacts,
             interpretation_id=interpretation_id,
         )
         if self.interpretation_client.repository is None:
             interpretation = self.repository.append_interpretation(interpretation)
         return interpretation
+
+    def _semantic_source_text(
+        self,
+        canonical: FeishuCanonicalMessage,
+        document_attachments: tuple[DocumentAttachmentResult, ...],
+        message_span: EvidenceSpan,
+    ) -> str:
+        chunks = [
+            f"[Feishu message evidence_span_ref={message_span.evidence_span_id}]\n{canonical.content}"
+        ]
+        for attachment, result in zip(canonical.attachments, document_attachments, strict=True):
+            representation = result.representation
+            if result.status is not DocumentProcessingStatus.SUCCEEDED or representation is None:
+                continue
+            try:
+                text = self.artifact_store.get(
+                    representation.storage_ref,
+                    expected_digest=representation.content_digest,
+                ).decode("utf-8")
+            except (ArtifactStoreError, UnicodeDecodeError) as exc:
+                raise FeishuProcessingError(
+                    "document representation could not be read for interpretation"
+                ) from exc
+            for span in result.evidence_spans:
+                start = span.locator.get("char_start")
+                end = span.locator.get("char_end")
+                excerpt = text if not isinstance(start, int) or not isinstance(end, int) else text[start:end]
+                chunks.append(
+                    f"[Feishu document attachment filename={attachment.filename} "
+                    f"evidence_span_ref={span.evidence_span_id}]\n{excerpt}"
+                )
+        return "\n\n".join(chunks)
 
     @staticmethod
     def _validate_canonical_identity(

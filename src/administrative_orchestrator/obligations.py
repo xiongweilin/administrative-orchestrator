@@ -6,7 +6,18 @@ from typing import Any
 from uuid import NAMESPACE_URL, UUID, uuid5
 
 from pydantic import Field
-from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Integer, String, Uuid, select
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    UniqueConstraint,
+    Uuid,
+    select,
+)
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Mapped, Session, mapped_column
 
 from .authority import AuthorityRepository
@@ -29,6 +40,24 @@ from .transfer import (
 
 class ObligationError(RuntimeError):
     pass
+
+
+_OBLIGATION_OPERATION_ORDER = {
+    "purchase_order.create_draft": 0,
+    "purchase_order.confirm": 1,
+    "vendor_bill.create_draft": 0,
+    "expense_report.create": 0,
+}
+
+
+def _obligation_sort_key(item: ObligationRow) -> tuple[str, int, str, str, str]:
+    return (
+        item.target_system,
+        _OBLIGATION_OPERATION_ORDER.get(item.required_operation, 99),
+        item.required_operation,
+        item.authority_class,
+        str(item.obligation_id),
+    )
 
 
 class ObligationFulfillmentKind(StrEnum):
@@ -101,6 +130,13 @@ class ObligationDomainStateFulfillment(UtcModel):
 
 class ObligationSetRow(Base):
     __tablename__ = "administrative_obligation_set"
+    __table_args__ = (
+        UniqueConstraint(
+            "case_id",
+            "authority_epoch",
+            name="uq_admin_obligation_set_case_epoch",
+        ),
+    )
 
     requirement_id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
     case_id: Mapped[UUID] = mapped_column(
@@ -184,11 +220,26 @@ class ObligationRepository:
         db: Session,
         obligation_set: OnboardingObligationSet,
     ) -> OnboardingObligationSet:
-        existing = db.get(ObligationSetRow, obligation_set.requirement_id)
-        if existing is not None:
-            restored = self._load_in_session(db, obligation_set.requirement_id)
+        existing_sets = (
+            db.execute(
+                select(ObligationSetRow).where(
+                    ObligationSetRow.case_id == obligation_set.case_id,
+                    ObligationSetRow.authority_epoch == obligation_set.authority_epoch,
+                )
+            )
+            .scalars()
+            .all()
+        )
+        if len(existing_sets) > 1:
+            raise ObligationError(
+                "multiple obligation sets exist for one case and authority epoch"
+            )
+        if existing_sets:
+            restored = self._load_in_session(db, existing_sets[0].requirement_id)
             if restored != obligation_set:
-                raise ObligationError("obligation set id already exists with different semantics")
+                raise ObligationError(
+                    "obligation set already exists with different semantics"
+                )
             return restored
         db.add(
             ObligationSetRow(
@@ -221,6 +272,12 @@ class ObligationRepository:
                     fulfillment_kind=item.fulfillment_kind.value,
                 )
             )
+        try:
+            db.flush()
+        except IntegrityError as exc:
+            raise ObligationError(
+                "obligation set concurrently exists for this case and authority epoch"
+            ) from exc
         return obligation_set
 
     def link_effect(
@@ -273,20 +330,22 @@ class ObligationRepository:
 
     def get_current(self, case_id: UUID, authority_epoch: int) -> OnboardingObligationSet | None:
         with self.store.sessions() as db:
-            row = (
+            rows = (
                 db.execute(
                     select(ObligationSetRow)
                     .where(
                         ObligationSetRow.case_id == case_id,
                         ObligationSetRow.authority_epoch == authority_epoch,
                     )
-                    .order_by(ObligationSetRow.requirement_id)
-                    .limit(1)
                 )
                 .scalars()
-                .first()
+                .all()
             )
-            return None if row is None else self._load_in_session(db, row.requirement_id)
+            if len(rows) > 1:
+                raise ObligationError(
+                    "multiple obligation sets exist for one case and authority epoch"
+                )
+            return None if not rows else self._load_in_session(db, rows[0].requirement_id)
 
     def list_links(self, case_id: UUID, authority_epoch: int) -> list[EffectObligationLink]:
         with self.store.sessions() as db:
@@ -314,11 +373,11 @@ class ObligationRepository:
             db.execute(
                 select(ObligationRow)
                 .where(ObligationRow.requirement_id == requirement_id)
-                .order_by(ObligationRow.target_system, ObligationRow.required_operation)
             )
             .scalars()
             .all()
         )
+        obligation_rows.sort(key=_obligation_sort_key)
         return OnboardingObligationSet(
             requirement_id=row.requirement_id,
             case_id=row.case_id,
@@ -741,6 +800,102 @@ def derive_offboarding_obligations(
     )
 
 
+def derive_financial_obligations(
+    case: AdministrativeCase,
+    evaluation: PolicyEvaluation,
+    *,
+    governance_basis_id: UUID,
+) -> AdministrativeObligationSet:
+    """Freeze the bounded ERP preparation effects for an M8 transaction case."""
+    allowed_case_kinds = {
+        "procurement-request",
+        "invoice-ap-preparation",
+        "expense-reimbursement",
+    }
+    if case.case_kind not in allowed_case_kinds:
+        raise ObligationError("financial obligations require a supported transaction case")
+    if case.fact_snapshot is None:
+        raise ObligationError("financial obligations require current facts")
+    if evaluation.policy_ref != case.policy_ref:
+        raise ObligationError("financial obligations require current policy evaluation")
+
+    expected_operations = {
+        "procurement-request": {
+            "purchase_order.create_draft",
+            "purchase_order.confirm",
+        },
+        "invoice-ap-preparation": {"vendor_bill.create_draft"},
+        "expense-reimbursement": {"expense_report.create"},
+    }[case.case_kind]
+    if not evaluation.allowed_effects:
+        raise ObligationError("current financial policy produces no required obligations")
+
+    obligations: list[AdministrativeObligation] = []
+    facts = case.fact_snapshot.facts
+    operation_order = {
+        "purchase_order.create_draft": 0,
+        "purchase_order.confirm": 1,
+        "vendor_bill.create_draft": 0,
+        "expense_report.create": 0,
+    }
+    for template in sorted(
+        evaluation.allowed_effects,
+        key=lambda item: (
+            item.target_system,
+            operation_order.get(item.operation, 99),
+            item.operation,
+        ),
+    ):
+        if template.target_system != "erp":
+            raise ObligationError("financial effects must target the ERP boundary")
+        if template.operation not in expected_operations:
+            raise ObligationError(
+                f"financial effect is outside the case contract: {template.operation!r}"
+            )
+        expected_postcondition: dict[str, Any] = {
+            "target_system": "erp",
+            "operation": template.operation,
+            "subject_ref": case.subject_ref,
+            "transaction_case_ref": str(case.case_id),
+            "authority_epoch": case.authority_epoch,
+            "payload": dict(facts),
+            "preconditions": ["qualification_assessments_current"],
+            "settlement": "forbidden",
+        }
+        if case.case_kind in {"procurement-request", "invoice-ap-preparation"}:
+            expected_postcondition["vendor_qualification"] = "required"
+        if case.case_kind == "invoice-ap-preparation":
+            expected_postcondition["three_way_match"] = "required"
+        if template.operation == "purchase_order.confirm":
+            expected_postcondition["requires_draft_reference"] = True
+        obligations.append(
+            _domain_or_external_obligation(
+                case,
+                governance_basis_id,
+                discriminator=f"external:erp:{template.operation}",
+                kind=f"erp.{template.operation}",
+                target_system="erp",
+                operation=template.operation,
+                expected_postcondition=expected_postcondition,
+                authority_class=template.authority_class,
+                fulfillment_kind=ObligationFulfillmentKind.EXTERNAL_EFFECT_VERIFIED,
+            )
+        )
+
+    requirement_id = uuid5(
+        NAMESPACE_URL,
+        f"administrative:obligation-set:{case.case_id}:{case.authority_epoch}:"
+        f"{governance_basis_id}",
+    )
+    return AdministrativeObligationSet(
+        requirement_id=requirement_id,
+        case_id=case.case_id,
+        authority_epoch=case.authority_epoch,
+        governance_basis_id=governance_basis_id,
+        obligations=tuple(obligations),
+    )
+
+
 def _domain_or_external_obligation(
     case: AdministrativeCase,
     governance_basis_id: UUID,
@@ -809,6 +964,14 @@ def derive_administrative_obligations(
             authority_repository,
             governance_basis_id=governance_basis_id,
         )
+    if case.case_kind in {
+        "procurement-request",
+        "invoice-ap-preparation",
+        "expense-reimbursement",
+    }:
+        return derive_financial_obligations(
+            case, evaluation, governance_basis_id=governance_basis_id
+        )
     raise ObligationError(
         f"no obligation derivation is registered for case kind {case.case_kind!r}"
     )
@@ -828,6 +991,7 @@ __all__ = [
     "ObligationSetRow",
     "OnboardingObligationSet",
     "derive_administrative_obligations",
+    "derive_financial_obligations",
     "derive_offboarding_obligations",
     "derive_onboarding_obligations",
 ]

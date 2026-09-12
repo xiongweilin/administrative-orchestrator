@@ -588,11 +588,15 @@ def test_operations_responsibility_snapshot_observes_active_and_discharged(monke
     assert obligation_set is not None
     effects = ExecutionRepository(store).list_effects(case.case_id, case.authority_epoch)
     outcomes = ExecutionRepository(store).list_outcomes(case.case_id, case.authority_epoch)
+    realizations = ExecutionRepository(store).list_realizations(
+        case.case_id, case.authority_epoch
+    )
     links = ObligationRepository(store).list_links(case.case_id, case.authority_epoch)
     completion = operations_api._case_completion_assessment(
         obligation_set,
         effects,
         outcomes,
+        realizations=realizations,
         links=links,
         fulfillments=[],
     )

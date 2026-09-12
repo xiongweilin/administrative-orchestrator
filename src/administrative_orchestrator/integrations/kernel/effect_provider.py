@@ -14,9 +14,16 @@ from ...effect_provider import (
     RealityObservation,
 )
 from .bridge import KERNEL_CUTOVER_CAPABILITIES, KernelExecutionBridge
+from .client import (
+    KernelExecutionError,
+    KernelSubmissionError,
+    KernelWorkAdmissionError,
+)
+from .compatibility import KernelCompatibilityError
 from .evidence import KernelEvidenceError
 from .models import KernelExecutionStatus, KernelProjectionStatus, KernelShadowProjection
 from .recovery import KernelExecutionResolution, KernelRecoveryError
+from .repository import KernelBridgePersistenceError
 
 
 def _effect_capability(effect: EffectRecord) -> str:
@@ -47,6 +54,43 @@ class KernelCutoverEffectProvider:
         if not self._kernel_owned(effect):
             return self.fallback.execute(effect, payload)
         projection = self._projection(effect)
+        if projection is None or (
+            projection.status is KernelProjectionStatus.ADMITTED
+            and projection.kernel_execution_status is None
+        ):
+            prepare_effect = getattr(self.bridge, "prepare_effect", None)
+            if prepare_effect is not None:
+                try:
+                    projection = prepare_effect(effect, payload)
+                except KernelExecutionError as exc:
+                    return ProviderExecutionResult(
+                        status=(
+                            ProviderExecutionStatus.OUTCOME_UNKNOWN
+                            if exc.retryable
+                            else ProviderExecutionStatus.FAILED
+                        ),
+                        provider_ref=self._provider_ref(projection),
+                        error=str(exc),
+                        retryable=exc.retryable,
+                    )
+                except (KernelSubmissionError, KernelWorkAdmissionError) as exc:
+                    return ProviderExecutionResult(
+                        status=ProviderExecutionStatus.OUTCOME_UNKNOWN,
+                        provider_ref=self._provider_ref(projection),
+                        error=str(exc),
+                        retryable=False,
+                    )
+                except (
+                    KernelBridgePersistenceError,
+                    KernelCompatibilityError,
+                    ValueError,
+                ) as exc:
+                    return ProviderExecutionResult(
+                        status=ProviderExecutionStatus.FAILED,
+                        provider_ref=self._provider_ref(projection),
+                        error=str(exc),
+                        retryable=False,
+                    )
         status = projection.kernel_execution_status if projection is not None else None
         provider_ref = self._provider_ref(projection)
         if projection is not None and projection.status is KernelProjectionStatus.REJECTED:
@@ -59,9 +103,14 @@ class KernelCutoverEffectProvider:
                 retryable=False,
             )
         if status is KernelExecutionStatus.COMPLETED:
+            external_operation_ref = getattr(
+                self.bridge,
+                "external_operation_ref_for",
+                lambda _projection: None,
+            )(projection)
             return ProviderExecutionResult(
                 status=ProviderExecutionStatus.SUCCEEDED,
-                provider_ref=provider_ref,
+                provider_ref=external_operation_ref or provider_ref,
             )
         if status is KernelExecutionStatus.EXECUTION_UNKNOWN:
             resolution = self._recover(projection)

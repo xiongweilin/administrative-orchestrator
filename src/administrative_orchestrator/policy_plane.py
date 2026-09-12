@@ -380,6 +380,51 @@ def default_offboarding_policy_version() -> PolicyVersionRecord:
     )
 
 
+def default_procurement_policy_version() -> PolicyVersionRecord:
+    from .financial import ProcurementPolicy
+
+    baseline = datetime(2026, 1, 1, tzinfo=UTC)
+    return PolicyVersionRecord(
+        policy_id="procurement-request",
+        version="v1",
+        owner="administrative-orchestrator",
+        status=PolicyVersionStatus.ACTIVE,
+        effective_from=baseline,
+        definition=ProcurementPolicy.default_definition(),
+        created_at=baseline,
+    )
+
+
+def default_invoice_ap_policy_version() -> PolicyVersionRecord:
+    from .financial import InvoiceAPPolicy
+
+    baseline = datetime(2026, 1, 1, tzinfo=UTC)
+    return PolicyVersionRecord(
+        policy_id="invoice-ap-preparation",
+        version="v1",
+        owner="administrative-orchestrator",
+        status=PolicyVersionStatus.ACTIVE,
+        effective_from=baseline,
+        definition=InvoiceAPPolicy.default_definition(),
+        created_at=baseline,
+    )
+
+
+def default_expense_policy_version() -> PolicyVersionRecord:
+    from .financial import ExpensePolicy
+
+    baseline = datetime(2026, 1, 1, tzinfo=UTC)
+    return PolicyVersionRecord(
+        policy_id="expense-reimbursement",
+        version="v1",
+        owner="administrative-orchestrator",
+        status=PolicyVersionStatus.ACTIVE,
+        effective_from=baseline,
+        definition=ExpensePolicy.default_definition(),
+        created_at=baseline,
+    )
+
+
 def compile_offboarding_policy(record: PolicyVersionRecord):
     from .policy import OffboardingPolicy
 
@@ -394,6 +439,30 @@ def compile_onboarding_policy(record: PolicyVersionRecord) -> OnboardingPolicy:
     return OnboardingPolicy(record.policy_ref, definition=record.definition)
 
 
+def compile_procurement_policy(record: PolicyVersionRecord):
+    from .financial import ProcurementPolicy
+
+    if record.policy_id != "procurement-request":
+        raise PolicyPlaneError("record is not a procurement-request policy")
+    return ProcurementPolicy(record.policy_ref, definition=record.definition)
+
+
+def compile_invoice_ap_policy(record: PolicyVersionRecord):
+    from .financial import InvoiceAPPolicy
+
+    if record.policy_id != "invoice-ap-preparation":
+        raise PolicyPlaneError("record is not an invoice-ap-preparation policy")
+    return InvoiceAPPolicy(record.policy_ref, definition=record.definition)
+
+
+def compile_expense_policy(record: PolicyVersionRecord):
+    from .financial import ExpensePolicy
+
+    if record.policy_id != "expense-reimbursement":
+        raise PolicyPlaneError("record is not an expense-reimbursement policy")
+    return ExpensePolicy(record.policy_ref, definition=record.definition)
+
+
 __all__ = [
     "PolicyLifecycleEvent",
     "PolicyLifecycleEventRow",
@@ -404,6 +473,12 @@ __all__ = [
     "PolicyVersionStatus",
     "compile_onboarding_policy",
     "compile_offboarding_policy",
+    "compile_procurement_policy",
+    "compile_invoice_ap_policy",
+    "compile_expense_policy",
     "default_onboarding_policy_version",
     "default_offboarding_policy_version",
+    "default_procurement_policy_version",
+    "default_invoice_ap_policy_version",
+    "default_expense_policy_version",
 ]

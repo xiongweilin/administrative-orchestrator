@@ -116,7 +116,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: xiongweilin/agent-kernel
-          ref: fe4b3f4bf2e376bd7105caf7d15d77e2483c7197
+          ref: 0bb90afa4cf8517018e3e5b3715da12d28908c79
           path: .integration/agent-kernel
       - uses: astral-sh/setup-uv@v6
         with:
@@ -125,7 +125,7 @@ jobs:
         run: |
           uv sync --extra dev
           uv pip install --python .venv/bin/python -e .integration/agent-kernel
-      - name: M7 Kernel capability profile contracts
+      - name: Kernel capability profile contracts
         run: uv run pytest -q tests/test_m7_kernel_capability_cutover.py
       - name: Start sandbox and supported Kernel
         env:

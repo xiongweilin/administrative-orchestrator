@@ -209,6 +209,11 @@ class ExecutionRepository:
         case_id: UUID,
     ) -> EffectRealizationAssessment:
         with self.store.sessions.begin() as db:
+            effect = db.get(EffectRow, assessment.effect_id)
+            if effect is None:
+                raise ExecutionConflict("realization requires a persisted effect")
+            if effect.case_id != case_id:
+                raise ExecutionConflict("realization case does not match its effect")
             row = db.get(RealizationRow, assessment.assessment_id)
             if row is not None:
                 restored = self._realization_from_row(row)
@@ -241,8 +246,53 @@ class ExecutionRepository:
             row = db.get(RealizationRow, assessment_id)
             return None if row is None else self._realization_from_row(row)
 
+    def list_realizations(
+        self,
+        case_id: UUID,
+        authority_epoch: int | None = None,
+    ) -> list[EffectRealizationAssessment]:
+        with self.store.sessions() as db:
+            statement = (
+                select(RealizationRow)
+                .join(EffectRow, EffectRow.effect_id == RealizationRow.effect_id)
+                .where(EffectRow.case_id == case_id)
+            )
+            if authority_epoch is not None:
+                statement = statement.where(EffectRow.authority_epoch == authority_epoch)
+            rows = (
+                db.execute(
+                    statement.order_by(
+                        RealizationRow.assessed_at,
+                        RealizationRow.assessment_id,
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            return [self._realization_from_row(row) for row in rows]
+
     def put_outcome(self, outcome: ConfirmedOutcome) -> ConfirmedOutcome:
         with self.store.sessions.begin() as db:
+            effect = db.get(EffectRow, outcome.effect_id)
+            if effect is None:
+                raise ExecutionConflict("outcome requires a persisted effect")
+            realization = db.get(
+                RealizationRow, outcome.realization_assessment_id
+            )
+            if realization is None:
+                raise ExecutionConflict("outcome requires a persisted realization")
+            if realization.effect_id != outcome.effect_id:
+                raise ExecutionConflict(
+                    "outcome realization belongs to a different effect"
+                )
+            if (
+                effect.case_id != outcome.case_id
+                or effect.case_version != outcome.case_version
+                or effect.authority_epoch != outcome.authority_epoch
+            ):
+                raise ExecutionConflict(
+                    "outcome case, version, or authority epoch does not match its effect"
+                )
             row = db.get(OutcomeRow, outcome.outcome_id)
             if row is not None:
                 restored = self._outcome_from_row(row)

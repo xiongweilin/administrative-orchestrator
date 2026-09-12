@@ -444,15 +444,20 @@ def build_feishu_webhook_boundary(
     store: SqlStore,
     settings: Settings,
 ) -> FeishuWebhookBoundary | None:
-    token = _secret(settings.feishu_verification_token)
-    if not token:
+    token = _secret(settings.feishu_verification_token) or _read_secret_file(
+        settings.feishu_verification_token_file
+    )
+    gateway_secret = _secret(settings.feishu_ingress_shared_secret) or _read_secret_file(
+        settings.feishu_ingress_shared_secret_file
+    )
+    if not token and not gateway_secret:
         return None
     encrypt_key = _secret(settings.feishu_encrypt_key)
     return FeishuWebhookBoundary(
         IntakeRepository(store),
         FeishuEventVerifier(
-            token,
-            gateway_shared_secret=_secret(settings.feishu_ingress_shared_secret) or None,
+            token or None,
+            gateway_shared_secret=gateway_secret or None,
             encrypt_key=encrypt_key or None,
         ),
     )
