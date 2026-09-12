@@ -1,7 +1,7 @@
 # ADR 0005 — Document-Driven Organizational Transactions
 
-Status: **accepted for the recorded isolated-staging scope; candidate PR checks
-passed; merge and M9 remain separate/out of scope**
+Status: **accepted for the recorded isolated-staging scope; Admin PR #80 and
+Kernel PR #99 merged; M9 remains out of scope**
 
 ## Decision
 

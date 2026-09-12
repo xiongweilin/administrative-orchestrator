@@ -123,14 +123,14 @@ The M5 implementation now includes:
 Production does not take its Agent Kernel revision from this README. The
 deployment-level canonical source is `AGENT_KERNEL_REF`; production Compose,
 the Kernel image build, Administrative expected revision, and the runtime
-`build_revision` evidence must all use that same value. The current M8
-candidate is:
+`build_revision` evidence must all use that same value. The promoted M8 Agent
+Kernel revision is:
 
 ```text
 0bb90afa4cf8517018e3e5b3715da12d28908c79
 ```
 
-M5 has an explicit acceptance boundary: repository CI can prove code, migration, restart, cut-over, DR, ambiguity semantics, and static/security quality gates, while the external checklist proves enterprise OIDC/Odoo/Keycloak credentials and network behavior. The isolated real-staging checklist, final exact-head CI, squash merge, and post-merge main CI were recorded on the historical M5 baseline `fe4b3f4bf2e376bd7105caf7d15d77e2483c7197`; M5 is **complete for the recorded scope**. The previous accepted Kernel baseline `14758ccbb50c3eafae9e80333aa6f238e1d1791b` remains historical; the unmerged M8 candidate is separately accepted for its recorded scope by PR checks.
+M5 has an explicit acceptance boundary: repository CI can prove code, migration, restart, cut-over, DR, ambiguity semantics, and static/security quality gates, while the external checklist proves enterprise OIDC/Odoo/Keycloak credentials and network behavior. The isolated real-staging checklist, final exact-head CI, squash merge, and post-merge main CI were recorded on the historical M5 baseline `fe4b3f4bf2e376bd7105caf7d15d77e2483c7197`; M5 is **complete for the recorded scope**. The previous accepted Kernel baseline `14758ccbb50c3eafae9e80333aa6f238e1d1791b` remains historical; the M8 revision was promoted through merged PR #99 and is accepted for its recorded scope.
 
 M6 is the upstream **Trusted Perception & Admission** milestone. The current
 implementation includes the Administrative Intake Plane contract and durable
@@ -171,10 +171,9 @@ transaction evidence and qualification records, typed admission for
 draft-only ERP capabilities, and an isolated staging surface. Local real-
 provider acceptance is recorded in
 `docs/acceptance/M8-staging-acceptance.md`; the template remains available for
-future isolated reruns. Admin PR #80 and Kernel PR #99 passed their required
-checks, including the cross-repository cutover/recovery lanes and SonarQube
-Quality Gate. Merge remains separate, and this acceptance does not expand the
-milestone into M9.
+future isolated reruns. Admin PR #80 and Kernel PR #99 were merged after passing
+their required checks, including the cross-repository cutover/recovery lanes and
+SonarQube Quality Gate. This acceptance does not expand the milestone into M9.
 
 See:
 
@@ -193,7 +192,7 @@ See:
 - `docs/acceptance/M6-staging-acceptance-template.md` for the no-secrets/no-body template.
 - `docs/acceptance/M7-staging-acceptance.md` for the recorded M7 real-staging evidence and closure.
 - `docs/acceptance/M7-staging-acceptance-template.md` for the no-secrets/no-body template.
-- `docs/acceptance/M8-staging-acceptance.md` for the recorded M8 staging evidence, candidate identities, CI results, and closure state.
+- `docs/acceptance/M8-staging-acceptance.md` for the recorded M8 staging evidence, merged revisions, CI results, and closure state.
 - `docs/acceptance/M8-staging-acceptance-template.md` for the no-secrets/no-body transaction acceptance template.
 
 ## Development principles

@@ -10,9 +10,9 @@
 
 - Date/time: `2026-09-12` (local staging run; evidence captured during this run)
 - Compose project: `administrative-m8-staging`
-- Administrative candidate: branch `codex/m8-document-driven-closure` at `c9de3bf82176fa822d882fef07a39f9e311babbb`, pushed as PR #80
-- Candidate Agent Kernel revision: `0bb90afa4cf8517018e3e5b3715da12d28908c79`
-- Kernel candidate: branch `m8-administrative-public-v3`, pushed as PR #99; the candidate worktree is clean at the pinned revision
+- Administrative implementation source: branch `codex/m8-document-driven-closure` at `c9de3bf82176fa822d882fef07a39f9e311babbb`, delivered through PR #80 and merged as `528fc94a6876de80eb8278be34ed5f294474e857`
+- Promoted Agent Kernel revision: `0bb90afa4cf8517018e3e5b3715da12d28908c79`
+- Kernel source branch: `m8-administrative-public-v3`, delivered through PR #99 and merged as `729082888f5a875db2df2a2e59517ca6d80e4be8`
 - Database migration head: `0026_m8_transaction_evidence`
 - Runtime profile: `staging`
 - Operator/reviewer binding: `person:m8-reviewer`
@@ -83,7 +83,7 @@
 - Runtime proof: Kernel `/v1/contracts` returned `build_revision=0bb90afa4cf8517018e3e5b3715da12d28908c79`, `owner=portable-runtime/contracts`, `catalog_version=portable-runtime-contracts-v1`, and `runtime_protocol=2.0`.
 - Readiness proof: Administrative API and Operations API `/readyz` both returned `status=ready` with `kernel_revision=0bb90afa4cf8517018e3e5b3715da12d28908c79`.
 - Discriminating tests: expected A/runtime A passes; expected A/runtime B fails; missing runtime revision fails in production; missing deployment revision fails closed.
-- Historical M6/M7 pins were left unchanged because they are recorded historical staging/workflow baselines, not the production runtime source for this M8 candidate.
+- Historical M6/M7 pins were left unchanged because they are recorded historical staging/workflow baselines, not the promoted M8 runtime source.
 
 ## Fix B — exact effect/realization/outcome binding
 
@@ -120,11 +120,11 @@
 
 ## Closure status and intentional leftovers
 
-M8 is `PASS` and accepted for the recorded isolated-staging/document-driven transaction scope. The candidate identities are pushed and all required PR checks are green. This acceptance does not imply a merge to `main`; merge remains a separate repository action and was not performed.
+M8 is `PASS` and accepted for the recorded isolated-staging/document-driven transaction scope. Admin PR #80 and Kernel PR #99 were merged into their respective `main` branches after all required checks passed.
 
-- The old M7 linked-worktree directories are absent; stale Kernel worktree metadata was pruned. The Kernel main repository at `D:\agent\agent-kernel` is retained because it is the repository's main worktree, not an obsolete linked worktree.
+- The old M7 linked-worktree directories are absent; stale Kernel worktree metadata was pruned. The merged M8 Kernel linked worktree was removed after it was verified clean. The Kernel main repository at `D:\agent\agent-kernel` is retained because it is the repository's main worktree, not an obsolete linked worktree.
 - Old M5/M6/M7 containers are absent. Successful one-off M8 migration/bootstrap containers were removed; the M8 service containers remain running for the accepted staging evidence.
 - Historical M5–M7 volumes and acceptance records remain intentionally preserved. No `down -v`, volume deletion, or broad Docker prune was used.
-- The cleanup manifest is `D:\infrastructure\compose\_m8-acceptance-backups\m8-remote-branch-cleanup-20260912.txt`; old M7 remote refs were already absent and only stale local tracking/worktree metadata was pruned.
+- The cleanup manifest is `D:\infrastructure\compose\_m8-acceptance-backups\m8-remote-branch-cleanup-20260912.txt`; old M7 remote refs were already absent and only stale local tracking/worktree metadata was pruned. The merged M8 source branches remain as historical rollback refs.
 
 This is an M8 closure for the current scope only. It does not authorize starting M9, changing scope, deleting historical worktrees/volumes, or rewriting historical M5–M7 acceptance records.
