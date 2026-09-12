@@ -14,7 +14,8 @@ from .integrations.kernel.client import (
     KernelResponsibilityDischargeError,
 )
 from .integrations.kernel.compatibility import KernelCompatibilityError
-from .integrations.kernel.models import KernelProjectionStatus
+from .integrations.kernel.models import KernelExecutionStatus, KernelProjectionStatus
+from .integrations.kernel.recovery import KernelRecoveryError
 from .obligations import (
     ObligationFulfillmentKind,
     ObligationRepository,
@@ -340,6 +341,7 @@ class AdministrativeResponsibilityDischargeService:
         )
         current_matches: dict[UUID, list[Any]] = {item.obligation_id: [] for item in current_external}
         by_ref: dict[str, tuple[int, set[UUID]]] = {}
+        recovered_projection_ids: set[UUID] = set()
 
         for projection in projections:
             if projection.status is KernelProjectionStatus.SHADOW:
@@ -350,6 +352,12 @@ class AdministrativeResponsibilityDischargeService:
             version = projection.admission_payload.get("responsibility_version")
             if not isinstance(version, int) or isinstance(version, bool) or version < 1:
                 raise ResponsibilityDischargeBlocked("kernel_projection_missing_responsibility_version")
+            if projection.kernel_execution_status is KernelExecutionStatus.EXECUTION_UNKNOWN:
+                if not self._projection_execution_completed(projection, responsibility_ref):
+                    raise ResponsibilityDischargeBlocked(
+                        "historical_external_responsibility_not_completed"
+                    )
+                recovered_projection_ids.add(projection.projection_id)
             if (
                 projection.kernel_execution_responsibility_ref is not None
                 and projection.kernel_execution_responsibility_ref != responsibility_ref
@@ -370,10 +378,11 @@ class AdministrativeResponsibilityDischargeService:
             if len(matches) != 1:
                 raise ResponsibilityDischargeBlocked("missing_or_duplicate_current_kernel_projection")
             projection = matches[0]
-            if (
-                projection.status is not KernelProjectionStatus.CUTOVER
-                or projection.kernel_execution_status is None
-                or projection.kernel_execution_status.value != "completed"
+            responsibility_ref = projection.kernel_responsibility_ref
+            if not isinstance(responsibility_ref, str) or not responsibility_ref:
+                raise ResponsibilityDischargeBlocked("kernel_projection_missing_responsibility_ref")
+            if projection.projection_id not in recovered_projection_ids and not self._projection_execution_completed(
+                projection, responsibility_ref
             ):
                 raise ResponsibilityDischargeBlocked("current_external_responsibility_not_completed")
 
@@ -386,6 +395,42 @@ class AdministrativeResponsibilityDischargeService:
             for responsibility_ref, (version, obligation_ids) in sorted(by_ref.items())
         )
         return handles
+
+    def _projection_execution_completed(
+        self,
+        projection: Any,
+        responsibility_ref: str,
+    ) -> bool:
+        """Accept current Kernel recovery without rewriting historical projection state."""
+
+        if (
+            projection.status is KernelProjectionStatus.CUTOVER
+            and projection.kernel_execution_status is not None
+            and projection.kernel_execution_status.value == "completed"
+        ):
+            return True
+        if (
+            projection.status is not KernelProjectionStatus.ADMITTED
+            or projection.kernel_execution_status is not KernelExecutionStatus.EXECUTION_UNKNOWN
+            or not projection.kernel_execution_ref
+        ):
+            return False
+        try:
+            resolution = self.bridge.recovery_client().inspect(
+                projection.kernel_execution_ref,
+                expected_work_ref=projection.kernel_work_ref,
+            )
+        except KernelRecoveryError as exc:
+            raise ResponsibilityDischargeBlocked(
+                f"kernel_recovery_resolution_unavailable:{type(exc).__name__}"
+            ) from exc
+        if resolution is None or resolution.current_status != "recovered-completed":
+            return False
+        if resolution.responsibility_ref != responsibility_ref:
+            raise ResponsibilityDischargeBlocked(
+                "kernel_recovery_responsibility_identity_rebound"
+            )
+        return True
 
     @staticmethod
     def _discharge_refs(
