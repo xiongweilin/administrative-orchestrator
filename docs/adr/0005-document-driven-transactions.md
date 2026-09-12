@@ -1,7 +1,7 @@
 # ADR 0005 — Document-Driven Organizational Transactions
 
-Status: **accepted for implementation; local isolated staging recorded, remote
-candidate checks and acceptance-owner closure tracked separately**
+Status: **accepted for the recorded isolated-staging scope; candidate PR checks
+passed; merge and M9 remain separate/out of scope**
 
 ## Decision
 

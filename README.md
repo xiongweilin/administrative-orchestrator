@@ -97,7 +97,7 @@ Planned vertical slices:
 
 The first executable slice is **employee onboarding** because it forces multi-actor coordination, long-lived state, identity, policy, approvals, multiple external systems, semantic verification, and bounded completion.
 
-# Current state: M6 and M7 accepted; M8 local acceptance recorded and remote closure in progress
+# Current state: M6, M7, and M8 accepted for their recorded scopes
 
 M0–M4 established the semantic foundation, durable governed execution, organizational authority/policy, administrative correctness, and Agent Kernel convergence/cut-over invariants. M5 makes that reference architecture production-shaped without collapsing those ownership boundaries. M6 added trusted perception and admission and is accepted for the recorded staging scope (`docs/acceptance/M6-staging-acceptance.md`). M7 adds the employee lifecycle responsibility boundary and is accepted for the recorded isolated real-staging scope (`docs/acceptance/M7-staging-acceptance.md`, ADR 0004, `docs/milestones/M7.md`).
 
@@ -124,13 +124,13 @@ Production does not take its Agent Kernel revision from this README. The
 deployment-level canonical source is `AGENT_KERNEL_REF`; production Compose,
 the Kernel image build, Administrative expected revision, and the runtime
 `build_revision` evidence must all use that same value. The current M8
-candidate under remote verification is:
+candidate is:
 
 ```text
 0bb90afa4cf8517018e3e5b3715da12d28908c79
 ```
 
-M5 has an explicit acceptance boundary: repository CI can prove code, migration, restart, cut-over, DR, ambiguity semantics, and static/security quality gates, while the external checklist proves enterprise OIDC/Odoo/Keycloak credentials and network behavior. The isolated real-staging checklist, final exact-head CI, squash merge, and post-merge main CI were recorded on the historical M5 baseline `fe4b3f4bf2e376bd7105caf7d15d77e2483c7197`; M5 is **complete for the recorded scope**. The previous accepted Kernel baseline `14758ccbb50c3eafae9e80333aa6f238e1d1791b` remains historical until the M8 candidate is promoted.
+M5 has an explicit acceptance boundary: repository CI can prove code, migration, restart, cut-over, DR, ambiguity semantics, and static/security quality gates, while the external checklist proves enterprise OIDC/Odoo/Keycloak credentials and network behavior. The isolated real-staging checklist, final exact-head CI, squash merge, and post-merge main CI were recorded on the historical M5 baseline `fe4b3f4bf2e376bd7105caf7d15d77e2483c7197`; M5 is **complete for the recorded scope**. The previous accepted Kernel baseline `14758ccbb50c3eafae9e80333aa6f238e1d1791b` remains historical; the unmerged M8 candidate is separately accepted for its recorded scope by PR checks.
 
 M6 is the upstream **Trusted Perception & Admission** milestone. The current
 implementation includes the Administrative Intake Plane contract and durable
@@ -171,8 +171,10 @@ transaction evidence and qualification records, typed admission for
 draft-only ERP capabilities, and an isolated staging surface. Local real-
 provider acceptance is recorded in
 `docs/acceptance/M8-staging-acceptance.md`; the template remains available for
-future isolated reruns. Remote candidate checks and acceptance-owner closure
-are tracked in the M8 record and do not expand the milestone into M9.
+future isolated reruns. Admin PR #80 and Kernel PR #99 passed their required
+checks, including the cross-repository cutover/recovery lanes and SonarQube
+Quality Gate. Merge remains separate, and this acceptance does not expand the
+milestone into M9.
 
 See:
 
@@ -191,7 +193,7 @@ See:
 - `docs/acceptance/M6-staging-acceptance-template.md` for the no-secrets/no-body template.
 - `docs/acceptance/M7-staging-acceptance.md` for the recorded M7 real-staging evidence and closure.
 - `docs/acceptance/M7-staging-acceptance-template.md` for the no-secrets/no-body template.
-- `docs/acceptance/M8-staging-acceptance.md` for the recorded M8 local staging evidence and closure state.
+- `docs/acceptance/M8-staging-acceptance.md` for the recorded M8 staging evidence, candidate identities, CI results, and closure state.
 - `docs/acceptance/M8-staging-acceptance-template.md` for the no-secrets/no-body transaction acceptance template.
 
 ## Development principles

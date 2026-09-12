@@ -10,9 +10,9 @@
 
 - Date/time: `2026-09-12` (local staging run; evidence captured during this run)
 - Compose project: `administrative-m8-staging`
-- Administrative repository: `main` at `20d3c1a0d4ba28e37e08341a5f6cd5d96583252a` plus the preserved M8 working tree
+- Administrative candidate: branch `codex/m8-document-driven-closure` at `ee3205c36ccab652b33a0376591c520aaf5e40bf`, pushed as PR #80
 - Candidate Agent Kernel revision: `0bb90afa4cf8517018e3e5b3715da12d28908c79`
-- Kernel worktree: `m8-administrative-public-v3`, clean, ahead of its remote by one local commit
+- Kernel candidate: branch `m8-administrative-public-v3`, pushed as PR #99; the candidate worktree is clean at the pinned revision
 - Database migration head: `0026_m8_transaction_evidence`
 - Runtime profile: `staging`
 - Operator/reviewer binding: `person:m8-reviewer`
@@ -27,8 +27,8 @@
 | G–I admission / policy / governance | `PASS` | Current case decisions and governance-basis references | Human admission, typed facts, policy evaluation, and current governance were preserved per case epoch. |
 | J–L qualification / duplicate / three-way | `PASS` | Qualification assessment references for invoice case | Vendor, duplicate, and three-way checks were recorded; no payment authority was introduced. |
 | M–O obligations / Kernel / draft-only ERP | `PASS` | Effect, realization, outcome, Kernel projection, and Odoo readback references below | Procurement draft/confirm, invoice draft, and expense preparation completed through bounded effects only. |
-| P–R readback / recovery / completion | `PASS` locally; `REOPEN` for remote closure | Independent readback, recovery, Fix A/Fix B regression evidence | Exact completion binding and expense stale-identity recovery passed. Mandatory remote checks are unavailable for the unpushed candidate. |
-| S no-payment / audit / rollback | `PASS` locally; `REOPEN` for remote closure | Backup directory, provider capability tests, preserved historical records | No payment or settlement was performed; M5–M7 volumes and historical evidence were not removed. |
+| P–R readback / recovery / completion | `PASS` | Independent readback, recovery, Fix A/Fix B regression evidence, PR #80 CI | Exact completion binding, lost-ACK recovery, pre-receipt recovery, and ambiguous recovery passed. |
+| S no-payment / audit / rollback | `PASS` | Backup directory, provider capability tests, preserved historical records, PR #80 CI | No payment or settlement was performed; M5–M7 volumes and historical evidence were not removed. |
 
 ## Case records
 
@@ -109,19 +109,22 @@
 - Admin full suite: `uv run pytest -q` — exit code `0`, complete run, only existing dependency deprecation warnings.
 - Kernel public contract static/test basis: `uv run ruff check ...` and public contract tests — `PASS`, `5 passed` in the independent pass.
 - Kernel full suite: `uv run pytest -q` — `1307 passed, 33 xfailed, 2 warnings`.
+- Admin full suite with coverage: `uv run pytest -q --cov=src/administrative_orchestrator` — exit code `0`, local total coverage `84%`.
 - Compose render: `docker compose -f deploy/m8-staging/compose.yaml -p administrative-m8-staging config --quiet` — `PASS`.
 - Staging migration: `alembic current` and `alembic heads` — both `0026_m8_transaction_evidence`.
 - Staging runtime: API/Operations `/readyz` — `ready`; Kernel `/v1/contracts` revision — exact match.
 - PostgreSQL migration/DR: the M8 migration roundtrip `base → 0026 → base → 0026` passed in the earlier isolated migration gate; current staging remains at `0026`.
 - Historical M5/M6/M7 records and volumes preserved: `yes`; no old volumes were removed and the acceptance backup directory remains available.
+- Admin PR #80 required checks: CI runs `34701651683` and `34701651698` — all checks `PASS`, including SonarQube Cloud Quality Gate, compose/DBOS/PostgreSQL lanes, operations-console, production-trust, and Kernel cutover/restart/recovery lanes.
+- Kernel PR #99 required checks: public-contract consumers, strict conformance, and lint/test — `PASS`.
 
 ## Closure status and intentional leftovers
 
-Local correctness and local isolated-staging evidence are `PASS`. M8 is not marked fully closed because the required remote evidence is unavailable within the current authorization boundary:
+M8 is `PASS` and accepted for the recorded isolated-staging/document-driven transaction scope. The candidate identities are pushed and all required PR checks are green. This acceptance does not imply a merge to `main`; merge remains a separate repository action and was not performed.
 
-- Administrative M8 changes remain uncommitted in the preserved dirty worktree, so the remote checks visible for baseline `20d3c1a...` do not qualify this candidate.
-- Kernel candidate `0bb90afa...` is local-only and not pushed; it has no matching PR/check run.
-- Branch-protection/required-check configuration could not be qualified read-only; no push, PR creation, or workflow trigger was performed.
-- Acceptance owner sign-off remains pending.
+- The old M7 linked-worktree directories are absent; stale Kernel worktree metadata was pruned. The Kernel main repository at `D:\agent\agent-kernel` is retained because it is the repository's main worktree, not an obsolete linked worktree.
+- Old M5/M6/M7 containers are absent. Successful one-off M8 migration/bootstrap containers were removed; the M8 service containers remain running for the accepted staging evidence.
+- Historical M5–M7 volumes and acceptance records remain intentionally preserved. No `down -v`, volume deletion, or broad Docker prune was used.
+- The cleanup manifest is `D:\infrastructure\compose\_m8-acceptance-backups\m8-remote-branch-cleanup-20260912.txt`; old M7 remote refs were already absent and only stale local tracking/worktree metadata was pruned.
 
-This is a closure `REOPEN` for remote CI/owner evidence only. It is not a product correctness failure, and it does not authorize starting M9, changing scope, deleting worktrees/volumes, or rewriting historical M5–M7 acceptance records.
+This is an M8 closure for the current scope only. It does not authorize starting M9, changing scope, deleting historical worktrees/volumes, or rewriting historical M5–M7 acceptance records.
