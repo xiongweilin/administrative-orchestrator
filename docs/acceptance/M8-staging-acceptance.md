@@ -10,7 +10,7 @@
 
 - Date/time: `2026-09-12` (local staging run; evidence captured during this run)
 - Compose project: `administrative-m8-staging`
-- Administrative candidate: branch `codex/m8-document-driven-closure` at `ee3205c36ccab652b33a0376591c520aaf5e40bf`, pushed as PR #80
+- Administrative candidate: branch `codex/m8-document-driven-closure` at `8d579e0a2af20cf9cffc684564c095f80cc65462`, pushed as PR #80
 - Candidate Agent Kernel revision: `0bb90afa4cf8517018e3e5b3715da12d28908c79`
 - Kernel candidate: branch `m8-administrative-public-v3`, pushed as PR #99; the candidate worktree is clean at the pinned revision
 - Database migration head: `0026_m8_transaction_evidence`
