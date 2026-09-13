@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID, uuid5
 
-from .commitment_common import CommitmentIntakeError, M9_NAMESPACE
+from .commitment_common import M9_NAMESPACE, CommitmentIntakeError
 from .commitment_models import CommitmentFulfillmentAttestation, CommitmentRecord, CommitmentState
 from .domain import CaseStatus, utcnow
 
