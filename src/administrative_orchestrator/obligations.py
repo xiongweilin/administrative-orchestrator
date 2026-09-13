@@ -42,24 +42,6 @@ class ObligationError(RuntimeError):
     pass
 
 
-_OBLIGATION_OPERATION_ORDER = {
-    "purchase_order.create_draft": 0,
-    "purchase_order.confirm": 1,
-    "vendor_bill.create_draft": 0,
-    "expense_report.create": 0,
-}
-
-
-def _obligation_sort_key(item: ObligationRow) -> tuple[str, int, str, str, str]:
-    return (
-        item.target_system,
-        _OBLIGATION_OPERATION_ORDER.get(item.required_operation, 99),
-        item.required_operation,
-        item.authority_class,
-        str(item.obligation_id),
-    )
-
-
 class ObligationFulfillmentKind(StrEnum):
     """How one required obligation can be proven complete.
 
@@ -148,11 +130,19 @@ class ObligationSetRow(Base):
 
 class ObligationRow(Base):
     __tablename__ = "administrative_obligation"
+    __table_args__ = (
+        UniqueConstraint(
+            "requirement_id",
+            "sequence",
+            name="uq_admin_obligation_requirement_sequence",
+        ),
+    )
 
     obligation_id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
     requirement_id: Mapped[UUID] = mapped_column(
         ForeignKey("administrative_obligation_set.requirement_id"), nullable=False
     )
+    sequence: Mapped[int] = mapped_column(Integer, nullable=False)
     case_id: Mapped[UUID] = mapped_column(
         ForeignKey("administrative_case.case_id"), nullable=False
     )
@@ -254,11 +244,12 @@ class ObligationRepository:
         # ordering does not depend on SQLAlchemy unit-of-work relationship
         # discovery.
         db.flush()
-        for item in obligation_set.obligations:
+        for sequence, item in enumerate(obligation_set.obligations):
             db.add(
                 ObligationRow(
                     obligation_id=item.obligation_id,
                     requirement_id=obligation_set.requirement_id,
+                    sequence=sequence,
                     case_id=item.case_id,
                     authority_epoch=item.authority_epoch,
                     governance_basis_id=item.governance_basis_id,
@@ -373,11 +364,16 @@ class ObligationRepository:
             db.execute(
                 select(ObligationRow)
                 .where(ObligationRow.requirement_id == requirement_id)
+                .order_by(ObligationRow.sequence)
             )
             .scalars()
             .all()
         )
-        obligation_rows.sort(key=_obligation_sort_key)
+        sequences = [item.sequence for item in obligation_rows]
+        if sequences != list(range(len(obligation_rows))):
+            raise ObligationError(
+                "persisted obligation sequence must be contiguous from zero"
+            )
         return OnboardingObligationSet(
             requirement_id=row.requirement_id,
             case_id=row.case_id,
