@@ -4,7 +4,7 @@ version = "0.3.0"
 description = "Durable, governed administrative automation over organizational policy, approvals, effects, verification, and reopen."
 readme = "README.md"
 requires-python = ">=3.12,<3.15"
-license = { text = "MIT" }
+license = { file = "LICENSE" }
 authors = [{ name = "xiongweilin" }]
 dependencies = [
   "fastapi>=0.115",
