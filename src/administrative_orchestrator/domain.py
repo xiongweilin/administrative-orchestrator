@@ -55,12 +55,17 @@ class ReopenReason(StrEnum):
     POLICY_CONFLICT = "policy_conflict"
     MISSING_REQUIRED_FACT = "missing_required_fact"
     AUTHORITY_UNRESOLVED = "authority_unresolved"
+    POLICY_UNDERSPECIFIED = "policy_underspecified"
     GOVERNANCE_STALE = "governance_stale"
     SUBJECT_CHANGED = "subject_changed"
     OUTCOME_UNKNOWN = "outcome_unknown"
     REALITY_MISMATCH = "reality_mismatch"
     SCOPE_EXPANSION = "scope_expansion"
     UNKNOWN_RISK_DIMENSION = "unknown_risk_dimension"
+    OBLIGATION_STALLED = "obligation_stalled"
+    COMMITMENT_CONFLICT = "commitment_conflict"
+    LATE_EVIDENCE = "late_evidence"
+    HUMAN_REQUESTED_REVIEW = "human_requested_review"
 
 
 class DecisionDisposition(StrEnum):

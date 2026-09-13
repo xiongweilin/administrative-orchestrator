@@ -513,6 +513,10 @@ class MeetingCommitmentService:
         case = self.store.get_case(commitment.case_id)
         if case is None or case.policy_ref is None:
             raise CommitmentIntakeError("communication requires a current governed case")
+        if case.authority_epoch != commitment.authority_epoch:
+            raise CommitmentIntakeError(
+                "communication requires commitment revalidation after an authority epoch change"
+            )
         if draft_kind not in {"confirmation", "reminder"}:
             raise CommitmentIntakeError("unsupported communication draft kind")
         text = self._communication_text(commitment, draft_kind)
@@ -722,6 +726,10 @@ class MeetingCommitmentService:
         case = self.store.get_case(case_id)
         if commitment is None or case is None:
             raise CommitmentIntakeError("commitment case not found")
+        if commitment.authority_epoch != case.authority_epoch:
+            raise CommitmentIntakeError(
+                "fulfillment requires commitment revalidation after an authority epoch change"
+            )
         if principal_id != commitment.committer_principal_id:
             raise PermissionError("only the qualified committer may attest fulfillment")
         if not self.authority.get_principal(principal_id):
@@ -771,6 +779,10 @@ class MeetingCommitmentService:
         case = self.store.get_case(case_id)
         if commitment is None or case is None:
             raise CommitmentIntakeError("commitment case not found")
+        if commitment.authority_epoch != case.authority_epoch:
+            raise CommitmentIntakeError(
+                "commitment drive requires revalidation after an authority epoch change"
+            )
         if commitment.state is CommitmentState.ACTIVE and at >= commitment.due_at:
             overdue = commitment.model_copy(
                 update={"state": CommitmentState.OVERDUE, "was_overdue": True, "updated_at": at}
@@ -1083,6 +1095,10 @@ class MeetingCommitmentService:
             CommitmentState.CANCELLED,
         }:
             raise CommitmentIntakeError("commitment cannot be revised in its current state")
+        if commitment.authority_epoch != case.authority_epoch:
+            raise CommitmentIntakeError(
+                "commitment revision requires revalidation after an authority epoch change"
+            )
         if case.fact_snapshot is None:
             raise CommitmentIntakeError("due revision requires a current fact snapshot")
         now = utcnow()
@@ -1158,6 +1174,10 @@ class MeetingCommitmentService:
         case = self.store.get_case(case_id)
         if commitment is None or case is None:
             raise CommitmentIntakeError("commitment case not found")
+        if commitment.authority_epoch != case.authority_epoch:
+            raise CommitmentIntakeError(
+                "commitment cancellation requires revalidation after an authority epoch change"
+            )
         if commitment.state is CommitmentState.CANCELLED:
             return commitment
         if commitment.state is CommitmentState.FULFILLED or case.status in {

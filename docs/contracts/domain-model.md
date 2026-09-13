@@ -239,6 +239,12 @@ realized effect != ConfirmedOutcome
 OUTCOME_UNKNOWN != retry permission
 ```
 
+An `OUTCOME_UNKNOWN`-triggered investigation is admissible only after the
+Administrative boundary verifies a matching persisted Kernel execution
+projection and a terminal Kernel reconciliation resolution. A non-empty string
+is not by itself a reconciliation fact. Any residual ambiguity is then
+Administrative investigation input, not execution permission.
+
 ## 8. Completion and responsibility
 
 ### CompletionAssessment
@@ -332,7 +338,72 @@ Canonical reopen reasons include no applicable policy, policy conflict, required
 
 `REOPEN_REQUIRED` means the previous framing or closure is no longer sufficient. It does not itself authorize a new effect. Fresh closure is required before acting again.
 
-## 12. Non-negotiable distinctions
+## 12. Investigation and governed reframing
+
+An investigation is a bounded Administrative response to a model or closure
+insufficiency. It is not a second execution engine and it is not a source of
+authority.
+
+### InvestigationTrigger
+
+A durable fact explaining why the current Administrative model cannot safely
+continue closure. Trigger classes include ambiguous evidence, conflicting
+facts, missing qualification or authority, policy underspecification,
+unexpected reality, unresolved outcome, verification contradiction, stalled
+obligation, commitment conflict, late evidence, and human-requested review.
+`OUTCOME_UNKNOWN` may enter this path only after a Kernel reconciliation
+reference exists.
+
+### InvestigationRequest
+
+A bounded, tenant-scoped request to investigate one case at one authority
+epoch. It records the question, permitted evidence references, current fact /
+governance / obligation / commitment references, creator, status, and hard
+round/model/evidence budgets. It describes what needs to be learned, never a
+physical action to perform.
+
+### InvestigationProposal
+
+An advisory result from a model or investigation engine. It may contain
+hypotheses, ambiguities, missing evidence, read-only query recommendations,
+human questions, possible reframings, possible reopen targets, uncertainty,
+and model provenance. It cannot create a Decision, ApprovalSatisfaction,
+ExecutionAuthorization, Kernel Work, authoritative fact, or provider effect.
+
+### InvestigationEvidenceRequest / InvestigationEvidence
+
+An `InvestigationEvidenceRequest` records a bounded request for additional
+evidence. `InvestigationEvidence` records what was added, its source, owner,
+version/digest references, and actor. Neither object changes case facts or
+authority by itself.
+
+### ReframingProposal
+
+A versioned proposal that the current problem frame may be wrong. It preserves
+the old frame and evidence lineage and cannot mutate `AdministrativeCase`
+truth without a separate qualified Administrative transition.
+
+### ReopenAssessment / ReopenRecord
+
+`ReopenAssessment` is the deterministic or human disposition over an
+investigation: preserve closure, require reopen, require human review,
+insufficient evidence, or superseded. `ReopenRecord` is the append-only fact
+that an authorized reopen occurred. It advances `authority_epoch`, records
+which decisions/governance/obligations/authorizations/commitments became
+historical, and never deletes or rewrites an old Effect, Outcome, or
+Commitment.
+
+```text
+Investigation != Authority
+Hypothesis != Fact
+Recommendation != Decision
+ReframingProposal != Reframe
+ReopenRecommendation != ReopenAuthority
+Reopen != DeleteHistory
+New interpretation != new authoritative evidence
+```
+
+## 13. Non-negotiable distinctions
 
 ```text
 Source authenticity != content truth
@@ -356,11 +427,16 @@ CandidateCommitment != CommitmentRecord
 DeliveryConfirmed != HumanRead
 OUTCOME_UNKNOWN != retry permission
 Exception != permission to improvise
+Investigation != authority
+Hypothesis != fact
+ReframingProposal != reframe
+ReopenAssessment != ReopenRecord
+Reopen != deletion
 ```
 
 If a future feature cannot be described without collapsing one of these distinctions, the feature is not yet qualified to enter the model.
 
-## 13. Field ownership rule
+## 14. Field ownership rule
 
 For every persisted decision-relevant field, the system must make it possible to answer:
 
@@ -376,7 +452,7 @@ What event can invalidate that use?
 
 AI-derived values remain interpretations or candidates until a separate admission and fact-authority path establishes how they may enter the formal model.
 
-## 14. Compatibility identifiers
+## 15. Compatibility identifiers
 
 Some migrations, staging directories, tests, workflow names, policy identifiers, and API/wire values contain historical milestone labels. They remain stable when changing them would break replay, persisted identity, acceptance evidence, or external callers.
 

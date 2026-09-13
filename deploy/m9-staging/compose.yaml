@@ -3,7 +3,7 @@ name: administrative-m9-staging
 x-admin-common: &admin-common
   build:
     context: ../..
-  image: administrative-orchestrator:m9-staging
+  image: ${ADMIN_IMAGE:-administrative-orchestrator:m9-staging}
   restart: unless-stopped
   environment: &admin-environment
     ADMIN_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-administrative_m9}:${POSTGRES_PASSWORD:-m9-admin-postgres-password}@admin-postgres:5432/${POSTGRES_DB:-administrative_m9}
@@ -63,6 +63,19 @@ x-admin-common: &admin-common
     ADMIN_COMMUNICATION_VERIFIER_APP_ID: ${ADMIN_COMMUNICATION_VERIFIER_APP_ID:-}
     ADMIN_COMMUNICATION_VERIFIER_APP_SECRET_ENV: ${ADMIN_COMMUNICATION_VERIFIER_APP_SECRET_ENV:-ADMIN_COMMUNICATION_VERIFIER_APP_SECRET}
     ADMIN_COMMUNICATION_VERIFIER_APP_SECRET: ${ADMIN_COMMUNICATION_VERIFIER_APP_SECRET:-}
+    ADMIN_INVESTIGATION_CLIENT_URL: ${ADMIN_INVESTIGATION_CLIENT_URL:-}
+    ADMIN_INVESTIGATION_CLIENT_TIMEOUT_SECONDS: ${ADMIN_INVESTIGATION_CLIENT_TIMEOUT_SECONDS:-10}
+    ADMIN_INVESTIGATION_CLIENT_API_KEY: ${ADMIN_INVESTIGATION_CLIENT_API_KEY:-}
+    ADMIN_INVESTIGATION_CLIENT_API_KEY_FILE: ${ADMIN_INVESTIGATION_CLIENT_API_KEY_FILE:-}
+    ADMIN_INVESTIGATION_MODEL_URL: ${ADMIN_INVESTIGATION_MODEL_URL:-}
+    ADMIN_INVESTIGATION_MODEL_API_KEY: ${ADMIN_INVESTIGATION_MODEL_API_KEY:-}
+    ADMIN_INVESTIGATION_MODEL_API_KEY_FILE: ${ADMIN_INVESTIGATION_MODEL_API_KEY_FILE:-}
+    ADMIN_INVESTIGATION_MODEL_PROTOCOL: ${ADMIN_INVESTIGATION_MODEL_PROTOCOL:-openai-responses}
+    ADMIN_INVESTIGATION_MODEL_NAME: ${ADMIN_INVESTIGATION_MODEL_NAME:-opencode-go/deepseek-flash}
+    ADMIN_INVESTIGATION_MODEL_MAX_TOKENS: ${ADMIN_INVESTIGATION_MODEL_MAX_TOKENS:-2000}
+    ADMIN_INVESTIGATION_MODEL_PROVIDER: ${ADMIN_INVESTIGATION_MODEL_PROVIDER:-host-litellm}
+    ADMIN_INVESTIGATION_MODEL_VERSION: ${ADMIN_INVESTIGATION_MODEL_VERSION:-configured-staging}
+    ADMIN_INVESTIGATION_MODEL_PROMPT_REF: ${ADMIN_INVESTIGATION_MODEL_PROMPT_REF:-adaptive-investigation-v1}
     ADMIN_FEISHU_ARTIFACT_ROOT: /var/lib/administrative/intake-artifacts
   depends_on:
     migrate:
@@ -96,7 +109,7 @@ services:
   migrate:
     build:
       context: ../..
-    image: administrative-orchestrator:m9-staging
+    image: ${ADMIN_IMAGE:-administrative-orchestrator:m9-staging}
     restart: "no"
     command: ["alembic", "upgrade", "head"]
     environment:
@@ -110,14 +123,14 @@ services:
     profiles: ["bootstrap"]
     build:
       context: ../..
-    image: administrative-orchestrator:m9-staging
+    image: ${ADMIN_IMAGE:-administrative-orchestrator:m9-staging}
     restart: "no"
     command: ["python", "-m", "administrative_orchestrator.bootstrap_foundation"]
     environment:
       ADMIN_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-administrative_m9}:${POSTGRES_PASSWORD:-m9-admin-postgres-password}@admin-postgres:5432/${POSTGRES_DB:-administrative_m9}
       ADMIN_AUTO_CREATE_SCHEMA: "false"
       ADMIN_BOOTSTRAP_AUTHORITY_JSON: >-
-        {"principals":[{"principal_id":"person:m9-reviewer","display_name":"M9 staging reviewer"},{"principal_id":"person:m9-subject","display_name":"M9 transaction subject"},{"principal_id":"person:m9-finance-approver","display_name":"M9 finance approver"}],"identity_bindings":[{"provider":"http://127.0.0.1:18203/realms/m9","external_subject":"m9-reviewer","principal_id":"person:m9-reviewer"},{"provider":"http://127.0.0.1:18203/realms/m9","external_subject":"m9-subject","principal_id":"person:m9-subject"},{"provider":"http://127.0.0.1:18203/realms/m9","external_subject":"m9-finance-approver","principal_id":"person:m9-finance-approver"}],"role_assignments":[{"principal_id":"person:m9-reviewer","role":"administrative_admin","organization_scope":"*"},{"principal_id":"person:m9-reviewer","role":"procurement_approver","organization_scope":"*"},{"principal_id":"person:m9-reviewer","role":"finance_approver","organization_scope":"*"},{"principal_id":"person:m9-finance-approver","role":"finance_approver","organization_scope":"*"}]}
+        {"principals":[{"principal_id":"person:m9-reviewer","display_name":"M9 staging reviewer"},{"principal_id":"person:m9-subject","display_name":"M9 transaction subject"},{"principal_id":"person:m9-finance-approver","display_name":"M9 finance approver"}],"identity_bindings":[{"provider":"${ADMIN_OIDC_ISSUER:-http://127.0.0.1:18203/realms/m9}","external_subject":"m9-reviewer","principal_id":"person:m9-reviewer"},{"provider":"${ADMIN_OIDC_ISSUER:-http://127.0.0.1:18203/realms/m9}","external_subject":"m9-subject","principal_id":"person:m9-subject"},{"provider":"${ADMIN_OIDC_ISSUER:-http://127.0.0.1:18203/realms/m9}","external_subject":"m9-finance-approver","principal_id":"person:m9-finance-approver"}],"role_assignments":[{"principal_id":"person:m9-reviewer","role":"administrative_admin","organization_scope":"*"},{"principal_id":"person:m9-reviewer","role":"procurement_approver","organization_scope":"*"},{"principal_id":"person:m9-reviewer","role":"finance_approver","organization_scope":"*"},{"principal_id":"person:m9-finance-approver","role":"finance_approver","organization_scope":"*"}]}
     depends_on:
       migrate:
         condition: service_completed_successfully

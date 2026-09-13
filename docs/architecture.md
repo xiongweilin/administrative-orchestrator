@@ -301,6 +301,41 @@ compensation != hidden rollback
 
 Correction/compensation is new governed action with fresh authority and evidence.
 
+An `OUTCOME_UNKNOWN` investigation trigger is accepted only after the
+Administrative boundary verifies a matching persisted Kernel execution
+projection and a terminal Kernel reconciliation resolution. An arbitrary
+caller-supplied reference or model opinion cannot substitute for that Kernel
+evidence.
+
+## 9.1 Adaptive investigation and governed reframing
+
+Administrative has a bounded investigation/reopen vocabulary above the
+existing authority chain. It is not a new ontology or execution engine:
+
+```text
+case anomaly / closure insufficiency
+    -> InvestigationTrigger / InvestigationRequest
+    -> bounded advisory client
+    -> InvestigationProposal / evidence request / ReframingProposal
+    -> Administrative ReopenAssessment
+    -> authorized ReopenRecord, or preserve closure
+    -> one existing authority_epoch advances on reopen
+    -> fresh governance and closure
+```
+
+Administrative owns the durable investigation records, proposal qualification,
+reopen authority, historical invalidation references, and closure semantics.
+The advisory client and `meta-controller` own only bounded epistemic advice.
+Agent Kernel remains the first owner of execution-unknown reconciliation and
+the only owner of Work, runtime authorization, provider execution, and the
+physical RealityBoundary.
+
+Investigation output cannot mint facts, decisions, approvals,
+ExecutionAuthorization, Work, or effects. Reframing never mutates current
+case truth by itself. Reopen advances the existing `authority_epoch`, fences
+stale authorization, and preserves historical Effects, Outcomes, Obligations,
+Commitments, and responsibility lineage.
+
 ## 10. Process and repository boundaries
 
 The repository is a product monorepo. API, Operations API, worker, DBOS workflows, product-specific integrations, migrations, Operations Console, deployment assets, DR, and product documentation share one Administrative semantic/versioning lifecycle.
@@ -332,6 +367,11 @@ Case completion != responsibility discharge
 Speaker label != Principal
 Suggestion != commitment
 TransportAccepted != DeliveryConfirmed != HumanRead
+Investigation != Authority
+Hypothesis != Fact
+ReframingProposal != Reframe
+ReopenAssessment != ReopenRecord
+Reopen != DeleteHistory
 ```
 
 These invariants are the architecture's stable spine. Provider brands, staging directories, migration labels, acceptance tags, and milestone-named compatibility identifiers may change or remain historical without changing this ownership model.

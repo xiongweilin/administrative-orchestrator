@@ -73,7 +73,24 @@ from .intake.models import (
 from .intake.repository import AssessmentConflict, IntakeRepository
 from .integrations.kernel.bridge import KernelExecutionBridge
 from .integrations.kernel.client import KernelResponsibilityDischargeError
+from .integrations.kernel.recovery import HttpKernelRecoveryClient
 from .integrations.kernel.repository import KernelBridgeRepository
+from .investigation_client import InvestigationClientError, build_investigation_client
+from .investigation_models import (
+    InvestigationConstraints,
+    InvestigationProposal,
+    InvestigationTriggerType,
+    ReopenAssessmentDisposition,
+    ReopenAssessmentKind,
+)
+from .investigation_reconciliation import LocalKernelReconciliationVerifier
+from .investigation_repository import (
+    InvestigationBudgetExceeded,
+    InvestigationConflict,
+    InvestigationNotFound,
+    InvestigationRepository,
+)
+from .investigation_service import InvestigationService
 from .messaging import (
     OutboxEventNotFailed,
     OutboxEventNotFound,
@@ -134,6 +151,20 @@ _commitment_service = MeetingCommitmentService(
     uow=_uow,
     policies=_policies,
     settings=_settings,
+)
+_investigations = InvestigationRepository(_store)
+_kernel_reconciliation_verifier = LocalKernelReconciliationVerifier(
+    repository=KernelBridgeRepository(_store),
+    recovery_client=HttpKernelRecoveryClient(
+        _settings.kernel_base_url,
+        timeout_seconds=_settings.kernel_contract_timeout_seconds,
+    ),
+)
+_investigation_service = InvestigationService(
+    _store,
+    repository=_investigations,
+    client=build_investigation_client(_settings),
+    reconciliation_verifier=_kernel_reconciliation_verifier,
 )
 _CONVERSATION_SCHEMA = (ConversationRow, ConversationMessageRow)
 if _settings.auto_create_schema:
@@ -276,6 +307,55 @@ class CommitmentCandidateQueueItem(BaseModel):
     commitment: CommitmentRecord | None = None
 
 
+class InvestigationRequestBody(BaseModel):
+    trigger: InvestigationTriggerType
+    reason: str = Field(min_length=1, max_length=2000)
+    requested_question: str = Field(min_length=1, max_length=4000)
+    evidence_refs: tuple[str, ...] = ()
+    allowed_evidence_refs: tuple[str, ...] = ()
+    constraints: InvestigationConstraints = Field(default_factory=InvestigationConstraints)
+    source_type: str = Field(default="administrative", min_length=1, max_length=128)
+    reconciliation_ref: str | None = Field(default=None, max_length=512)
+    idempotency_key: str = Field(min_length=1, max_length=512)
+
+
+class InvestigationEvidenceRequestBody(BaseModel):
+    source_kind: str = Field(min_length=1, max_length=128)
+    requested_question: str = Field(min_length=1, max_length=4000)
+    allowed_evidence_refs: tuple[str, ...] = ()
+    idempotency_key: str = Field(min_length=1, max_length=512)
+
+
+class InvestigationEvidenceBody(BaseModel):
+    evidence_request_id: UUID | None = None
+    evidence_ref: str = Field(min_length=1, max_length=1000)
+    source_kind: str = Field(min_length=1, max_length=128)
+    source: str = Field(min_length=1, max_length=512)
+    owner: str = Field(min_length=1, max_length=255)
+    source_ref: str | None = Field(default=None, max_length=1000)
+    source_version: str | None = Field(default=None, max_length=256)
+    digest: str | None = Field(default=None, max_length=128)
+    idempotency_key: str = Field(min_length=1, max_length=512)
+
+
+class InvestigationProposalBody(BaseModel):
+    proposal: InvestigationProposal
+
+
+class ReopenAssessmentBody(BaseModel):
+    investigation_id: UUID
+    disposition: ReopenAssessmentDisposition
+    reason: str = Field(min_length=1, max_length=4000)
+    evidence_refs: tuple[str, ...] = ()
+    proposal_ref: UUID | None = None
+    idempotency_key: str = Field(min_length=1, max_length=512)
+
+
+class ReopenCaseBody(BaseModel):
+    assessment_id: UUID
+    idempotency_key: str = Field(min_length=1, max_length=512)
+
+
 def _actor(request: Request) -> AuthenticatedPrincipal:
     return _authenticator.authenticate(request)
 
@@ -405,6 +485,16 @@ def case_detail(case_id: UUID, request: Request) -> dict:
         # case inspection compatible with an older test or rollback database.
         commitment = None
         communications = []
+    investigations = []
+    reopen_history = []
+    try:
+        investigations = _investigation_service.repository.list_requests(case.case_id)
+        reopen_history = _investigation_service.repository.list_reopen_records(case.case_id)
+    except OperationalError:
+        # The adaptive investigation tables are introduced by the next
+        # migration; older read-only databases remain inspectable.
+        investigations = []
+        reopen_history = []
     return {
         "case": case.model_dump(mode="json"),
         "commitment": commitment.model_dump(mode="json") if commitment is not None else None,
@@ -452,8 +542,279 @@ def case_detail(case_id: UUID, request: Request) -> dict:
             completion,
             projections,
         ),
+        "investigations": [
+            item.model_dump(mode="json") for item in investigations
+        ],
+        "reopen_history": [
+            item.model_dump(mode="json") for item in reopen_history
+        ],
         "audit": audit,
     }
+
+
+@app.post("/v1/operations/cases/{case_id}/investigations")
+def request_case_investigation(
+    case_id: UUID,
+    payload: InvestigationRequestBody,
+    request: Request,
+) -> dict[str, Any]:
+    actor = _actor(request)
+    case = _store.get_case(case_id)
+    if case is None:
+        raise HTTPException(status_code=404, detail="case not found")
+    _require(actor, AdministrativePermission.INVESTIGATION_REQUEST, case=case)
+    try:
+        investigation = _investigation_service.request_investigation(
+            case_id,
+            trigger_type=payload.trigger,
+            reason=payload.reason,
+            requested_question=payload.requested_question,
+            created_by=actor.principal_id,
+            idempotency_key=payload.idempotency_key,
+            evidence_refs=payload.evidence_refs,
+            allowed_evidence_refs=payload.allowed_evidence_refs,
+            constraints=payload.constraints,
+            source_type=payload.source_type,
+            reconciliation_ref=payload.reconciliation_ref,
+        )
+    except (InvestigationConflict, InvestigationBudgetExceeded, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"investigation": investigation.model_dump(mode="json")}
+
+
+@app.get("/v1/operations/cases/{case_id}/investigations")
+def list_case_investigations(case_id: UUID, request: Request) -> list[dict[str, Any]]:
+    actor = _actor(request)
+    case = _store.get_case(case_id)
+    if case is None:
+        raise HTTPException(status_code=404, detail="case not found")
+    _require(actor, AdministrativePermission.INVESTIGATION_READ, case=case)
+    return [
+        item.model_dump(mode="json")
+        for item in _investigation_service.repository.list_requests(case_id)
+    ]
+
+
+@app.get("/v1/operations/investigations/{investigation_id}")
+def investigation_detail(investigation_id: UUID, request: Request) -> dict[str, Any]:
+    actor = _actor(request)
+    investigation = _investigation_service.repository.get_request(investigation_id)
+    if investigation is None:
+        raise HTTPException(status_code=404, detail="investigation not found")
+    case = _store.get_case(investigation.case_id)
+    if case is None:
+        raise HTTPException(status_code=404, detail="case not found")
+    _require(actor, AdministrativePermission.INVESTIGATION_READ, case=case)
+    return _investigation_service.detail(investigation_id)
+
+
+@app.post("/v1/operations/investigations/{investigation_id}/run")
+def run_investigation(investigation_id: UUID, request: Request) -> dict[str, Any]:
+    actor = _actor(request)
+    investigation = _investigation_service.repository.get_request(investigation_id)
+    if investigation is None:
+        raise HTTPException(status_code=404, detail="investigation not found")
+    case = _store.get_case(investigation.case_id)
+    if case is None:
+        raise HTTPException(status_code=404, detail="case not found")
+    _require(actor, AdministrativePermission.INVESTIGATION_REVIEW, case=case)
+    try:
+        proposal = _investigation_service.run(investigation_id)
+    except InvestigationNotFound as exc:
+        raise HTTPException(status_code=404, detail="investigation not found") from exc
+    except InvestigationClientError as exc:
+        raise HTTPException(status_code=503, detail="investigation advisory unavailable") from exc
+    except (InvestigationConflict, InvestigationBudgetExceeded, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"proposal": proposal.model_dump(mode="json")}
+
+
+@app.post("/v1/operations/investigations/{investigation_id}/proposals")
+def record_investigation_proposal(
+    investigation_id: UUID,
+    payload: InvestigationProposalBody,
+    request: Request,
+) -> dict[str, Any]:
+    actor = _actor(request)
+    investigation = _investigation_service.repository.get_request(investigation_id)
+    if investigation is None:
+        raise HTTPException(status_code=404, detail="investigation not found")
+    case = _store.get_case(investigation.case_id)
+    if case is None:
+        raise HTTPException(status_code=404, detail="case not found")
+    _require(actor, AdministrativePermission.INVESTIGATION_REVIEW, case=case)
+    if payload.proposal.investigation_id != investigation_id:
+        raise HTTPException(status_code=409, detail="proposal investigation identity mismatch")
+    try:
+        proposal = _investigation_service.record_proposal(payload.proposal)
+    except (InvestigationConflict, InvestigationBudgetExceeded, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"proposal": proposal.model_dump(mode="json")}
+
+
+@app.post("/v1/operations/investigations/{investigation_id}/evidence-requests")
+def request_investigation_evidence(
+    investigation_id: UUID,
+    payload: InvestigationEvidenceRequestBody,
+    request: Request,
+) -> dict[str, Any]:
+    actor = _actor(request)
+    investigation = _investigation_service.repository.get_request(investigation_id)
+    if investigation is None:
+        raise HTTPException(status_code=404, detail="investigation not found")
+    case = _store.get_case(investigation.case_id)
+    if case is None:
+        raise HTTPException(status_code=404, detail="case not found")
+    _require(actor, AdministrativePermission.INVESTIGATION_REVIEW, case=case)
+    try:
+        item = _investigation_service.request_evidence(
+            investigation_id,
+            source_kind=payload.source_kind,
+            requested_question=payload.requested_question,
+            requested_by=actor.principal_id,
+            idempotency_key=payload.idempotency_key,
+            allowed_evidence_refs=payload.allowed_evidence_refs,
+        )
+    except (InvestigationConflict, InvestigationBudgetExceeded, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"evidence_request": item.model_dump(mode="json")}
+
+
+@app.post("/v1/operations/investigations/{investigation_id}/evidence")
+def add_investigation_evidence(
+    investigation_id: UUID,
+    payload: InvestigationEvidenceBody,
+    request: Request,
+) -> dict[str, Any]:
+    actor = _actor(request)
+    investigation = _investigation_service.repository.get_request(investigation_id)
+    if investigation is None:
+        raise HTTPException(status_code=404, detail="investigation not found")
+    case = _store.get_case(investigation.case_id)
+    if case is None:
+        raise HTTPException(status_code=404, detail="case not found")
+    _require(actor, AdministrativePermission.INVESTIGATION_REVIEW, case=case)
+    try:
+        item = _investigation_service.add_evidence(
+            investigation_id,
+            evidence_request_id=payload.evidence_request_id,
+            evidence_ref=payload.evidence_ref,
+            source_kind=payload.source_kind,
+            source=payload.source,
+            owner=payload.owner,
+            source_ref=payload.source_ref,
+            source_version=payload.source_version,
+            digest=payload.digest,
+            added_by=actor.principal_id,
+            idempotency_key=payload.idempotency_key,
+        )
+    except (InvestigationConflict, InvestigationBudgetExceeded, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"evidence": item.model_dump(mode="json")}
+
+
+@app.post("/v1/operations/investigations/{investigation_id}/human-assessment")
+def assess_investigation_reopen(
+    investigation_id: UUID,
+    payload: ReopenAssessmentBody,
+    request: Request,
+) -> dict[str, Any]:
+    actor = _actor(request)
+    investigation = _investigation_service.repository.get_request(investigation_id)
+    if investigation is None:
+        raise HTTPException(status_code=404, detail="investigation not found")
+    case = _store.get_case(investigation.case_id)
+    if case is None:
+        raise HTTPException(status_code=404, detail="case not found")
+    _require(actor, AdministrativePermission.INVESTIGATION_REVIEW, case=case)
+    if payload.investigation_id != investigation_id:
+        raise HTTPException(status_code=409, detail="assessment investigation identity mismatch")
+    try:
+        assessment = _investigation_service.assess_reopen(
+            investigation_id,
+            disposition=payload.disposition,
+            reason=payload.reason,
+            evidence_refs=payload.evidence_refs,
+            proposal_ref=payload.proposal_ref,
+            assessment_kind=ReopenAssessmentKind.HUMAN,
+            assessed_by=actor.principal_id,
+            idempotency_key=payload.idempotency_key,
+        )
+    except (InvestigationConflict, InvestigationBudgetExceeded, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"assessment": assessment.model_dump(mode="json")}
+
+
+@app.post("/v1/operations/cases/{case_id}/reopen-assessments")
+def assess_case_reopen(
+    case_id: UUID,
+    payload: ReopenAssessmentBody,
+    request: Request,
+) -> dict[str, Any]:
+    actor = _actor(request)
+    case = _store.get_case(case_id)
+    if case is None:
+        raise HTTPException(status_code=404, detail="case not found")
+    _require(actor, AdministrativePermission.INVESTIGATION_REVIEW, case=case)
+    investigation = _investigation_service.repository.get_request(payload.investigation_id)
+    if investigation is None or investigation.case_id != case_id:
+        raise HTTPException(status_code=404, detail="investigation not found for case")
+    try:
+        assessment = _investigation_service.assess_reopen(
+            payload.investigation_id,
+            disposition=payload.disposition,
+            reason=payload.reason,
+            evidence_refs=payload.evidence_refs,
+            proposal_ref=payload.proposal_ref,
+            assessment_kind=ReopenAssessmentKind.HUMAN,
+            assessed_by=actor.principal_id,
+            idempotency_key=payload.idempotency_key,
+        )
+    except (InvestigationConflict, InvestigationBudgetExceeded, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"assessment": assessment.model_dump(mode="json")}
+
+
+@app.post("/v1/operations/cases/{case_id}/reopen")
+def authorize_case_reopen(
+    case_id: UUID,
+    payload: ReopenCaseBody,
+    request: Request,
+) -> dict[str, Any]:
+    actor = _actor(request)
+    case = _store.get_case(case_id)
+    if case is None:
+        raise HTTPException(status_code=404, detail="case not found")
+    _require(actor, AdministrativePermission.REOPEN_AUTHORIZE, case=case)
+    try:
+        record, updated, created = _investigation_service.authorize_reopen(
+            case_id,
+            assessment_id=payload.assessment_id,
+            authorized_by=actor.principal_id,
+            idempotency_key=payload.idempotency_key,
+        )
+    except InvestigationNotFound as exc:
+        raise HTTPException(status_code=404, detail="reopen assessment not found") from exc
+    except (InvestigationConflict, ConcurrencyConflict, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {
+        "reopen": record.model_dump(mode="json"),
+        "case": updated.model_dump(mode="json"),
+        "created": created,
+    }
+
+
+@app.get("/v1/operations/cases/{case_id}/reopen-history")
+def case_reopen_history(case_id: UUID, request: Request) -> list[dict[str, Any]]:
+    actor = _actor(request)
+    case = _store.get_case(case_id)
+    if case is None:
+        raise HTTPException(status_code=404, detail="case not found")
+    _require(actor, AdministrativePermission.INVESTIGATION_READ, case=case)
+    return [
+        item.model_dump(mode="json")
+        for item in _investigation_service.repository.list_reopen_records(case_id)
+    ]
 
 
 @app.post(
