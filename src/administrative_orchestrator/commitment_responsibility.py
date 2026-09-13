@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 from uuid import uuid5
 
-from .commitment_common import CommitmentIntakeError, M9_NAMESPACE, ResponsibilityRefs
+from .commitment_common import M9_NAMESPACE, CommitmentIntakeError, ResponsibilityRefs
 from .commitment_models import CommitmentRecord
 from .config import Settings
 from .domain import AdministrativeCase
