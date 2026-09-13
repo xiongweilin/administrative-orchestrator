@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from fastapi import FastAPI, HTTPException
 
+from .access_policy import AccessDenied, AdministrativePermission
 from .admission import IntakeAssessmentService, IntakePromotionService
 from .integrations.kernel.bridge import KernelExecutionBridge
 from .operations import projection as _projection
@@ -179,17 +180,11 @@ def _require(actor, permission, *, case=None) -> None:
             case=case,
             organization_scope="*" if case is None else None,
         )
-    except Exception as exc:
-        from .access_policy import AccessDenied
-
-        if isinstance(exc, AccessDenied):
-            raise HTTPException(status_code=403, detail=str(exc)) from exc
-        raise
+    except AccessDenied as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
 
 
 def _require_intake_review(actor) -> None:
-    from .access_policy import AdministrativePermission
-
     _require(actor, AdministrativePermission.INTAKE_REVIEW)
 
 
