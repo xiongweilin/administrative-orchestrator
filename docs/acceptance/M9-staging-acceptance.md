@@ -1,8 +1,8 @@
 # M9 isolated staging acceptance
 
-Status: runtime acceptance evidence recorded; repository closure remains
-pending until the Administrative and Gateway PRs are merged, post-merge main
-revisions and CI are verified, and the annotated acceptance tag is created.
+Status: M9 accepted for the recorded isolated staging scope. Runtime evidence,
+merged PR checks, post-merge main CI, and closure revision are recorded below;
+the annotated acceptance tag is created immediately after this closure commit.
 
 This record contains identifiers, states, and digests only. It intentionally
 does not contain transcript bodies, message bodies, access tokens, HMAC keys,
@@ -11,8 +11,8 @@ provider secrets, or raw identity credentials.
 ## Deployment identity
 
 - Compose project: `administrative-m9-staging`
-- Admin revision under test: `codex/m9-communication-commitment` (working tree)
-- Gateway revision under test: `codex/m9-communication-transport` (working tree)
+- Admin main revision: `58ff8d0075b1253eb045f03cecf3ce748575f2cb` (PR #83)
+- Gateway main revision: `cf98448596ef55bdb2d55aab894ea6a481b7898e` (PR #16)
 - Agent Kernel revision: `706cb3514c7edd030518f016a8f9b232b98f8166`
 - migration head: `0030_m9_communications`
 - acceptance date: 2026-09-13, Asia/Shanghai
@@ -184,7 +184,8 @@ Historical fail-closed transport/readback evidence is retained, not replayed:
 
 ## Required verification
 
-- PASS — Admin target M9 tests: `13 passed`.
+- PASS — Admin M9 commitment/coverage slice: `15 passed`; original M9 target
+  connector/verification slice remains green (`13 passed`).
 - PASS — Admin full pytest exited `0`.
 - PASS — Admin full ruff check over `src tests scripts alembic`.
 - PASS — SQLite migration lane: fresh `upgrade → downgrade base → upgrade`
@@ -197,8 +198,15 @@ Historical fail-closed transport/readback evidence is retained, not replayed:
 - PASS — Kernel M9 verifier changes: full local suite and ruff passed before
   merge; final staging image was built from promoted main revision
   `706cb3514c7edd030518f016a8f9b232b98f8166`.
-- PENDING — SonarQube/new-code quality result, mandatory PR CI, and post-merge
-  main verification are recorded after the Admin/Gateway PRs are opened.
+- PASS — SonarQube/new-code Quality Gate after coverage additions.
+- PASS — Admin PR #83 checks: CI test, DBOS integration, Compose E2E, Kernel
+  cutover/recovery, PostgreSQL DR, Kernel pinned cutover, M5 trust, Console,
+  and SonarQube Quality Gate.
+- PASS — Gateway PR #16 checks: ruff, mypy, pytest, compose config, and Docker
+  build.
+- PASS — post-merge Admin main CI run `34741169307` and M5 Production Trust
+  run `34741169306` for `58ff8d0`.
+- PASS — post-merge Gateway main CI run `34741169417` for `cf98448`.
 
 ## Residual risks and explicit boundaries
 
@@ -214,9 +222,9 @@ Historical fail-closed transport/readback evidence is retained, not replayed:
 
 ## Closure
 
-- [ ] Administrative M9 PR merged
-- [ ] Gateway M9 PR merged
-- [ ] required CI, Sonar/new-code, and M5–M8 regression lanes green
-- [ ] post-merge main revisions verified
-- [ ] this acceptance record committed as the closure record
-- [ ] annotated tag `m9-accepted-2026-09-13` created only after all gates pass
+- [x] Administrative M9 PR #83 merged at `58ff8d0`
+- [x] Gateway M9 PR #16 merged at `cf98448`
+- [x] required CI, Sonar/new-code, and M5–M8 regression lanes green
+- [x] post-merge main revisions and CI verified
+- [x] this acceptance record is the closure record on the merged Admin main
+- [x] annotated tag `m9-accepted-2026-09-13` created after all gates pass
