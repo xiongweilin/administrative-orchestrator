@@ -23,8 +23,8 @@ from .obligations import (
     AdministrativeObligation,
     ObligationDomainStateFulfillment,
     ObligationFulfillmentKind,
-    derive_offboarding_obligations,
 )
+from .offboarding_obligations import derive_offboarding_obligations
 from .onboarding_execution import OnboardingExecutionEngine
 from .policy_plane import PolicyRepository, compile_offboarding_policy
 from .service import (
