@@ -654,6 +654,15 @@ def test_operations_commitment_routes_cover_review_confirm_detail_and_attest(
         object(),
     )
     assert confirmed["commitment"]["case_id"] == str(case.case_id)
+    revised = operations_api.revise_commitment_due(
+        case.case_id,
+        operations_api.CommitmentDueRevisionBody(
+            due_at=BASE_TIME + timedelta(days=2),
+            basis="operator corrected timezone",
+        ),
+        object(),
+    )
+    assert revised["commitment"]["due_at"].startswith("2026-09-15T09:00:00")
     commitment_detail = operations_api.commitment_detail(case.case_id, object())
     assert commitment_detail["commitment"]["commitment_id"] == str(commitment.commitment_id)
     actor.principal_id = "person:committer"
@@ -663,3 +672,18 @@ def test_operations_commitment_routes_cover_review_confirm_detail_and_attest(
         object(),
     )
     assert fulfilled["commitment"]["state"] == "fulfilled"
+
+    cancel_store, cancel_service, cancel_case, _ = _prepared_communication_service(
+        tmp_path / "cancel",
+        external_effects_enabled=False,
+    )
+    monkeypatch.setattr(operations_api, "_store", cancel_store)
+    monkeypatch.setattr(operations_api, "_commitments", cancel_service.repository)
+    monkeypatch.setattr(operations_api, "_commitment_service", cancel_service)
+    actor.principal_id = "person:reviewer"
+    cancelled = operations_api.cancel_commitment(
+        cancel_case.case_id,
+        operations_api.CommitmentCancellationBody(basis="operator cancelled the meeting"),
+        object(),
+    )
+    assert cancelled["commitment"]["state"] == "cancelled"
