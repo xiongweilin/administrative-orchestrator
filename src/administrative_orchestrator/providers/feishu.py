@@ -16,6 +16,8 @@ import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from ..authority import AuthorityRepository
+from ..commitment_models import CandidateCommitment
+from ..commitment_service import MeetingCommitmentService
 from ..conversation import (
     ConversationMessage,
     ConversationMessageResult,
@@ -757,6 +759,7 @@ class FeishuProcessResult:
     candidate: CandidateAdministrativeRequest | None
     conversation: ConversationMessageResult | None
     document_attachments: tuple[DocumentAttachmentResult, ...] = ()
+    commitments: tuple[CandidateCommitment, ...] = ()
 
 
 class FeishuInboxPipeline:
@@ -779,6 +782,7 @@ class FeishuInboxPipeline:
         conversation_service: ConversationService | None = None,
         projection_service: CandidateProjectionService | None = None,
         document_processor: DocumentAttachmentProcessor | None = None,
+        commitment_service: MeetingCommitmentService | None = None,
     ) -> None:
         self.store = store
         self.repository = repository
@@ -797,6 +801,7 @@ class FeishuInboxPipeline:
             ContentAwareDocumentParser(),
             repository,
         )
+        self.commitment_service = commitment_service
 
     def process_event(self, payload: FeishuProviderEvent | Mapping[str, Any]) -> FeishuProcessResult:
         event = (
@@ -865,6 +870,34 @@ class FeishuInboxPipeline:
                 candidate=None,
                 conversation=None,
                 document_attachments=document_attachments,
+                commitments=(),
+            )
+
+        if self.interpretation_profile.profile_ref == "meeting.commitment.v1":
+            if self.commitment_service is None:
+                raise FeishuProcessingError(
+                    "meeting commitment profile requires the M9 commitment service"
+                )
+            commitments = self.commitment_service.create_candidates_from_interpretation(
+                interpretation,
+                source_artifact_ref=artifact.artifact_id,
+                evidence_spans=evidence_spans,
+            )
+            return FeishuProcessResult(
+                receipt=self.repository.get_intake_receipt(
+                    source_system=FEISHU_SOURCE_SYSTEM,
+                    tenant_ref=event.tenant_ref,
+                    source_event_id=event.event_id,
+                )
+                or receipt,
+                artifact=artifact,
+                evidence_span=span,
+                identity=identity,
+                interpretation=interpretation,
+                candidate=None,
+                conversation=None,
+                document_attachments=document_attachments,
+                commitments=commitments,
             )
 
         projection = self.projection_service.project(
@@ -937,6 +970,7 @@ class FeishuInboxPipeline:
             candidate=candidate,
             conversation=conversation,
             document_attachments=document_attachments,
+            commitments=(),
         )
 
     def _persist_attachments(

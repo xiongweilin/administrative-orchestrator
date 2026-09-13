@@ -425,6 +425,38 @@ def default_expense_policy_version() -> PolicyVersionRecord:
     )
 
 
+def default_commitment_policy_version() -> PolicyVersionRecord:
+    """The closed M9 policy for admitting one meeting commitment.
+
+    Meeting interpretation is candidate-only.  This policy is evaluated only
+    after an authorized human has qualified the committer and due time.
+    """
+
+    baseline = datetime(2026, 1, 1, tzinfo=UTC)
+    return PolicyVersionRecord(
+        policy_id="meeting-commitment",
+        version="m9-v1",
+        owner="administrative-orchestrator",
+        status=PolicyVersionStatus.ACTIVE,
+        effective_from=baseline,
+        definition={
+            "required_decision_roles": ["administrative_operator"],
+            "require_distinct_decision_principals": False,
+            "allowed_effects": [
+                {
+                    "target_system": "communication",
+                    "operation": "message.send",
+                    "authority_class": "normal",
+                }
+            ],
+            "confirmation": "internal_feishu_one_to_one_fixed_template",
+            "reminder": "one_bounded_internal_feishu_one_to_one",
+            "fulfillment": ["authorized_attestation", "evidence_verified"],
+        },
+        created_at=baseline,
+    )
+
+
 def compile_offboarding_policy(record: PolicyVersionRecord):
     from .policy import OffboardingPolicy
 

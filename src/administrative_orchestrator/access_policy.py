@@ -10,6 +10,7 @@ class AdministrativePermission(StrEnum):
     CASE_READ = "case.read"
     FACTS_READ = "case.facts.read"
     FACTS_ATTEST = "case.facts.attest"
+    COMMITMENT_ATTEST = "commitment.fulfillment.attest"
     FACTS_REFRESH_AUTHORITATIVE = "case.facts.refresh_authoritative"
     DECISION_SUBMIT = "decision.submit"
     CASE_REASSESS = "case.reassess"
@@ -112,6 +113,10 @@ class AdministrativeAccessPolicy:
             AdministrativePermission.FACTS_REFRESH_AUTHORITATIVE,
         }:
             return bool(roles.intersection(_FACT_ATTEST_ROLES))
+        if permission == AdministrativePermission.COMMITMENT_ATTEST:
+            return bool(case and case.requester_principal_id == principal_id) or bool(
+                roles.intersection(_FACT_ATTEST_ROLES)
+            )
         if permission == AdministrativePermission.DECISION_SUBMIT:
             return bool(roles)
         if permission == AdministrativePermission.CASE_REASSESS:
