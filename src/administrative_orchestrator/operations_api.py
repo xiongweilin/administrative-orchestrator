@@ -247,17 +247,24 @@ def readyz() -> dict[str, str]:
     }
 
 
-app.include_router(build_case_router(_http_runtime))
-app.include_router(build_investigation_router(_http_runtime))
-app.include_router(build_transaction_router(_http_runtime))
-app.include_router(build_intake_router(_http_runtime))
-app.include_router(build_commitment_router(_http_runtime))
-app.include_router(build_administration_router(_http_runtime))
+_case_router = build_case_router(_http_runtime)
+_investigation_router = build_investigation_router(_http_runtime)
+_transaction_router = build_transaction_router(_http_runtime)
+_intake_router = build_intake_router(_http_runtime)
+_commitment_router = build_commitment_router(_http_runtime)
+_administration_router = build_administration_router(_http_runtime)
+
+app.include_router(_case_router)
+app.include_router(_investigation_router)
+app.include_router(_transaction_router)
+app.include_router(_intake_router)
+app.include_router(_commitment_router)
+app.include_router(_administration_router)
 
 
-def _endpoint(path: str, method: str):
+def _endpoint(router, path: str, method: str):
     method = method.upper()
-    for route in app.routes:
+    for route in router.routes:
         methods = getattr(route, "methods", None) or set()
         if getattr(route, "path", None) == path and method in methods:
             endpoint = getattr(route, "endpoint", None)
@@ -266,82 +273,126 @@ def _endpoint(path: str, method: str):
     raise RuntimeError(f"operations route {method} {path!r} is unavailable")
 
 
-# The old module exposed its route functions directly. Bind those names by the
-# stable HTTP contract rather than FastAPI's internal endpoint naming details.
-healthz = _endpoint("/healthz", "GET")
-case_queue = _endpoint("/v1/operations/cases", "GET")
-case_detail = _endpoint("/v1/operations/cases/{case_id}", "GET")
-request_case_investigation = _endpoint("/v1/operations/cases/{case_id}/investigations", "POST")
-list_case_investigations = _endpoint("/v1/operations/cases/{case_id}/investigations", "GET")
-investigation_detail = _endpoint("/v1/operations/investigations/{investigation_id}", "GET")
-run_investigation = _endpoint("/v1/operations/investigations/{investigation_id}/run", "POST")
+# The old module exposed its route functions directly. Bind those names from
+# the source APIRouters before FastAPI copies their route registrations.
+healthz = _endpoint(_case_router, "/healthz", "GET")
+case_queue = _endpoint(_case_router, "/v1/operations/cases", "GET")
+case_detail = _endpoint(_case_router, "/v1/operations/cases/{case_id}", "GET")
+request_case_investigation = _endpoint(
+    _investigation_router, "/v1/operations/cases/{case_id}/investigations", "POST"
+)
+list_case_investigations = _endpoint(
+    _investigation_router, "/v1/operations/cases/{case_id}/investigations", "GET"
+)
+investigation_detail = _endpoint(
+    _investigation_router, "/v1/operations/investigations/{investigation_id}", "GET"
+)
+run_investigation = _endpoint(
+    _investigation_router, "/v1/operations/investigations/{investigation_id}/run", "POST"
+)
 record_investigation_proposal = _endpoint(
-    "/v1/operations/investigations/{investigation_id}/proposals", "POST"
+    _investigation_router,
+    "/v1/operations/investigations/{investigation_id}/proposals",
+    "POST",
 )
 request_investigation_evidence = _endpoint(
-    "/v1/operations/investigations/{investigation_id}/evidence-requests", "POST"
+    _investigation_router,
+    "/v1/operations/investigations/{investigation_id}/evidence-requests",
+    "POST",
 )
 add_investigation_evidence = _endpoint(
-    "/v1/operations/investigations/{investigation_id}/evidence", "POST"
+    _investigation_router,
+    "/v1/operations/investigations/{investigation_id}/evidence",
+    "POST",
 )
 assess_investigation_reopen = _endpoint(
-    "/v1/operations/investigations/{investigation_id}/human-assessment", "POST"
+    _investigation_router,
+    "/v1/operations/investigations/{investigation_id}/human-assessment",
+    "POST",
 )
-assess_case_reopen = _endpoint("/v1/operations/cases/{case_id}/reopen-assessments", "POST")
-authorize_case_reopen = _endpoint("/v1/operations/cases/{case_id}/reopen", "POST")
-case_reopen_history = _endpoint("/v1/operations/cases/{case_id}/reopen-history", "GET")
+assess_case_reopen = _endpoint(
+    _investigation_router, "/v1/operations/cases/{case_id}/reopen-assessments", "POST"
+)
+authorize_case_reopen = _endpoint(
+    _investigation_router, "/v1/operations/cases/{case_id}/reopen", "POST"
+)
+case_reopen_history = _endpoint(
+    _investigation_router, "/v1/operations/cases/{case_id}/reopen-history", "GET"
+)
 append_qualification_assessment = _endpoint(
-    "/v1/operations/cases/{case_id}/qualification-assessments", "POST"
+    _transaction_router,
+    "/v1/operations/cases/{case_id}/qualification-assessments",
+    "POST",
 )
 apply_financial_document_revision = _endpoint(
-    "/v1/operations/cases/{case_id}/document-revision", "POST"
+    _transaction_router, "/v1/operations/cases/{case_id}/document-revision", "POST"
 )
-intake_candidate_queue = _endpoint("/v1/operations/intake/candidates", "GET")
+intake_candidate_queue = _endpoint(_intake_router, "/v1/operations/intake/candidates", "GET")
 intake_candidate_detail = _endpoint(
-    "/v1/operations/intake/candidates/{candidate_id}", "GET"
+    _intake_router, "/v1/operations/intake/candidates/{candidate_id}", "GET"
 )
 finalize_intake_assessment = _endpoint(
-    "/v1/operations/intake/candidates/{candidate_id}/assessments", "POST"
+    _intake_router,
+    "/v1/operations/intake/candidates/{candidate_id}/assessments",
+    "POST",
 )
 promote_intake_candidate = _endpoint(
-    "/v1/operations/intake/candidates/{candidate_id}/promote", "POST"
+    _intake_router, "/v1/operations/intake/candidates/{candidate_id}/promote", "POST"
 )
-commitment_candidate_queue = _endpoint("/v1/operations/commitments/candidates", "GET")
+commitment_candidate_queue = _endpoint(
+    _commitment_router, "/v1/operations/commitments/candidates", "GET"
+)
 commitment_candidate_detail = _endpoint(
-    "/v1/operations/commitments/candidates/{candidate_id}", "GET"
+    _commitment_router,
+    "/v1/operations/commitments/candidates/{candidate_id}",
+    "GET",
 )
 resolve_commitment_speaker = _endpoint(
-    "/v1/operations/commitments/candidates/{candidate_id}/resolve-speaker", "POST"
+    _commitment_router,
+    "/v1/operations/commitments/candidates/{candidate_id}/resolve-speaker",
+    "POST",
 )
 confirm_commitment_candidate = _endpoint(
-    "/v1/operations/commitments/candidates/{candidate_id}/confirm", "POST"
+    _commitment_router,
+    "/v1/operations/commitments/candidates/{candidate_id}/confirm",
+    "POST",
 )
-commitment_detail = _endpoint("/v1/operations/commitments/{case_id}", "GET")
+commitment_detail = _endpoint(
+    _commitment_router, "/v1/operations/commitments/{case_id}", "GET"
+)
 attest_commitment_fulfillment = _endpoint(
-    "/v1/operations/commitments/{case_id}/fulfillment", "POST"
+    _commitment_router, "/v1/operations/commitments/{case_id}/fulfillment", "POST"
 )
 revise_commitment_due = _endpoint(
-    "/v1/operations/commitments/{case_id}/due-revision", "POST"
+    _commitment_router, "/v1/operations/commitments/{case_id}/due-revision", "POST"
 )
-cancel_commitment = _endpoint("/v1/operations/commitments/{case_id}/cancel", "POST")
+cancel_commitment = _endpoint(
+    _commitment_router, "/v1/operations/commitments/{case_id}/cancel", "POST"
+)
 refresh_authoritative_facts = _endpoint(
-    "/v1/operations/cases/{case_id}/authoritative-facts/refresh", "POST"
+    _administration_router,
+    "/v1/operations/cases/{case_id}/authoritative-facts/refresh",
+    "POST",
 )
 replay_dead_letter = _endpoint(
-    "/v1/operations/outbox/dead-letter/{event_id}/replay", "POST"
+    _administration_router, "/v1/operations/outbox/dead-letter/{event_id}/replay", "POST"
 )
-bind_identity = _endpoint("/v1/operations/identities/bind", "POST")
-revoke_identity = _endpoint("/v1/operations/identities/{binding_id}/revoke", "POST")
+bind_identity = _endpoint(_administration_router, "/v1/operations/identities/bind", "POST")
+revoke_identity = _endpoint(
+    _administration_router, "/v1/operations/identities/{binding_id}/revoke", "POST"
+)
 deactivate_principal = _endpoint(
-    "/v1/operations/principals/{principal_id}/deactivate", "POST"
+    _administration_router, "/v1/operations/principals/{principal_id}/deactivate", "POST"
 )
 expire_role_assignment = _endpoint(
-    "/v1/operations/role-assignments/{assignment_id}/expire", "POST"
+    _administration_router,
+    "/v1/operations/role-assignments/{assignment_id}/expire",
+    "POST",
 )
 expire_delegation = _endpoint(
-    "/v1/operations/delegations/{delegation_id}/expire", "POST"
+    _administration_router, "/v1/operations/delegations/{delegation_id}/expire", "POST"
 )
-authority_events = _endpoint("/v1/operations/authority-events", "GET")
+authority_events = _endpoint(_administration_router, "/v1/operations/authority-events", "GET")
 
 
 __all__ = [
