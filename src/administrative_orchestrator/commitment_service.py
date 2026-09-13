@@ -11,9 +11,9 @@ from sqlalchemy.exc import IntegrityError
 from .authority import AuthorityRepository
 from .commitment_cancellation import CommitmentCancellationCoordinator
 from .commitment_common import (
-    CommitmentIntakeError,
     M9_NAMESPACE,
     REVIEW_ROLES,
+    CommitmentIntakeError,
     ResponsibilityProvisioner,
     ResponsibilityRefs,
 )
