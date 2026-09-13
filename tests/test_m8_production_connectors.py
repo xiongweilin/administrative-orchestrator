@@ -16,13 +16,16 @@ from administrative_orchestrator.integrations.production_effects import (
 from scripts.production_kernel_stack import ProductionEffectProvider
 
 
-def _connector() -> OdooFinancialEffectConnector:
+def _connector(
+    *, payload_field: str = "x_administrative_m8_payload_json"
+) -> OdooFinancialEffectConnector:
     return OdooFinancialEffectConnector(
         OdooEffectConnection(
             base_url="https://odoo.example.test",
             database="m8",
             username="erp-writer",
             credential=CredentialRef("odoo:erp-writer", "M8_ODOO_SECRET"),
+            transaction_payload_field=payload_field,
         )
     )
 
@@ -360,3 +363,24 @@ def test_m8_expense_writer_supplies_required_single_receipt_quantity() -> None:
         "expense_date": "2026-09-12",
         "amount": {"amount": "42.00", "currency": "USD"},
     }
+
+
+def test_financial_connector_uses_the_configured_payload_field() -> None:
+    connector = _connector(payload_field="x_administrative_m9_payload_json")
+
+    values = connector._create_values(
+        "vendor_bill.create_draft",
+        request_ref="case:vendor-bill:1",
+        subject_ref="transaction:1",
+        parameters={
+            "vendor_ref": "odoo:res.partner:11",
+            "invoice_number": "INV-1",
+            "invoice_date": "2026-09-12",
+        },
+    )
+
+    assert "x_administrative_m8_payload_json" not in values
+    assert (
+        json.loads(values["x_administrative_m9_payload_json"])["invoice_number"]
+        == "INV-1"
+    )

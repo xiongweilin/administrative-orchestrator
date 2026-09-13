@@ -443,6 +443,11 @@ def build() -> tuple[Runtime, BoundedDomainEffectExecutionService]:
         "odoo_transaction_subject_ref_field",
         "x_administrative_transaction_subject_ref",
     )
+    transaction_payload_field = getattr(
+        settings,
+        "odoo_transaction_payload_field",
+        "x_administrative_m8_payload_json",
+    )
     odoo_financial_writer = OdooFinancialEffectConnector(
         OdooEffectConnection(
             base_url=settings.odoo_base_url,
@@ -454,6 +459,7 @@ def build() -> tuple[Runtime, BoundedDomainEffectExecutionService]:
             transaction_request_ref_field=transaction_request_ref_field,
             transaction_confirm_request_ref_field=transaction_confirm_request_ref_field,
             transaction_subject_ref_field=transaction_subject_ref_field,
+            transaction_payload_field=transaction_payload_field,
             timeout_seconds=settings.connector_timeout_seconds,
             allow_insecure_http=settings.oidc_allow_insecure_http,
         )
@@ -469,6 +475,7 @@ def build() -> tuple[Runtime, BoundedDomainEffectExecutionService]:
             transaction_request_ref_field=transaction_request_ref_field,
             transaction_confirm_request_ref_field=transaction_confirm_request_ref_field,
             transaction_subject_ref_field=transaction_subject_ref_field,
+            transaction_payload_field=transaction_payload_field,
             timeout_seconds=settings.connector_timeout_seconds,
             allow_insecure_http=settings.oidc_allow_insecure_http,
         )

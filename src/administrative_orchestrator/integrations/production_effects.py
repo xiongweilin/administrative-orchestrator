@@ -403,6 +403,7 @@ class OdooEffectConnection:
         "x_administrative_transaction_confirm_request_ref"
     )
     transaction_subject_ref_field: str = "x_administrative_transaction_subject_ref"
+    transaction_payload_field: str = "x_administrative_m8_payload_json"
     timeout_seconds: float = 10.0
     allow_insecure_http: bool = False
 
@@ -417,6 +418,7 @@ class OdooEffectConnection:
             self.transaction_request_ref_field,
             self.transaction_confirm_request_ref_field,
             self.transaction_subject_ref_field,
+            self.transaction_payload_field,
         ):
             if not field.startswith("x_"):
                 raise ConnectorConfigurationError(
@@ -706,8 +708,6 @@ class OdooFinancialEffectConnector:
         "vendor_bill.create_draft": "account.move",
         "expense_report.create": "hr.expense",
     }
-    _M8_PAYLOAD_FIELD = "x_administrative_m8_payload_json"
-
     def __init__(
         self,
         connection: OdooEffectConnection,
@@ -716,6 +716,7 @@ class OdooFinancialEffectConnector:
         client: httpx.AsyncClient | None = None,
     ) -> None:
         self.connection = connection
+        self._payload_field = connection.transaction_payload_field
         self.transport = OdooEmployeeEffectConnector(
             connection,
             credentials=credentials,
@@ -996,7 +997,7 @@ class OdooFinancialEffectConnector:
         values: dict[str, Any] = {
             self.connection.transaction_request_ref_field: request_ref,
             self.connection.transaction_subject_ref_field: subject_ref,
-            self._M8_PAYLOAD_FIELD: json.dumps(
+            self._payload_field: json.dumps(
                 payload_parameters,
                 sort_keys=True,
                 separators=(",", ":"),
@@ -1084,7 +1085,7 @@ class OdooFinancialVerifier:
                 model,
                 field,
                 subject_ref,
-                fields=["id", "state", field, self.connector._M8_PAYLOAD_FIELD],
+                fields=["id", "state", field, self.connector._payload_field],
             )
             if self.operation == "expense_report.create":
                 expected_payload = expected_postcondition.get("payload")
@@ -1134,7 +1135,7 @@ class OdooFinancialVerifier:
             )
 
     def _payload_from_row(self, row: dict[str, Any]) -> dict[str, Any] | None:
-        raw_payload = row.get(self.connector._M8_PAYLOAD_FIELD)
+        raw_payload = row.get(self.connector._payload_field)
         try:
             actual_payload = json.loads(raw_payload) if raw_payload else None
         except (TypeError, ValueError):
