@@ -549,6 +549,46 @@ def test_admission_rejection_is_terminal_shadow_state_without_work() -> None:
     assert client.execute_calls == 0
 
 
+def test_priority_rejection_can_reenter_admission_after_policy_revision() -> None:
+    store = SqlStore("sqlite+pysqlite:///:memory:")
+    store.init_schema()
+    case, governance, obligation = _projection_inputs()
+    client = FakeKernelClient(admission_status="priority-rejected")
+    rejected_settings = Settings(
+        kernel_bridge_mode="admission",
+        kernel_responsibility_admission_policy_ref="responsibility-admission:admin@1",
+    )
+    bridge = KernelExecutionBridge(
+        store,
+        settings=rejected_settings,
+        compatibility=_compatibility(work_admission=True),
+        client=client,
+    )
+
+    rejected = bridge.prepare(case, obligation, governance)
+    assert rejected is not None
+    assert rejected.status is KernelProjectionStatus.REJECTED
+
+    client.admission_status = "work-materialized"
+    retried = KernelExecutionBridge(
+        store,
+        settings=Settings(
+            kernel_bridge_mode="admission",
+            kernel_responsibility_admission_policy_ref="responsibility-admission:admin@2",
+        ),
+        compatibility=_compatibility(work_admission=True),
+        client=client,
+    ).prepare(case, obligation, governance)
+
+    assert retried is not None
+    assert retried.status is KernelProjectionStatus.ADMITTED
+    assert retried.kernel_admission_policy_ref == "responsibility-admission:admin@2"
+    assert retried.kernel_work_ref
+    assert client.submit_calls == 1
+    assert client.admit_calls == 2
+    assert client.execute_calls == 0
+
+
 def test_lost_proposal_ack_leaves_shadow_for_idempotent_replay() -> None:
     store = SqlStore("sqlite+pysqlite:///:memory:")
     store.init_schema()

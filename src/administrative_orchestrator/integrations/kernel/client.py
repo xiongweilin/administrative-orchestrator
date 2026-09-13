@@ -145,6 +145,15 @@ class KernelResponsibilityStatusView:
 class KernelResponsibilityClient(Protocol):
     def submit(self, projection: KernelShadowProjection) -> KernelProposalReceipt: ...
 
+    def submit_payload(
+        self,
+        *,
+        responsibility_payload: dict[str, Any],
+        admission_payload: dict[str, Any],
+        assessment_payload: dict[str, Any],
+        proposal_payload: dict[str, Any],
+    ) -> KernelProposalReceipt: ...
+
     def admit(
         self,
         projection: KernelShadowProjection,
@@ -224,12 +233,27 @@ class HttpKernelResponsibilityClient:
         self.timeout_seconds = timeout_seconds
 
     def submit(self, projection: KernelShadowProjection) -> KernelProposalReceipt:
+        return self.submit_payload(
+            responsibility_payload=projection.responsibility_payload,
+            admission_payload=projection.admission_payload,
+            assessment_payload=projection.assessment_payload,
+            proposal_payload=projection.work_proposal_payload,
+        )
+
+    def submit_payload(
+        self,
+        *,
+        responsibility_payload: dict[str, Any],
+        admission_payload: dict[str, Any],
+        assessment_payload: dict[str, Any],
+        proposal_payload: dict[str, Any],
+    ) -> KernelProposalReceipt:
         payload = {
             "schema": EXPECTED_COMMAND_SCHEMA,
-            "responsibility": projection.responsibility_payload,
-            "admission": projection.admission_payload,
-            "assessment": projection.assessment_payload,
-            "proposal": projection.work_proposal_payload,
+            "responsibility": responsibility_payload,
+            "admission": admission_payload,
+            "assessment": assessment_payload,
+            "proposal": proposal_payload,
         }
         try:
             response = httpx.post(
@@ -251,10 +275,10 @@ class HttpKernelResponsibilityClient:
             raise KernelSubmissionError("agent-kernel proposal receipt must be explicitly non-authoritative")
 
         expected = {
-            "responsibility_ref": projection.responsibility_payload.get("id"),
-            "admission_ref": projection.admission_payload.get("id"),
-            "assessment_ref": projection.assessment_payload.get("id"),
-            "proposal_ref": projection.work_proposal_payload.get("id"),
+            "responsibility_ref": responsibility_payload.get("id"),
+            "admission_ref": admission_payload.get("id"),
+            "assessment_ref": assessment_payload.get("id"),
+            "proposal_ref": proposal_payload.get("id"),
         }
         actual: dict[str, str] = {}
         for key, expected_value in expected.items():

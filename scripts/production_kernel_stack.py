@@ -32,8 +32,13 @@ from portable_runtime.stores.bounded_domain_effect_recovery import (
 )
 
 from administrative_orchestrator.config import get_settings
-from administrative_orchestrator.integrations.credentials import CredentialRef
+from administrative_orchestrator.integrations.credentials import (
+    CredentialRef,
+    EnvironmentOrFileCredentialResolver,
+    read_credential_file,
+)
 from administrative_orchestrator.integrations.kernel.capabilities import (
+    ADMINISTRATIVE_COMMUNICATION_MESSAGE_SEND,
     ADMINISTRATIVE_ERP_EXPENSE_REPORT_CREATE,
     ADMINISTRATIVE_ERP_PURCHASE_ORDER_CONFIRM,
     ADMINISTRATIVE_ERP_PURCHASE_ORDER_CREATE_DRAFT,
@@ -45,8 +50,11 @@ from administrative_orchestrator.integrations.kernel.capabilities import (
     ADMINISTRATIVE_IAM_SESSIONS_REVOKE,
 )
 from administrative_orchestrator.integrations.production_effects import (
+    AdministrativeCommunicationEffectConnection,
+    AdministrativeCommunicationEffectConnector,
     ConnectorResult,
     ConnectorStatus,
+    FeishuCommunicationVerifier,
     KeycloakEffectConnection,
     KeycloakIdentityDisableConnector,
     KeycloakIdentityDisableVerifier,
@@ -64,6 +72,7 @@ from administrative_orchestrator.integrations.production_effects import (
 )
 from administrative_orchestrator.production_verification import (
     complete_readback_postcondition,
+    readback_satisfies_expected,
 )
 
 IAM_CAPABILITY = ADMINISTRATIVE_IAM_IDENTITY_CREATE
@@ -221,7 +230,7 @@ class ProductionReadbackVerifier:
             expected,
             result.observed_postcondition,
         )
-        objective = "pass" if observed == expected else "fail"
+        objective = "pass" if readback_satisfies_expected(expected, observed) else "fail"
         return CapabilityResult(
             request_id=request.id,
             provider_id=self.descriptor.id,
@@ -308,35 +317,46 @@ def build() -> tuple[Runtime, BoundedDomainEffectExecutionService]:
     state_path = os.getenv("PORTABLE_RUNTIME_ADMIN_PRODUCTION_STATE_PATH", "").strip()
     if not state_path:
         raise RuntimeError("PORTABLE_RUNTIME_ADMIN_PRODUCTION_STATE_PATH is required")
+    communication_gateway_base_url = getattr(
+        settings, "communication_gateway_base_url", ""
+    ).strip()
 
     store = BoundedDomainEffectRecoverySQLiteStateStore(Path(state_path))
     registry = ProviderRegistry()
+    contracts = [
+        _remote_contract(IAM_CAPABILITY),
+        _remote_contract(
+            ADMINISTRATIVE_HRIS_EMPLOYEE_DEACTIVATE,
+            reversibility="irreversible",
+        ),
+        _remote_contract(
+            ADMINISTRATIVE_IAM_IDENTITY_DISABLE,
+            reversibility="irreversible",
+        ),
+        _remote_contract(
+            ADMINISTRATIVE_IAM_SESSIONS_REVOKE,
+            reversibility="irreversible",
+        ),
+        _remote_contract(ADMINISTRATIVE_ERP_PURCHASE_ORDER_CREATE_DRAFT),
+        _remote_contract(
+            ADMINISTRATIVE_ERP_PURCHASE_ORDER_CONFIRM,
+            reversibility="irreversible",
+        ),
+        _remote_contract(ADMINISTRATIVE_ERP_VENDOR_BILL_CREATE_DRAFT),
+        _remote_contract(ADMINISTRATIVE_ERP_EXPENSE_REPORT_CREATE),
+    ]
+    if communication_gateway_base_url:
+        contracts.append(
+            _remote_contract(
+                ADMINISTRATIVE_COMMUNICATION_MESSAGE_SEND,
+                reversibility="irreversible",
+            )
+        )
     runtime = Runtime(
         store=store,
         registry=registry,
         contract_registry=CapabilityContractRegistry(
-            contracts=[
-                _remote_contract(IAM_CAPABILITY),
-                _remote_contract(
-                    ADMINISTRATIVE_HRIS_EMPLOYEE_DEACTIVATE,
-                    reversibility="irreversible",
-                ),
-                _remote_contract(
-                    ADMINISTRATIVE_IAM_IDENTITY_DISABLE,
-                    reversibility="irreversible",
-                ),
-                _remote_contract(
-                    ADMINISTRATIVE_IAM_SESSIONS_REVOKE,
-                    reversibility="irreversible",
-                ),
-                _remote_contract(ADMINISTRATIVE_ERP_PURCHASE_ORDER_CREATE_DRAFT),
-                _remote_contract(
-                    ADMINISTRATIVE_ERP_PURCHASE_ORDER_CONFIRM,
-                    reversibility="irreversible",
-                ),
-                _remote_contract(ADMINISTRATIVE_ERP_VENDOR_BILL_CREATE_DRAFT),
-                _remote_contract(ADMINISTRATIVE_ERP_EXPENSE_REPORT_CREATE),
-            ]
+            contracts=contracts
         ),
         reliability=ReliabilityControls(cooldown_seconds=0),
         runtime_id="runtime:administrative-production",
@@ -453,6 +473,105 @@ def build() -> tuple[Runtime, BoundedDomainEffectExecutionService]:
             allow_insecure_http=settings.oidc_allow_insecure_http,
         )
     )
+
+    communication_provider = None
+    communication_verifier = None
+    if communication_gateway_base_url:
+        transport_secret_env = getattr(
+            settings,
+            "communication_transport_secret_env",
+            "ADMIN_COMMUNICATION_TRANSPORT_SECRET",
+        )
+        verifier_secret_env = getattr(
+            settings,
+            "communication_verifier_app_secret_env",
+            "ADMIN_COMMUNICATION_VERIFIER_APP_SECRET",
+        )
+        communication_credentials = EnvironmentOrFileCredentialResolver(
+            {
+                transport_secret_env: getattr(
+                    settings,
+                    "communication_transport_secret_file",
+                    "",
+                ).strip(),
+                verifier_secret_env: (
+                    getattr(settings, "communication_verifier_app_secret_file", "").strip()
+                    or getattr(settings, "feishu_app_secret_file", "").strip()
+                ),
+            }
+        )
+        communication_connection = AdministrativeCommunicationEffectConnection(
+            gateway_base_url=communication_gateway_base_url,
+            transport_credential=CredentialRef(
+                "gateway:administrative-communication",
+                transport_secret_env,
+            ),
+            artifact_root=Path(settings.feishu_artifact_root),
+            timeout_seconds=getattr(settings, "communication_gateway_timeout_seconds", 10.0),
+            allow_insecure_http=settings.oidc_allow_insecure_http,
+        )
+        communication_provider = ProductionEffectProvider(
+            provider_id="provider:administrative-production:feishu-communication-writer",
+            name="Administrative Feishu communication writer",
+            capability=ADMINISTRATIVE_COMMUNICATION_MESSAGE_SEND,
+            family="feishu-gateway",
+            execution_domain="feishu:communication",
+            credential_configuration_ref="gateway:administrative-communication",
+            network_domain=_host(communication_gateway_base_url),
+            connector=AdministrativeCommunicationEffectConnector(
+                communication_connection,
+                credentials=communication_credentials,
+            ),
+            reversibility="irreversible",
+        )
+        verifier_app_id = getattr(settings, "communication_verifier_app_id", "").strip()
+        if not verifier_app_id:
+            verifier_app_id_file = (
+                getattr(settings, "communication_verifier_app_id_file", "").strip()
+                or getattr(settings, "feishu_app_id_file", "").strip()
+            )
+            if verifier_app_id_file:
+                verifier_app_id = read_credential_file(
+                    verifier_app_id_file,
+                    configuration_ref="feishu:communication-verifier",
+                )
+        if not verifier_app_id:
+            raise RuntimeError(
+                "M9 communication capability requires a configured verifier app id"
+            )
+        communication_verifier = ProductionReadbackVerifier(
+                provider_id="provider:administrative-production:feishu-communication-verifier",
+                name="Administrative Feishu communication independent verifier",
+                effect_capability=ADMINISTRATIVE_COMMUNICATION_MESSAGE_SEND,
+                family="feishu-readback",
+                credential_configuration_ref="feishu:communication-verifier",
+                network_domain=_host(settings.feishu_base_url),
+                verifier=FeishuCommunicationVerifier(
+                    base_url=settings.feishu_base_url,
+                    app_id=verifier_app_id,
+                    app_secret=CredentialRef(
+                        "feishu:communication-verifier",
+                        getattr(
+                            settings,
+                            "communication_verifier_app_secret_env",
+                            "ADMIN_COMMUNICATION_VERIFIER_APP_SECRET",
+                        ),
+                    ),
+                    gateway_base_url=communication_gateway_base_url,
+                    gateway_secret=CredentialRef(
+                        "gateway:communication-verifier",
+                        getattr(
+                            settings,
+                            "communication_verifier_gateway_secret_env",
+                            "ADMIN_COMMUNICATION_TRANSPORT_SECRET",
+                        ),
+                    ),
+                    timeout_seconds=getattr(
+                        settings, "communication_gateway_timeout_seconds", 10.0
+                    ),
+                    credentials=communication_credentials,
+                ),
+            )
 
     hris_provider = ProductionEffectProvider(
         provider_id="provider:administrative-production:odoo-writer",
@@ -648,7 +767,7 @@ def build() -> tuple[Runtime, BoundedDomainEffectExecutionService]:
         ),
     )
 
-    registrations = (
+    registrations = [
         (hris_provider, "odoo-writer", _repeat_safe()),
         (hris_verifier, "odoo-verifier", None),
         (iam_provider, "keycloak-writer", _repeat_safe()),
@@ -667,7 +786,14 @@ def build() -> tuple[Runtime, BoundedDomainEffectExecutionService]:
         (vendor_bill_verifier, "odoo-vendor-bill-draft-verifier", None),
         (expense_provider, "odoo-expense-draft-writer", _repeat_safe()),
         (expense_verifier, "odoo-expense-draft-verifier", None),
-    )
+    ]
+    if communication_provider is not None and communication_verifier is not None:
+        registrations.extend(
+            [
+                (communication_provider, "feishu-communication-writer", _repeat_safe()),
+                (communication_verifier, "feishu-communication-verifier", None),
+            ]
+        )
     for provider, configured_name, repeatability in registrations:
         registry.register(
             provider,
@@ -781,6 +907,20 @@ def build() -> tuple[Runtime, BoundedDomainEffectExecutionService]:
             lease_owner="kernel:administrative-production",
         ),
     ]
+    if communication_provider is not None and communication_verifier is not None:
+        profiles.append(
+            BoundedDomainEffectExecutionProfile(
+                capability=ADMINISTRATIVE_COMMUNICATION_MESSAGE_SEND,
+                provider_id=communication_provider.descriptor.id,
+                verifier_provider_id=communication_verifier.descriptor.id,
+                semantic_contract=ProviderSemanticContract(
+                    id="semantic:administrative-production:feishu-communication",
+                    version="1",
+                    provider_id=communication_provider.descriptor.id,
+                ),
+                lease_owner="kernel:administrative-production",
+            )
+        )
     return runtime, BoundedDomainEffectExecutionService(runtime, profiles)
 
 

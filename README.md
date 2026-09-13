@@ -97,7 +97,7 @@ Planned vertical slices:
 
 The first executable slice is **employee onboarding** because it forces multi-actor coordination, long-lived state, identity, policy, approvals, multiple external systems, semantic verification, and bounded completion.
 
-# Current state: M6, M7, and M8 accepted for their recorded scopes
+# Current state: M6, M7, and M8 accepted; M9 implementation in progress
 
 M0–M4 established the semantic foundation, durable governed execution, organizational authority/policy, administrative correctness, and Agent Kernel convergence/cut-over invariants. M5 makes that reference architecture production-shaped without collapsing those ownership boundaries. M6 added trusted perception and admission and is accepted for the recorded staging scope (`docs/acceptance/M6-staging-acceptance.md`). M7 adds the employee lifecycle responsibility boundary and is accepted for the recorded isolated real-staging scope (`docs/acceptance/M7-staging-acceptance.md`, ADR 0004, `docs/milestones/M7.md`).
 
@@ -194,6 +194,16 @@ See:
 - `docs/acceptance/M7-staging-acceptance-template.md` for the no-secrets/no-body template.
 - `docs/acceptance/M8-staging-acceptance.md` for the recorded M8 staging evidence, merged revisions, CI results, and closure state.
 - `docs/acceptance/M8-staging-acceptance-template.md` for the no-secrets/no-body transaction acceptance template.
+- `docs/milestones/M9.md` for the Meeting Commitment Intake & Governed Outbound Communication plan and gates.
+- `docs/adr/0006-meeting-commitment-and-communication.md` for M9 identity, responsibility, and communication ownership.
+- `docs/acceptance/M9-staging-acceptance.md` and its template for the real-provider closure boundary.
+
+M9 adds the closed `meeting.commitment.v1` transcript candidate profile,
+human-qualified speaker and due-time admission, persistent commitment
+responsibility, and governed internal Feishu confirmation/reminder transport.
+M9 is not accepted yet: local tests prove the bounded contracts, but the real
+Feishu transcript/outbound frontier and merged closure evidence remain
+required.
 
 ## Development principles
 
@@ -241,6 +251,8 @@ src/administrative_orchestrator/
     workflows/               DBOS durability boundary
     providers/               provider authenticity and canonical-read adapters
     intake/                  M6 durable source, evidence, interpretation, candidate, and assessment core
+    commitment_models.py     M9 candidate, commitment, fulfillment, and communication records
+    commitment_service.py    M9 qualification, admission, transport, and discharge boundary
     financial.py             M8 typed transaction facts, Money, policies, and qualification primitives
     transaction_repository.py M8 case evidence links and qualification assessment persistence
 operations-console/          OIDC human exception UI (TypeScript)
