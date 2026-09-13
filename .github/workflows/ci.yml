@@ -232,7 +232,7 @@ jobs:
           set -e
           if [ "$phase1_status" -ne 1 ]; then
             cat pre-receipt-phase1.log
-            echo "expected pre-receipt injected process failure, got exit $phase1_status"
+            echo "expected pre-receipt injected failure, got exit $phase1_status"
             exit 1
           fi
           uv run python scripts/kernel_pre_receipt_restart_e2e.py verify
