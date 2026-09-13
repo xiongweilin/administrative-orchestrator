@@ -199,6 +199,11 @@ class SqlStore:
         self.sessions = sessionmaker(bind=self.engine, expire_on_commit=False, future=True)
 
     def init_schema(self) -> None:
+        # Import optional domain row modules before metadata creation so a
+        # direct in-memory/test store gets the same table topology as the
+        # application entrypoints.
+        from . import investigation_repository as _investigation_repository  # noqa: F401
+
         Base.metadata.create_all(self.engine)
 
     def create_case(self, request: AdministrativeRequest, case: AdministrativeCase) -> None:

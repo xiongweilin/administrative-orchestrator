@@ -241,12 +241,12 @@ def validate_execution_authorization(
     *,
     operation: str,
 ) -> None:
-    if case.status not in {CaseStatus.AUTHORIZED, CaseStatus.EXECUTING}:
-        raise TransitionError("authorization may be used only while authorized or executing")
     if authorization.case_id != case.case_id:
         raise TransitionError("authorization belongs to a different case")
     if authorization.authority_epoch != case.authority_epoch:
         raise TransitionError("authorization is stale for the current authority epoch")
+    if case.status not in {CaseStatus.AUTHORIZED, CaseStatus.EXECUTING}:
+        raise TransitionError("authorization may be used only while authorized or executing")
     if authorization.subject_ref != case.subject_ref:
         raise TransitionError("authorization subject does not match current case subject")
     if not authorization.is_current_at(utcnow()):

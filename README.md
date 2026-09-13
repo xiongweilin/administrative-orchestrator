@@ -147,6 +147,11 @@ CandidateCommitment != CommitmentRecord
 transport_accepted != delivery_confirmed
 delivery_confirmed != human_read
 Exception != permission to improvise
+Investigation != authority
+Hypothesis != fact
+ReframingProposal != reframe
+ReopenAssessment != ReopenRecord
+Reopen != history deletion
 ```
 
 These are product invariants, not documentation conventions.
@@ -165,6 +170,7 @@ These are product invariants, not documentation conventions.
 - typed employee-lifecycle and financial-transaction semantics;
 - commitment qualification/admission/fulfillment semantics;
 - governed communication draft/delivery semantics;
+- bounded investigation triggers/requests/proposals, evidence requests, reframing proposals, and governed reopen records;
 - Operations review, exception, reassessment, audit, and product-specific integration contracts.
 
 `agent-kernel` owns:
@@ -193,9 +199,10 @@ The current repository contains one coherent Administrative language across thes
 - meeting transcript self-commitment qualification and admission;
 - persistent commitment responsibility, overdue/fulfillment semantics, and explicit responsibility discharge;
 - bounded internal Feishu confirmation/reminder communication with canonical provider read-back;
+- bounded advisory investigation and authority-epoch reopen paths with stale-authorization fencing;
 - Operations API/Console, observability, PostgreSQL DR, Kernel-state recovery, and production preflight.
 
-Not currently claimed by the accepted system include ASR/meeting bots, proof of human read, external-recipient or broadcast communication, delegated commitment assignment, payment/settlement, or a meta-controller/adaptive-investigation layer.
+Not currently claimed by the accepted system include ASR/meeting bots, proof of human read, external-recipient or broadcast communication, delegated commitment assignment, payment/settlement, an independently deployed meta-controller service, or real-provider adaptive-investigation staging acceptance.
 
 ## Authority and completion model
 
@@ -206,6 +213,13 @@ Authentication answers who crossed a boundary. Administrative identity resolutio
 Administrative derives obligations before effects. An external obligation is complete only when a matching effect has independent authoritative realization evidence and the required `ConfirmedOutcome`; a domain-state obligation is complete only from verified Administrative domain state. Neither proof mode impersonates the other.
 
 `OUTCOME_UNKNOWN` is a reconciliation state. It does not grant resend or retry authority.
+
+Adaptive investigation is a bounded advisory path. Administrative may record a
+trigger, request evidence, preserve competing hypotheses, and qualify a
+reopen. The advisory client receives bounded references and returns
+schema-validated proposals only. It cannot create authority, facts, Work,
+effects, or completion. A reopen advances the existing `authority_epoch` and
+requires fresh governance before any new effect.
 
 ## Commitment and communication model
 
@@ -241,6 +255,12 @@ src/administrative_orchestrator/
     financial.py              typed transaction facts/policy/qualification language
     commitment_models.py      commitment and communication records
     commitment_service.py     qualification, admission, fulfillment, communication lifecycle
+    investigation_models.py  bounded investigation/reframing/reopen language
+    investigation_reconciliation.py Kernel-first OUTCOME_UNKNOWN qualification
+    investigation_repository.py durable investigation and reopen records
+    investigation_service.py qualification, advisory boundary, and epoch transition
+    investigation_client.py  narrow fail-closed advisory adapter
+    model_investigation_client.py bounded OpenAI-compatible model adapter
     responsibility_discharge.py Administrative evidence -> Kernel discharge protocol
     integrations/kernel/      Kernel contract bridge; no second runtime owner
     providers/                provider authenticity/canonical-read adapters
