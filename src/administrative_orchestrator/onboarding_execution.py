@@ -15,14 +15,14 @@ from .effect_provider import EffectProvider
 from .execution_repository import ExecutionRepository
 from .execution_transitions import begin_reconciliation
 from .financial import TransactionQualificationResult
+from .financial_obligations import derive_financial_obligations
 from .governance import GovernanceRepository, GovernanceValidation
 from .obligations import (
     AdministrativeObligation,
     ObligationRepository,
     OnboardingObligationSet,
-    derive_financial_obligations,
-    derive_onboarding_obligations,
 )
+from .onboarding_obligations import derive_onboarding_obligations
 from .persistence import SqlStore
 from .service import (
     TransitionError,
@@ -391,8 +391,7 @@ class OnboardingExecutionEngine:
                 str(item) for item in completion.uncovered_obligation_ids
             ],
             "missing_domain_state_obligation_ids": [
-                str(item)
-                for item in completion.missing_domain_state_obligation_ids
+                str(item) for item in completion.missing_domain_state_obligation_ids
             ],
             "governance_basis_id": (
                 str(completion.governance_basis_id)
