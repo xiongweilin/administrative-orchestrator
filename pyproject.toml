@@ -47,6 +47,10 @@ ignore = ["E501"]
 
 [tool.ruff.lint.per-file-ignores]
 "alembic/**/*.py" = ["I001"]
+# Keep the accepted verifier branches visually separate: confirmed purchase
+# state and draft-only creation are distinct semantic postconditions even
+# though they currently assign the same projection field on mismatch.
+"src/administrative_orchestrator/integrations/odoo_effects.py" = ["SIM114"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
