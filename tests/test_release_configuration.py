@@ -1,6 +1,5 @@
 from pathlib import Path
 
-
 HEX_DIGITS = frozenset("0123456789abcdef")
 
 
