@@ -9,12 +9,12 @@ from .effect_common import (
     ConnectorConfigurationError,
     ConnectorResult,
     ConnectorStatus,
-    _ApplicationRejected,
-    _TransportUnknown,
-    _unavailable_result,
-    _unknown_result,
-    _validate_base_url,
 )
+from .effect_common import _ApplicationRejected as _ApplicationRejected
+from .effect_common import _TransportUnknown as _TransportUnknown
+from .effect_common import _unavailable_result as _unavailable_result
+from .effect_common import _unknown_result as _unknown_result
+from .effect_common import _validate_base_url as _validate_base_url
 from .keycloak_effects import (
     KeycloakEffectConnection,
     KeycloakIdentityDisableConnector,
@@ -30,15 +30,15 @@ from .odoo_effects import (
     OdooEmployeeDeactivateVerifier,
     OdooEmployeeEffectConnector,
     OdooEmployeeVerifier,
-    OdooFinancialEffectConnector,
-    OdooFinancialVerifier,
-    _many2one_id,
-    _odoo_numeric_ref,
-    _required_odoo_numeric_ref,
 )
+from .odoo_effects import OdooFinancialEffectConnector as OdooFinancialEffectConnector
+from .odoo_effects import OdooFinancialVerifier as OdooFinancialVerifier
+from .odoo_effects import _many2one_id as _many2one_id
+from .odoo_effects import _odoo_numeric_ref as _odoo_numeric_ref
+from .odoo_effects import _required_odoo_numeric_ref as _required_odoo_numeric_ref
 
-# This module remains the compatibility import surface for existing callers.
-# Provider-specific implementation now lives in bounded integration modules.
+# Compatibility import surface. Provider-specific implementations live in the
+# bounded modules above; existing callers may continue importing from here.
 
 __all__ = [
     "AdministrativeCommunicationEffectConnection",
