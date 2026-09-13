@@ -97,7 +97,7 @@ Planned vertical slices:
 
 The first executable slice is **employee onboarding** because it forces multi-actor coordination, long-lived state, identity, policy, approvals, multiple external systems, semantic verification, and bounded completion.
 
-# Current state: M6, M7, and M8 accepted; M9 implementation in progress
+# Current state: M6, M7, M8, and M9 accepted for their recorded scopes
 
 M0–M4 established the semantic foundation, durable governed execution, organizational authority/policy, administrative correctness, and Agent Kernel convergence/cut-over invariants. M5 makes that reference architecture production-shaped without collapsing those ownership boundaries. M6 added trusted perception and admission and is accepted for the recorded staging scope (`docs/acceptance/M6-staging-acceptance.md`). M7 adds the employee lifecycle responsibility boundary and is accepted for the recorded isolated real-staging scope (`docs/acceptance/M7-staging-acceptance.md`, ADR 0004, `docs/milestones/M7.md`).
 
@@ -127,7 +127,7 @@ the Kernel image build, Administrative expected revision, and the runtime
 production Agent Kernel baseline is:
 
 ```text
-729082888f5a875db2df2a2e59517ca6d80e4be8
+706cb3514c7edd030518f016a8f9b232b98f8166
 ```
 
 M5 has an explicit acceptance boundary: repository CI can prove code, migration, restart, cut-over, DR, ambiguity semantics, and static/security quality gates, while the external checklist proves enterprise OIDC/Odoo/Keycloak credentials and network behavior. The isolated real-staging checklist, final exact-head CI, squash merge, and post-merge main CI were recorded on the historical M5 baseline `fe4b3f4bf2e376bd7105caf7d15d77e2483c7197`; M5 is **complete for the recorded scope**. The previous accepted Kernel baseline `14758ccbb50c3eafae9e80333aa6f238e1d1791b` remains historical; the M8 revision was promoted through merged PR #99 and is accepted for its recorded scope.
@@ -201,9 +201,14 @@ See:
 M9 adds the closed `meeting.commitment.v1` transcript candidate profile,
 human-qualified speaker and due-time admission, persistent commitment
 responsibility, and governed internal Feishu confirmation/reminder transport.
-M9 is not accepted yet: local tests prove the bounded contracts, but the real
-Feishu transcript/outbound frontier and merged closure evidence remain
-required.
+M9 is accepted for the recorded isolated staging scope in
+`docs/acceptance/M9-staging-acceptance.md`: the real Feishu transcript path,
+candidate lineage, human/policy admission, persistent Kernel responsibility,
+governed confirmation and due reminder, independent provider readback,
+committer-only fulfillment, completion, and explicit discharge were exercised.
+Administrative PR #83 and Gateway PR #16 were merged with their required CI,
+SonarQube Quality Gate, PostgreSQL/DBOS, Console, Compose, and Kernel recovery
+lanes green. The M9 accepted tag records the closure revision.
 
 ## Development principles
 
