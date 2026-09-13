@@ -22,7 +22,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: xiongweilin/agent-kernel
-          ref: 729082888f5a875db2df2a2e59517ca6d80e4be8
+          ref: 706cb3514c7edd030518f016a8f9b232b98f8166
           path: .integration/agent-kernel
       - name: Install
         run: |
@@ -122,7 +122,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: xiongweilin/agent-kernel
-          ref: 729082888f5a875db2df2a2e59517ca6d80e4be8
+          ref: 706cb3514c7edd030518f016a8f9b232b98f8166
           path: .integration/agent-kernel
       - uses: astral-sh/setup-uv@v6
         with:
@@ -232,7 +232,7 @@ jobs:
           set -e
           if [ "$phase1_status" -ne 1 ]; then
             cat pre-receipt-phase1.log
-            echo "expected pre-receipt injected failure, got exit $phase1_status"
+            echo "expected pre-receipt injected process failure, got exit $phase1_status"
             exit 1
           fi
           uv run python scripts/kernel_pre_receipt_restart_e2e.py verify
