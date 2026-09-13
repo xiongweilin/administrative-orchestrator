@@ -28,24 +28,21 @@ from .investigation_rows import (
     ReopenAssessmentRow,
     ReopenRecordRow,
 )
-from .investigation_serialization import (
-    assessment_digest as _assessment_digest,
-    assessment_from_row as _assessment_from_row,
-    assessment_row as _assessment_row,
-    digest as _digest,
-    evidence_from_row as _evidence_from_row,
-    evidence_request_from_row as _evidence_request_from_row,
-    evidence_request_row as _evidence_request_row,
-    evidence_row as _evidence_row,
-    proposal_digest as _proposal_digest,
-    proposal_from_row as _proposal_from_row,
-    proposal_row as _proposal_row,
-    record_from_row as _record_from_row,
-    record_row as _record_row,
-    request_digest as _request_digest,
-    request_from_row as _request_from_row,
-    request_row as _request_row,
-)
+from .investigation_serialization import assessment_digest as _assessment_digest
+from .investigation_serialization import assessment_from_row as _assessment_from_row
+from .investigation_serialization import assessment_row as _assessment_row
+from .investigation_serialization import evidence_from_row as _evidence_from_row
+from .investigation_serialization import evidence_request_from_row as _evidence_request_from_row
+from .investigation_serialization import evidence_request_row as _evidence_request_row
+from .investigation_serialization import evidence_row as _evidence_row
+from .investigation_serialization import proposal_digest as _proposal_digest
+from .investigation_serialization import proposal_from_row as _proposal_from_row
+from .investigation_serialization import proposal_row as _proposal_row
+from .investigation_serialization import record_from_row as _record_from_row
+from .investigation_serialization import record_row as _record_row
+from .investigation_serialization import request_digest as _request_digest
+from .investigation_serialization import request_from_row as _request_from_row
+from .investigation_serialization import request_row as _request_row
 from .persistence import (
     AuthorizationRow,
     CaseRow,
