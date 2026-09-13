@@ -1,0 +1,27 @@
+name: Sonar Gate Diagnostic
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Read current Sonar pull-request quality gate
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_PULL_REQUEST: ${{ github.event.pull_request.number }}
+        run: |
+          for attempt in {1..12}; do
+            body="$(curl -fsS -u "${SONAR_TOKEN}:" "https://sonarcloud.io/api/qualitygates/project_status?projectKey=metratio_administrative-orchestrator&pullRequest=${SONAR_PULL_REQUEST}")"
+            status="$(printf '%s' "$body" | python -c 'import json,sys; print(json.load(sys.stdin)["projectStatus"]["status"])')"
+            printf '%s' "$body" | python -m json.tool
+            if [ "$status" != "NONE" ]; then
+              exit 0
+            fi
+            sleep 5
+          done
+          exit 1
