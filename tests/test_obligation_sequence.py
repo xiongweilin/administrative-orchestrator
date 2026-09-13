@@ -4,7 +4,6 @@ import inspect
 from uuid import uuid4
 
 import pytest
-from alembic import command
 from alembic.config import Config
 from sqlalchemy import create_engine, select, text
 
@@ -19,6 +18,7 @@ from administrative_orchestrator.obligations import (
 )
 from administrative_orchestrator.persistence import SqlStore
 from administrative_orchestrator.service import create_case
+from alembic import command
 
 
 def _case(store: SqlStore):
