@@ -1,8 +1,7 @@
 from pathlib import Path
-import re
 
 
-KERNEL_REF_PATTERN = re.compile(r"^[0-9a-f]{40}$")
+HEX_DIGITS = frozenset("0123456789abcdef")
 
 
 def _env_value(path: Path, key: str) -> str:
@@ -13,17 +12,23 @@ def _env_value(path: Path, key: str) -> str:
     raise AssertionError(f"{key} not found in {path}")
 
 
+def _is_full_git_sha(value: str) -> bool:
+    return len(value) == 40 and set(value) <= HEX_DIGITS
+
+
 def test_promoted_kernel_baseline_is_consistent_across_current_release_surfaces() -> None:
     expected = _env_value(Path(".env.production.example"), "AGENT_KERNEL_REF")
-    assert KERNEL_REF_PATTERN.fullmatch(expected)
+    assert _is_full_git_sha(expected)
 
     for workflow in (
         Path(".github/workflows/ci.yml"),
         Path(".github/workflows/m5.yml"),
     ):
-        text = workflow.read_text(encoding="utf-8")
-        refs = re.findall(r"ref:\s*([0-9a-f]{40})", text)
+        refs = {
+            line.split("ref:", 1)[1].strip()
+            for line in workflow.read_text(encoding="utf-8").splitlines()
+            if line.strip().startswith("ref:")
+            and _is_full_git_sha(line.split("ref:", 1)[1].strip())
+        }
         assert refs, f"no pinned Kernel revision found in {workflow}"
-        assert set(refs) == {expected}, (
-            f"{workflow} pins {sorted(set(refs))}, expected only {expected}"
-        )
+        assert refs == {expected}, f"{workflow} pins {sorted(refs)}, expected only {expected}"
