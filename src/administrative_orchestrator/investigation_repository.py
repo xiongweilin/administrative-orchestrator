@@ -1,13 +1,8 @@
 from __future__ import annotations
 
-import hashlib
-import json
-from datetime import datetime
-from typing import Any
 from uuid import UUID
 
-from sqlalchemy import JSON, DateTime, ForeignKey, Integer, String, UniqueConstraint, Uuid, select
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy import select
 
 from .domain import AdministrativeCase, CaseStatus, ReopenReason
 from .investigation_models import (
@@ -15,22 +10,41 @@ from .investigation_models import (
     InvestigationConstraints,
     InvestigationEvidence,
     InvestigationEvidenceRequest,
-    InvestigationHypothesis,
-    InvestigationModelProvenance,
     InvestigationProposal,
-    InvestigationQueryRecommendation,
     InvestigationRequest,
     InvestigationStatus,
     InvestigationTrigger,
-    ReframingProposal,
     ReopenAssessment,
     ReopenAssessmentDisposition,
     ReopenAssessmentKind,
     ReopenRecord,
 )
+from .investigation_rows import (
+    InvestigationEvidenceRequestRow,
+    InvestigationEvidenceRow,
+    InvestigationProposalRow,
+    InvestigationRow,
+    ReframingProposalRow,
+    ReopenAssessmentRow,
+    ReopenRecordRow,
+)
+from .investigation_serialization import assessment_digest as _assessment_digest
+from .investigation_serialization import assessment_from_row as _assessment_from_row
+from .investigation_serialization import assessment_row as _assessment_row
+from .investigation_serialization import evidence_from_row as _evidence_from_row
+from .investigation_serialization import evidence_request_from_row as _evidence_request_from_row
+from .investigation_serialization import evidence_request_row as _evidence_request_row
+from .investigation_serialization import evidence_row as _evidence_row
+from .investigation_serialization import proposal_digest as _proposal_digest
+from .investigation_serialization import proposal_from_row as _proposal_from_row
+from .investigation_serialization import proposal_row as _proposal_row
+from .investigation_serialization import record_from_row as _record_from_row
+from .investigation_serialization import record_row as _record_row
+from .investigation_serialization import request_digest as _request_digest
+from .investigation_serialization import request_from_row as _request_from_row
+from .investigation_serialization import request_row as _request_row
 from .persistence import (
     AuthorizationRow,
-    Base,
     CaseRow,
     ConcurrencyConflict,
     DecisionRow,
@@ -49,273 +63,6 @@ class InvestigationBudgetExceeded(InvestigationConflict):
 
 class InvestigationNotFound(KeyError):
     pass
-
-
-class InvestigationRow(Base):
-    __tablename__ = "administrative_investigation"
-    __table_args__ = (
-        UniqueConstraint(
-            "case_id",
-            "idempotency_key",
-            name="uq_admin_investigation_case_idempotency",
-        ),
-    )
-
-    investigation_id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
-    tenant_id: Mapped[str] = mapped_column(String(512), nullable=False)
-    case_id: Mapped[UUID] = mapped_column(
-        ForeignKey("administrative_case.case_id"), nullable=False
-    )
-    authority_epoch: Mapped[int] = mapped_column(Integer, nullable=False)
-    trigger_type: Mapped[str] = mapped_column(String(128), nullable=False)
-    trigger_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
-    requested_question: Mapped[str] = mapped_column(String(4000), nullable=False)
-    allowed_evidence_refs_json: Mapped[list[str]] = mapped_column(JSON, nullable=False)
-    current_fact_snapshot_ref: Mapped[str | None] = mapped_column(String(512), nullable=True)
-    current_governance_basis_ref: Mapped[str | None] = mapped_column(String(512), nullable=True)
-    current_obligation_refs_json: Mapped[list[str]] = mapped_column(JSON, nullable=False)
-    current_commitment_refs_json: Mapped[list[str]] = mapped_column(JSON, nullable=False)
-    constraints_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    created_by: Mapped[str] = mapped_column(String(255), nullable=False)
-    status: Mapped[str] = mapped_column(String(64), nullable=False)
-    idempotency_key: Mapped[str] = mapped_column(String(512), nullable=False)
-    request_digest: Mapped[str] = mapped_column(String(64), nullable=False)
-    rounds_used: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    model_calls_used: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    evidence_requests_used: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    last_error_code: Mapped[str | None] = mapped_column(String(256), nullable=True)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-
-
-class InvestigationProposalRow(Base):
-    __tablename__ = "administrative_investigation_proposal"
-    __table_args__ = (
-        UniqueConstraint(
-            "investigation_id",
-            "idempotency_key",
-            name="uq_admin_investigation_proposal_idempotency",
-        ),
-    )
-
-    proposal_id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
-    investigation_id: Mapped[UUID] = mapped_column(
-        ForeignKey("administrative_investigation.investigation_id"), nullable=False
-    )
-    case_id: Mapped[UUID] = mapped_column(
-        ForeignKey("administrative_case.case_id"), nullable=False
-    )
-    authority_epoch: Mapped[int] = mapped_column(Integer, nullable=False)
-    representation_version: Mapped[str] = mapped_column(String(256), nullable=False)
-    hypotheses_json: Mapped[list[dict[str, Any]]] = mapped_column(JSON, nullable=False)
-    ambiguities_json: Mapped[list[str]] = mapped_column(JSON, nullable=False)
-    missing_evidence_json: Mapped[list[str]] = mapped_column(JSON, nullable=False)
-    recommended_queries_json: Mapped[list[dict[str, Any]]] = mapped_column(JSON, nullable=False)
-    recommended_human_questions_json: Mapped[list[str]] = mapped_column(JSON, nullable=False)
-    possible_reframings_json: Mapped[list[dict[str, Any]]] = mapped_column(JSON, nullable=False)
-    possible_reopen_targets_json: Mapped[list[str]] = mapped_column(JSON, nullable=False)
-    uncertainty_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
-    model_provenance_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    idempotency_key: Mapped[str] = mapped_column(String(512), nullable=False)
-    proposal_digest: Mapped[str] = mapped_column(String(64), nullable=False)
-
-
-class ReframingProposalRow(Base):
-    __tablename__ = "administrative_reframing_proposal"
-
-    reframing_id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
-    investigation_id: Mapped[UUID] = mapped_column(
-        ForeignKey("administrative_investigation.investigation_id"), nullable=False
-    )
-    proposal_id: Mapped[UUID] = mapped_column(
-        ForeignKey("administrative_investigation_proposal.proposal_id"), nullable=False
-    )
-    case_id: Mapped[UUID] = mapped_column(
-        ForeignKey("administrative_case.case_id"), nullable=False
-    )
-    current_frame: Mapped[str] = mapped_column(String(2000), nullable=False)
-    proposed_frame: Mapped[str] = mapped_column(String(2000), nullable=False)
-    reason: Mapped[str] = mapped_column(String(4000), nullable=False)
-    evidence_refs_json: Mapped[list[str]] = mapped_column(JSON, nullable=False)
-    status: Mapped[str] = mapped_column(String(64), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-
-
-class InvestigationEvidenceRequestRow(Base):
-    __tablename__ = "administrative_investigation_evidence_request"
-    __table_args__ = (
-        UniqueConstraint(
-            "investigation_id",
-            "idempotency_key",
-            name="uq_admin_investigation_evidence_request_idempotency",
-        ),
-    )
-
-    evidence_request_id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
-    investigation_id: Mapped[UUID] = mapped_column(
-        ForeignKey("administrative_investigation.investigation_id"), nullable=False
-    )
-    case_id: Mapped[UUID] = mapped_column(
-        ForeignKey("administrative_case.case_id"), nullable=False
-    )
-    authority_epoch: Mapped[int] = mapped_column(Integer, nullable=False)
-    source_kind: Mapped[str] = mapped_column(String(128), nullable=False)
-    requested_question: Mapped[str] = mapped_column(String(4000), nullable=False)
-    allowed_evidence_refs_json: Mapped[list[str]] = mapped_column(JSON, nullable=False)
-    status: Mapped[str] = mapped_column(String(64), nullable=False)
-    evidence_refs_json: Mapped[list[str]] = mapped_column(JSON, nullable=False)
-    requested_by: Mapped[str] = mapped_column(String(255), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    fulfilled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    idempotency_key: Mapped[str] = mapped_column(String(512), nullable=False)
-
-
-class InvestigationEvidenceRow(Base):
-    __tablename__ = "administrative_investigation_evidence"
-    __table_args__ = (
-        UniqueConstraint(
-            "investigation_id",
-            "idempotency_key",
-            name="uq_admin_investigation_evidence_idempotency",
-        ),
-    )
-
-    evidence_id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
-    investigation_id: Mapped[UUID] = mapped_column(
-        ForeignKey("administrative_investigation.investigation_id"), nullable=False
-    )
-    case_id: Mapped[UUID] = mapped_column(
-        ForeignKey("administrative_case.case_id"), nullable=False
-    )
-    authority_epoch: Mapped[int] = mapped_column(Integer, nullable=False)
-    evidence_request_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey("administrative_investigation_evidence_request.evidence_request_id"),
-        nullable=True,
-    )
-    evidence_ref: Mapped[str] = mapped_column(String(1000), nullable=False)
-    source_kind: Mapped[str] = mapped_column(String(128), nullable=False)
-    source: Mapped[str] = mapped_column(String(512), nullable=False)
-    owner: Mapped[str] = mapped_column(String(255), nullable=False)
-    source_ref: Mapped[str | None] = mapped_column(String(1000), nullable=True)
-    source_version: Mapped[str | None] = mapped_column(String(256), nullable=True)
-    digest: Mapped[str | None] = mapped_column(String(128), nullable=True)
-    added_by: Mapped[str] = mapped_column(String(255), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    idempotency_key: Mapped[str] = mapped_column(String(512), nullable=False)
-
-
-class ReopenAssessmentRow(Base):
-    __tablename__ = "administrative_reopen_assessment"
-    __table_args__ = (
-        UniqueConstraint(
-            "investigation_id",
-            "idempotency_key",
-            name="uq_admin_reopen_assessment_idempotency",
-        ),
-    )
-
-    assessment_id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
-    investigation_id: Mapped[UUID] = mapped_column(
-        ForeignKey("administrative_investigation.investigation_id"), nullable=False
-    )
-    case_id: Mapped[UUID] = mapped_column(
-        ForeignKey("administrative_case.case_id"), nullable=False
-    )
-    authority_epoch: Mapped[int] = mapped_column(Integer, nullable=False)
-    disposition: Mapped[str] = mapped_column(String(64), nullable=False)
-    reason: Mapped[str] = mapped_column(String(4000), nullable=False)
-    evidence_refs_json: Mapped[list[str]] = mapped_column(JSON, nullable=False)
-    proposal_ref: Mapped[UUID | None] = mapped_column(Uuid, nullable=True)
-    assessment_kind: Mapped[str] = mapped_column(String(64), nullable=False)
-    assessed_by: Mapped[str] = mapped_column(String(255), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    idempotency_key: Mapped[str] = mapped_column(String(512), nullable=False)
-    assessment_digest: Mapped[str] = mapped_column(String(64), nullable=False)
-
-
-class ReopenRecordRow(Base):
-    __tablename__ = "administrative_reopen_record"
-    __table_args__ = (
-        UniqueConstraint(
-            "case_id",
-            "idempotency_key",
-            name="uq_admin_reopen_record_idempotency",
-        ),
-        UniqueConstraint(
-            "assessment_ref",
-            name="uq_admin_reopen_record_assessment",
-        ),
-    )
-
-    reopen_id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
-    investigation_id: Mapped[UUID] = mapped_column(
-        ForeignKey("administrative_investigation.investigation_id"), nullable=False
-    )
-    case_id: Mapped[UUID] = mapped_column(
-        ForeignKey("administrative_case.case_id"), nullable=False
-    )
-    assessment_ref: Mapped[UUID] = mapped_column(
-        ForeignKey("administrative_reopen_assessment.assessment_id"), nullable=False
-    )
-    previous_authority_epoch: Mapped[int] = mapped_column(Integer, nullable=False)
-    new_authority_epoch: Mapped[int] = mapped_column(Integer, nullable=False)
-    reopen_reason: Mapped[str] = mapped_column(String(4000), nullable=False)
-    evidence_refs_json: Mapped[list[str]] = mapped_column(JSON, nullable=False)
-    authorized_by: Mapped[str] = mapped_column(String(255), nullable=False)
-    invalidated_decision_refs_json: Mapped[list[str]] = mapped_column(JSON, nullable=False)
-    invalidated_governance_basis_refs_json: Mapped[list[str]] = mapped_column(
-        JSON, nullable=False
-    )
-    affected_obligation_refs_json: Mapped[list[str]] = mapped_column(JSON, nullable=False)
-    affected_execution_authorization_refs_json: Mapped[list[str]] = mapped_column(
-        JSON, nullable=False
-    )
-    affected_commitment_refs_json: Mapped[list[str]] = mapped_column(JSON, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    idempotency_key: Mapped[str] = mapped_column(String(512), nullable=False)
-
-
-def _digest(value: Any) -> str:
-    payload = json.dumps(value, sort_keys=True, separators=(",", ":"), default=str).encode()
-    return hashlib.sha256(payload).hexdigest()
-
-
-def _request_digest(request: InvestigationRequest) -> str:
-    payload = request.model_dump(
-        mode="json",
-        exclude={
-            "investigation_id",
-            "created_at",
-            "updated_at",
-            "status",
-            "rounds_used",
-            "model_calls_used",
-            "evidence_requests_used",
-            "last_error_code",
-        },
-    )
-    payload["trigger"].pop("trigger_id", None)
-    payload["trigger"].pop("created_at", None)
-    return _digest(payload)
-
-
-def _proposal_digest(proposal: InvestigationProposal) -> str:
-    return _digest(
-        proposal.model_dump(
-            mode="json",
-            exclude={"proposal_id", "created_at", "idempotency_key"},
-        )
-    )
-
-
-def _assessment_digest(assessment: ReopenAssessment) -> str:
-    return _digest(
-        assessment.model_dump(
-            mode="json",
-            exclude={"assessment_id", "created_at", "idempotency_key"},
-        )
-    )
 
 
 class InvestigationRepository:
@@ -771,7 +518,7 @@ class InvestigationRepository:
                 {
                     "investigation_id": str(item.investigation_id),
                     "evidence_id": str(item.evidence_id),
-                        "evidence_request_id": (
+                    "evidence_request_id": (
                         str(item.evidence_request_id) if item.evidence_request_id else None
                     ),
                     "source_kind": item.source_kind,
@@ -1106,274 +853,18 @@ class InvestigationRepository:
                 "investigation mutation is stale for the current case authority epoch"
             )
 
-    @staticmethod
-    def _request_row(item: InvestigationRequest, digest: str) -> InvestigationRow:
-        return InvestigationRow(
-            investigation_id=item.investigation_id,
-            tenant_id=item.tenant_id,
-            case_id=item.case_id,
-            authority_epoch=item.authority_epoch,
-            trigger_type=item.trigger.trigger_type.value,
-            trigger_json=item.trigger.model_dump(mode="json"),
-            requested_question=item.requested_question,
-            allowed_evidence_refs_json=list(item.allowed_evidence_refs),
-            current_fact_snapshot_ref=item.current_fact_snapshot_ref,
-            current_governance_basis_ref=item.current_governance_basis_ref,
-            current_obligation_refs_json=list(item.current_obligation_refs),
-            current_commitment_refs_json=list(item.current_commitment_refs),
-            constraints_json=item.constraints.model_dump(mode="json"),
-            created_at=item.created_at,
-            created_by=item.created_by,
-            status=item.status.value,
-            idempotency_key=item.idempotency_key,
-            request_digest=digest,
-            rounds_used=item.rounds_used,
-            model_calls_used=item.model_calls_used,
-            evidence_requests_used=item.evidence_requests_used,
-            last_error_code=item.last_error_code,
-            updated_at=item.updated_at,
-        )
-
-    @staticmethod
-    def _request_from_row(row: InvestigationRow) -> InvestigationRequest:
-        return InvestigationRequest(
-            investigation_id=row.investigation_id,
-            tenant_id=row.tenant_id,
-            case_id=row.case_id,
-            authority_epoch=row.authority_epoch,
-            trigger=InvestigationTrigger.model_validate(row.trigger_json),
-            requested_question=row.requested_question,
-            allowed_evidence_refs=tuple(row.allowed_evidence_refs_json or ()),
-            current_fact_snapshot_ref=row.current_fact_snapshot_ref,
-            current_governance_basis_ref=row.current_governance_basis_ref,
-            current_obligation_refs=tuple(row.current_obligation_refs_json or ()),
-            current_commitment_refs=tuple(row.current_commitment_refs_json or ()),
-            constraints=InvestigationConstraints.model_validate(row.constraints_json),
-            created_at=row.created_at,
-            created_by=row.created_by,
-            status=row.status,
-            idempotency_key=row.idempotency_key,
-            rounds_used=row.rounds_used,
-            model_calls_used=row.model_calls_used,
-            evidence_requests_used=row.evidence_requests_used,
-            last_error_code=row.last_error_code,
-            updated_at=row.updated_at,
-        )
-
-    @staticmethod
-    def _proposal_row(item: InvestigationProposal, digest: str) -> InvestigationProposalRow:
-        return InvestigationProposalRow(
-            proposal_id=item.proposal_id,
-            investigation_id=item.investigation_id,
-            case_id=item.case_id,
-            authority_epoch=item.authority_epoch,
-            representation_version=item.representation_version,
-            hypotheses_json=[value.model_dump(mode="json") for value in item.hypotheses],
-            ambiguities_json=list(item.ambiguities),
-            missing_evidence_json=list(item.missing_evidence),
-            recommended_queries_json=[
-                value.model_dump(mode="json") for value in item.recommended_queries
-            ],
-            recommended_human_questions_json=list(item.recommended_human_questions),
-            possible_reframings_json=[
-                value.model_dump(mode="json") for value in item.possible_reframings
-            ],
-            possible_reopen_targets_json=list(item.possible_reopen_targets),
-            uncertainty_json=dict(item.uncertainty),
-            model_provenance_json=item.model_provenance.model_dump(mode="json"),
-            created_at=item.created_at,
-            idempotency_key=item.idempotency_key,
-            proposal_digest=digest,
-        )
-
-    @staticmethod
-    def _proposal_from_row(row: InvestigationProposalRow) -> InvestigationProposal:
-        return InvestigationProposal(
-            proposal_id=row.proposal_id,
-            investigation_id=row.investigation_id,
-            case_id=row.case_id,
-            authority_epoch=row.authority_epoch,
-            representation_version=row.representation_version,
-            hypotheses=tuple(
-                InvestigationHypothesis.model_validate(item) for item in row.hypotheses_json
-            ),
-            ambiguities=tuple(row.ambiguities_json or ()),
-            missing_evidence=tuple(row.missing_evidence_json or ()),
-            recommended_queries=tuple(
-                InvestigationQueryRecommendation.model_validate(item)
-                for item in row.recommended_queries_json
-            ),
-            recommended_human_questions=tuple(row.recommended_human_questions_json or ()),
-            possible_reframings=tuple(
-                ReframingProposal.model_validate(item) for item in row.possible_reframings_json
-            ),
-            possible_reopen_targets=tuple(row.possible_reopen_targets_json or ()),
-            uncertainty=dict(row.uncertainty_json or {}),
-            model_provenance=InvestigationModelProvenance.model_validate(
-                row.model_provenance_json
-            ),
-            created_at=row.created_at,
-            idempotency_key=row.idempotency_key,
-        )
-
-    @staticmethod
-    def _evidence_request_row(item: InvestigationEvidenceRequest) -> InvestigationEvidenceRequestRow:
-        return InvestigationEvidenceRequestRow(
-            evidence_request_id=item.evidence_request_id,
-            investigation_id=item.investigation_id,
-            case_id=item.case_id,
-            authority_epoch=item.authority_epoch,
-            source_kind=item.source_kind,
-            requested_question=item.requested_question,
-            allowed_evidence_refs_json=list(item.allowed_evidence_refs),
-            status=item.status.value,
-            evidence_refs_json=list(item.evidence_refs),
-            requested_by=item.requested_by,
-            created_at=item.created_at,
-            fulfilled_at=item.fulfilled_at,
-            idempotency_key=item.idempotency_key,
-        )
-
-    @staticmethod
-    def _evidence_request_from_row(row: InvestigationEvidenceRequestRow) -> InvestigationEvidenceRequest:
-        return InvestigationEvidenceRequest(
-            evidence_request_id=row.evidence_request_id,
-            investigation_id=row.investigation_id,
-            case_id=row.case_id,
-            authority_epoch=row.authority_epoch,
-            source_kind=row.source_kind,
-            requested_question=row.requested_question,
-            allowed_evidence_refs=tuple(row.allowed_evidence_refs_json or ()),
-            status=row.status,
-            evidence_refs=tuple(row.evidence_refs_json or ()),
-            requested_by=row.requested_by,
-            created_at=row.created_at,
-            fulfilled_at=row.fulfilled_at,
-            idempotency_key=row.idempotency_key,
-        )
-
-    @staticmethod
-    def _evidence_row(item: InvestigationEvidence) -> InvestigationEvidenceRow:
-        return InvestigationEvidenceRow(
-            evidence_id=item.evidence_id,
-            investigation_id=item.investigation_id,
-            case_id=item.case_id,
-            authority_epoch=item.authority_epoch,
-            evidence_request_id=item.evidence_request_id,
-            evidence_ref=item.evidence_ref,
-            source_kind=item.source_kind,
-            source=item.source,
-            owner=item.owner,
-            source_ref=item.source_ref,
-            source_version=item.source_version,
-            digest=item.digest,
-            added_by=item.added_by,
-            created_at=item.created_at,
-            idempotency_key=item.idempotency_key,
-        )
-
-    @staticmethod
-    def _evidence_from_row(row: InvestigationEvidenceRow) -> InvestigationEvidence:
-        return InvestigationEvidence(
-            evidence_id=row.evidence_id,
-            investigation_id=row.investigation_id,
-            case_id=row.case_id,
-            authority_epoch=row.authority_epoch,
-            evidence_request_id=row.evidence_request_id,
-            evidence_ref=row.evidence_ref,
-            source_kind=row.source_kind,
-            source=row.source,
-            owner=row.owner,
-            source_ref=row.source_ref,
-            source_version=row.source_version,
-            digest=row.digest,
-            added_by=row.added_by,
-            created_at=row.created_at,
-            idempotency_key=row.idempotency_key,
-        )
-
-    @staticmethod
-    def _assessment_row(item: ReopenAssessment, digest: str) -> ReopenAssessmentRow:
-        return ReopenAssessmentRow(
-            assessment_id=item.assessment_id,
-            investigation_id=item.investigation_id,
-            case_id=item.case_id,
-            authority_epoch=item.authority_epoch,
-            disposition=item.disposition.value,
-            reason=item.reason,
-            evidence_refs_json=list(item.evidence_refs),
-            proposal_ref=item.proposal_ref,
-            assessment_kind=item.assessment_kind.value,
-            assessed_by=item.assessed_by,
-            created_at=item.created_at,
-            idempotency_key=item.idempotency_key,
-            assessment_digest=digest,
-        )
-
-    @staticmethod
-    def _assessment_from_row(row: ReopenAssessmentRow) -> ReopenAssessment:
-        return ReopenAssessment(
-            assessment_id=row.assessment_id,
-            investigation_id=row.investigation_id,
-            case_id=row.case_id,
-            authority_epoch=row.authority_epoch,
-            disposition=row.disposition,
-            reason=row.reason,
-            evidence_refs=tuple(row.evidence_refs_json or ()),
-            proposal_ref=row.proposal_ref,
-            assessment_kind=row.assessment_kind,
-            assessed_by=row.assessed_by,
-            created_at=row.created_at,
-            idempotency_key=row.idempotency_key,
-        )
-
-    @staticmethod
-    def _record_row(item: ReopenRecord) -> ReopenRecordRow:
-        return ReopenRecordRow(
-            reopen_id=item.reopen_id,
-            investigation_id=item.investigation_id,
-            case_id=item.case_id,
-            assessment_ref=item.assessment_ref,
-            previous_authority_epoch=item.previous_authority_epoch,
-            new_authority_epoch=item.new_authority_epoch,
-            reopen_reason=item.reopen_reason,
-            evidence_refs_json=list(item.evidence_refs),
-            authorized_by=item.authorized_by,
-            invalidated_decision_refs_json=list(item.invalidated_decision_refs),
-            invalidated_governance_basis_refs_json=list(item.invalidated_governance_basis_refs),
-            affected_obligation_refs_json=list(item.affected_obligation_refs),
-            affected_execution_authorization_refs_json=list(
-                item.affected_execution_authorization_refs
-            ),
-            affected_commitment_refs_json=list(item.affected_commitment_refs),
-            created_at=item.created_at,
-            idempotency_key=item.idempotency_key,
-        )
-
-    @staticmethod
-    def _record_from_row(row: ReopenRecordRow) -> ReopenRecord:
-        return ReopenRecord(
-            reopen_id=row.reopen_id,
-            investigation_id=row.investigation_id,
-            case_id=row.case_id,
-            assessment_ref=row.assessment_ref,
-            previous_authority_epoch=row.previous_authority_epoch,
-            new_authority_epoch=row.new_authority_epoch,
-            reopen_reason=row.reopen_reason,
-            evidence_refs=tuple(row.evidence_refs_json or ()),
-            authorized_by=row.authorized_by,
-            invalidated_decision_refs=tuple(row.invalidated_decision_refs_json or ()),
-            invalidated_governance_basis_refs=tuple(
-                row.invalidated_governance_basis_refs_json or ()
-            ),
-            affected_obligation_refs=tuple(row.affected_obligation_refs_json or ()),
-            affected_execution_authorization_refs=tuple(
-                row.affected_execution_authorization_refs_json or ()
-            ),
-            affected_commitment_refs=tuple(row.affected_commitment_refs_json or ()),
-            created_at=row.created_at,
-            idempotency_key=row.idempotency_key,
-        )
+    _request_row = staticmethod(_request_row)
+    _request_from_row = staticmethod(_request_from_row)
+    _proposal_row = staticmethod(_proposal_row)
+    _proposal_from_row = staticmethod(_proposal_from_row)
+    _evidence_request_row = staticmethod(_evidence_request_row)
+    _evidence_request_from_row = staticmethod(_evidence_request_from_row)
+    _evidence_row = staticmethod(_evidence_row)
+    _evidence_from_row = staticmethod(_evidence_from_row)
+    _assessment_row = staticmethod(_assessment_row)
+    _assessment_from_row = staticmethod(_assessment_from_row)
+    _record_row = staticmethod(_record_row)
+    _record_from_row = staticmethod(_record_from_row)
 
 
 __all__ = [
