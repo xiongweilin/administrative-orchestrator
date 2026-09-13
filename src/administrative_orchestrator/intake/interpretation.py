@@ -4,10 +4,12 @@ import hashlib
 import json
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from datetime import datetime
+from enum import StrEnum
 from typing import Any, Protocol, runtime_checkable
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from .models import (
     EvidenceSpan,
@@ -51,6 +53,47 @@ class CandidateFactDraft(BaseModel):
 
     fact_key: str = Field(min_length=1, max_length=512)
     value: Any
+    evidence_span_refs: tuple[UUID, ...] = ()
+
+
+class MeetingCommitmentClassification(StrEnum):
+    """Closed semantic classes emitted by the M9 meeting profile."""
+
+    EXPLICIT_SELF_COMMITMENT = "explicit_self_commitment"
+    AMBIGUOUS_COMMITMENT = "ambiguous_commitment"
+    ASPIRATION = "aspiration"
+    SUGGESTION = "suggestion"
+    INFORMATION = "information"
+    ASSIGNMENT_TO_OTHER = "assignment_to_other"
+
+
+class MeetingCommitmentDraft(BaseModel):
+    """Candidate-only commitment semantics extracted from untrusted text."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    speaker_label: str = Field(min_length=1, max_length=512)
+    candidate_action: str = Field(min_length=1, max_length=2000)
+    candidate_due_text: str | None = Field(default=None, max_length=512)
+    candidate_due_at: datetime | None = None
+    candidate_scope_ref: str | None = Field(default=None, max_length=1000)
+    candidate_beneficiary: str | None = Field(default=None, max_length=1000)
+    classification: MeetingCommitmentClassification
+    evidence_span_refs: tuple[UUID, ...] = ()
+
+    @model_validator(mode="after")
+    def validate_due_time(self) -> MeetingCommitmentDraft:
+        if self.candidate_due_at is not None and self.candidate_due_at.tzinfo is None:
+            raise ValueError("candidate_due_at must be offset-aware")
+        return self
+
+
+class MeetingInterpretationPayload(BaseModel):
+    """Versioned closed output for ``meeting.commitment.v1``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    candidate_commitments: tuple[MeetingCommitmentDraft, ...] = ()
     evidence_span_refs: tuple[UUID, ...] = ()
 
 
@@ -177,7 +220,7 @@ class InterpretationClient:
             )
 
         try:
-            payload = self._parse_payload(response.raw_output)
+            payload = self._parse_payload(response.raw_output, profile)
             payload = self._bind_single_document_span_when_unambiguous(
                 payload,
                 primary_artifact_ref=artifact.artifact_id,
@@ -206,19 +249,34 @@ class InterpretationClient:
 
     @staticmethod
     def _bind_single_document_span_when_unambiguous(
-        payload: CandidateInterpretationPayload,
+        payload: CandidateInterpretationPayload | MeetingInterpretationPayload,
         *,
         primary_artifact_ref: UUID,
         evidence_spans: Sequence[EvidenceSpan],
-    ) -> CandidateInterpretationPayload:
+    ) -> CandidateInterpretationPayload | MeetingInterpretationPayload:
         """Bind claims to one unambiguous document page without inventing facts."""
 
         document_spans = tuple(
             span for span in evidence_spans if span.artifact_ref != primary_artifact_ref
         )
-        if len(document_spans) != 1 or not payload.candidate_facts:
+        if len(document_spans) != 1:
             return payload
         fallback_ref = document_spans[0].evidence_span_id
+        if isinstance(payload, MeetingInterpretationPayload):
+            commitments = tuple(
+                commitment
+                if commitment.evidence_span_refs
+                else commitment.model_copy(update={"evidence_span_refs": (fallback_ref,)})
+                for commitment in payload.candidate_commitments
+            )
+            return payload.model_copy(
+                update={
+                    "candidate_commitments": commitments,
+                    "evidence_span_refs": tuple(
+                        dict.fromkeys((*payload.evidence_span_refs, fallback_ref))
+                    ),
+                }
+            )
         facts = tuple(
             fact
             if fact.evidence_span_refs
@@ -233,19 +291,27 @@ class InterpretationClient:
         )
 
     @staticmethod
-    def _parse_payload(raw_output: str) -> CandidateInterpretationPayload:
+    def _parse_payload(
+        raw_output: str,
+        profile: InterpretationProfile,
+    ) -> CandidateInterpretationPayload | MeetingInterpretationPayload:
         try:
             decoded = json.loads(raw_output)
         except (TypeError, ValueError) as exc:
             raise InterpretationValidationError("model response is not valid JSON") from exc
+        payload_type = (
+            MeetingInterpretationPayload
+            if profile.profile_ref == "meeting.commitment.v1"
+            else CandidateInterpretationPayload
+        )
         try:
-            return CandidateInterpretationPayload.model_validate(decoded)
+            return payload_type.model_validate(decoded)
         except ValidationError as exc:
             raise InterpretationValidationError("model response violates candidate schema") from exc
 
     @staticmethod
     def _bind_evidence(
-        payload: CandidateInterpretationPayload,
+        payload: CandidateInterpretationPayload | MeetingInterpretationPayload,
         artifact_refs: Sequence[UUID],
         evidence_spans: Sequence[EvidenceSpan],
     ) -> tuple[UUID, ...]:
@@ -259,8 +325,12 @@ class InterpretationClient:
             spans_by_id[span.evidence_span_id] = span
 
         requested = set(payload.evidence_span_refs)
-        for fact in payload.candidate_facts:
-            requested.update(fact.evidence_span_refs)
+        if isinstance(payload, MeetingInterpretationPayload):
+            for commitment in payload.candidate_commitments:
+                requested.update(commitment.evidence_span_refs)
+        else:
+            for fact in payload.candidate_facts:
+                requested.update(fact.evidence_span_refs)
 
         for evidence_ref in requested:
             if evidence_ref not in spans_by_id:
@@ -339,6 +409,9 @@ def _unique_artifact_refs(
 __all__ = [
     "CandidateFactDraft",
     "CandidateInterpretationPayload",
+    "MeetingCommitmentClassification",
+    "MeetingCommitmentDraft",
+    "MeetingInterpretationPayload",
     "InterpretationClient",
     "InterpretationProfile",
     "InterpretationValidationError",

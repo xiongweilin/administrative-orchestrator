@@ -343,6 +343,74 @@ class KernelBridgeRepository:
             db.flush()
             return self._projection_from_row(row)
 
+    def reopen_priority_rejected(
+        self,
+        projection: KernelShadowProjection,
+        *,
+        expected_policy_ref: str,
+    ) -> KernelShadowProjection:
+        """Re-enter admission after an explicit Kernel policy revision.
+
+        A priority rejection is terminal for the policy that produced it, but
+        it must not permanently strand an otherwise unchanged obligation when
+        the deployment intentionally rolls forward to a new admission profile.
+        The frozen proposal prefix remains the same; only the rejected
+        admission receipt is cleared so Kernel can re-evaluate it under the
+        caller's explicitly configured policy.
+        """
+
+        with self.store.sessions.begin() as db:
+            row = db.get(KernelBridgeProjectionRow, projection.projection_id)
+            if row is None:
+                raise KernelBridgePersistenceError("kernel projection is not persisted")
+            current = self._projection_from_row(row)
+            if not self._same_projection_semantics(current, projection):
+                raise KernelBridgePersistenceError(
+                    "kernel projection semantics changed before admission retry"
+                )
+            if current.status is not KernelProjectionStatus.REJECTED:
+                raise KernelBridgePersistenceError(
+                    "kernel admission retry requires a rejected projection"
+                )
+            if current.kernel_work_admission_status is not KernelWorkAdmissionStatus.PRIORITY_REJECTED:
+                raise KernelBridgePersistenceError(
+                    "only priority-rejected projections may be re-entered"
+                )
+            if not current.kernel_admission_policy_ref:
+                raise KernelBridgePersistenceError(
+                    "priority-rejected projection lacks its source policy ref"
+                )
+            if current.kernel_admission_policy_ref == expected_policy_ref:
+                raise KernelBridgePersistenceError(
+                    "admission retry requires a changed Kernel policy ref"
+                )
+            if any(
+                value is not None
+                for value in (
+                    current.kernel_resource_pool_ref,
+                    current.kernel_portfolio_admission_ref,
+                    current.kernel_reservation_ref,
+                    current.kernel_commitment_ref,
+                    current.kernel_work_ref,
+                )
+            ):
+                raise KernelBridgePersistenceError(
+                    "priority-rejected projection unexpectedly contains Work refs"
+                )
+
+            row.status = KernelProjectionStatus.SUBMITTED.value
+            row.kernel_work_admission_status = None
+            row.kernel_admission_policy_ref = None
+            row.kernel_priority_judgment_ref = None
+            row.kernel_resource_pool_ref = None
+            row.kernel_portfolio_admission_ref = None
+            row.kernel_reservation_ref = None
+            row.kernel_commitment_ref = None
+            row.kernel_work_ref = None
+            row.updated_at = utcnow()
+            db.flush()
+            return self._projection_from_row(row)
+
     def mark_execution(
         self,
         projection: KernelShadowProjection,

@@ -6,6 +6,8 @@ from uuid import UUID
 
 from dbos import DBOS
 
+from ..commitment_models import CommitmentState
+from ..commitment_service import MeetingCommitmentService
 from ..config import get_settings
 from ..domain import CaseStatus, utcnow
 from ..effect_provider import EffectProvider, HttpEffectProvider
@@ -123,6 +125,48 @@ def onboarding_case_workflow(*, case_id: str) -> dict[str, Any]:
             else NORMAL_WAKE_TIMEOUT_SECONDS
         )
         DBOS.recv(topic=CASE_CHANGED_TOPIC, timeout_seconds=timeout)
+
+
+@DBOS.step(name="administrative_drive_meeting_commitment_case")
+def drive_meeting_commitment_case_step(case_id: str) -> dict[str, Any]:
+    settings = get_settings()
+    store = SqlStore(settings.worker_database_url or settings.database_url)
+    service = MeetingCommitmentService(store, settings=settings)
+    commitment = service.repository.get_commitment(UUID(case_id))
+    case = store.get_case(UUID(case_id))
+    if commitment is None or case is None:
+        raise ValueError(f"meeting commitment case {case_id} not found")
+    if commitment.state is CommitmentState.FULFILLED:
+        if commitment.responsibility_ref:
+            try:
+                commitment = service.discharge_responsibility(UUID(case_id))
+            except Exception as exc:  # fail closed; Kernel owns retry/reconciliation
+                return {
+                    "case_id": case_id,
+                    "status": case.status.value,
+                    "responsibility_status": "pending",
+                    "responsibility_blocker": type(exc).__name__,
+                }
+        return {
+            "case_id": case_id,
+            "status": case.status.value,
+            "commitment_state": commitment.state.value,
+            "responsibility_status": (
+                "discharged" if commitment.responsibility_transition_ref else "pending"
+            ),
+        }
+    return service.drive(UUID(case_id))
+
+
+@DBOS.workflow(name="administrative_meeting_commitment_case_v1")
+def meeting_commitment_case_workflow(*, case_id: str) -> dict[str, Any]:
+    while True:
+        state = drive_meeting_commitment_case_step(case_id)
+        if state.get("responsibility_status") == "discharged":
+            return state
+        if state.get("status") in {CaseStatus.CANCELLED.value, CaseStatus.FAILED.value}:
+            return state
+        DBOS.recv(topic=CASE_CHANGED_TOPIC, timeout_seconds=NORMAL_WAKE_TIMEOUT_SECONDS)
 
 
 @DBOS.step(name="administrative_drive_offboarding_case")
@@ -259,5 +303,7 @@ __all__ = [
     "offboarding_case_workflow",
     "_offboarding_is_terminal",
     "onboarding_case_workflow",
+    "drive_meeting_commitment_case_step",
+    "meeting_commitment_case_workflow",
     "_offboarding_wake_timeout",
 ]

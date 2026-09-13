@@ -88,7 +88,31 @@ type IntakeCandidateDetail = {
   promotion: Record<string, unknown> | null;
 };
 
-type ConsoleView = "cases" | "intake";
+type CommitmentCandidate = {
+  candidate_commitment_id: string;
+  source_artifact_ref: string;
+  interpretation_ref: string;
+  evidence_span_refs: string[];
+  candidate_committer_identity: string;
+  candidate_action: string;
+  candidate_due_text: string | null;
+  candidate_due_at: string | null;
+  candidate_scope_ref: string | null;
+  candidate_beneficiary: string | null;
+  classification: string;
+  status: string;
+  created_at: string;
+};
+
+type CommitmentQueueItem = {
+  candidate: CommitmentCandidate;
+  resolution: Record<string, unknown> | null;
+  commitment: Record<string, unknown> | null;
+};
+
+type CommitmentDetail = CommitmentQueueItem;
+
+type ConsoleView = "cases" | "intake" | "commitments";
 
 const config = {
   apiBase: import.meta.env.VITE_OPERATIONS_API_BASE_URL || "http://127.0.0.1:8001",
@@ -122,6 +146,9 @@ let selectedId: string | null = null;
 let intakeQueue: IntakeQueueItem[] = [];
 let selectedCandidate: IntakeCandidateDetail | null = null;
 let selectedCandidateId: string | null = null;
+let commitmentQueue: CommitmentQueueItem[] = [];
+let selectedCommitment: CommitmentDetail | null = null;
+let selectedCommitmentId: string | null = null;
 let activeView: ConsoleView = "intake";
 let errorMessage = "";
 let busy = false;
@@ -135,7 +162,7 @@ async function init(): Promise<void> {
   }
   render();
   if (currentUser && !currentUser.expired) {
-    await Promise.all([loadQueue(), loadIntakeQueue()]);
+    await Promise.all([loadQueue(), loadIntakeQueue(), loadCommitmentQueue()]);
   }
 }
 
@@ -262,6 +289,113 @@ async function selectCandidate(candidateId: string): Promise<void> {
     );
   } catch (error) {
     selectedCandidate = null;
+    errorMessage = error instanceof Error ? error.message : String(error);
+  } finally {
+    busy = false;
+    render();
+  }
+}
+
+async function loadCommitmentQueue(): Promise<void> {
+  busy = true;
+  errorMessage = "";
+  render();
+  try {
+    commitmentQueue = await api<CommitmentQueueItem[]>(
+      "/v1/operations/commitments/candidates?status=active&limit=500",
+    );
+    if (
+      selectedCommitmentId &&
+      commitmentQueue.some((item) => item.candidate.candidate_commitment_id === selectedCommitmentId)
+    ) {
+      selectedCommitment = await api<CommitmentDetail>(
+        `/v1/operations/commitments/candidates/${selectedCommitmentId}`,
+      );
+    }
+  } catch (error) {
+    errorMessage = error instanceof Error ? error.message : String(error);
+  } finally {
+    busy = false;
+    render();
+  }
+}
+
+async function selectCommitment(candidateId: string): Promise<void> {
+  busy = true;
+  errorMessage = "";
+  selectedCommitmentId = candidateId;
+  render();
+  try {
+    selectedCommitment = await api<CommitmentDetail>(
+      `/v1/operations/commitments/candidates/${candidateId}`,
+    );
+  } catch (error) {
+    selectedCommitment = null;
+    errorMessage = error instanceof Error ? error.message : String(error);
+  } finally {
+    busy = false;
+    render();
+  }
+}
+
+async function resolveCommitmentSpeaker(): Promise<void> {
+  if (!selectedCommitmentId) return;
+  const externalSubject = root
+    .querySelector<HTMLInputElement>("#commitment-external-subject")
+    ?.value.trim();
+  const basisInput = root.querySelector<HTMLTextAreaElement>("#commitment-basis")?.value.trim() || "";
+  if (!externalSubject) {
+    errorMessage = "A verified Feishu external subject is required.";
+    render();
+    return;
+  }
+  let basis: Record<string, unknown> = {};
+  try {
+    basis = basisInput ? (JSON.parse(basisInput) as Record<string, unknown>) : { reviewed: true };
+  } catch {
+    errorMessage = "Speaker resolution basis must be valid JSON.";
+    render();
+    return;
+  }
+  busy = true;
+  errorMessage = "";
+  render();
+  try {
+    await api(`/v1/operations/commitments/candidates/${selectedCommitmentId}/resolve-speaker`, {
+      method: "POST",
+      body: JSON.stringify({ external_subject: externalSubject, provider: "feishu", basis }),
+    });
+    selectedCommitment = await api<CommitmentDetail>(
+      `/v1/operations/commitments/candidates/${selectedCommitmentId}`,
+    );
+    await loadCommitmentQueue();
+  } catch (error) {
+    errorMessage = error instanceof Error ? error.message : String(error);
+  } finally {
+    busy = false;
+    render();
+  }
+}
+
+async function confirmCommitment(): Promise<void> {
+  if (!selectedCommitmentId) return;
+  const dueAt = root.querySelector<HTMLInputElement>("#commitment-due-at")?.value;
+  const dueBasis = root.querySelector<HTMLInputElement>("#commitment-due-basis")?.value.trim();
+  if (!dueAt || !dueBasis) {
+    errorMessage = "Qualified due time and its basis are required.";
+    render();
+    return;
+  }
+  busy = true;
+  errorMessage = "";
+  render();
+  try {
+    await api(`/v1/operations/commitments/candidates/${selectedCommitmentId}/confirm`, {
+      method: "POST",
+      body: JSON.stringify({ qualified_due_at: new Date(dueAt).toISOString(), due_time_basis: dueBasis }),
+    });
+    await loadCommitmentQueue();
+  } catch (error) {
     errorMessage = error instanceof Error ? error.message : String(error);
   } finally {
     busy = false;
@@ -543,21 +677,90 @@ function renderIntakeDetail(detail: IntakeCandidateDetail): string {
     </div>`;
 }
 
+function renderCommitmentQueue(): string {
+  return `
+    <div class="panel-heading">
+      <div>
+        <h2>Meeting commitments</h2>
+        <p>Candidate-only transcript output. Identity and due time require human qualification.</p>
+      </div>
+      <button id="refresh-commitments" ${!busy ? "" : "disabled"}>Refresh</button>
+    </div>
+    <div class="queue">
+      ${
+        commitmentQueue
+          .map(
+            (item) => `
+              <button class="queue-item ${item.candidate.candidate_commitment_id === selectedCommitmentId ? "selected" : ""}" data-commitment-id="${escapeHtml(item.candidate.candidate_commitment_id)}">
+                <div class="queue-row"><strong>${escapeHtml(item.candidate.candidate_action)}</strong><span class="badge warn">${escapeHtml(item.candidate.classification)}</span></div>
+                <div class="muted">speaker: ${escapeHtml(item.candidate.candidate_committer_identity)} · ${escapeHtml(item.candidate.candidate_due_text || "due time unresolved")}</div>
+                <div class="muted">${escapeHtml(new Date(item.candidate.created_at).toLocaleString())}</div>
+              </button>`,
+          )
+          .join("") || `<div class="empty">No active meeting commitment candidates.</div>`
+      }
+    </div>`;
+}
+
+function renderCommitmentDetail(detail: CommitmentDetail): string {
+  const candidate = detail.candidate;
+  const resolved = Boolean(detail.resolution);
+  const admitted = Boolean(detail.commitment);
+  return `
+    <div class="detail-heading">
+      <div>
+        <div class="eyebrow">Candidate meeting commitment</div>
+        <h2>${escapeHtml(candidate.candidate_action)}</h2>
+        <div class="muted">${escapeHtml(candidate.candidate_commitment_id)} · ${escapeHtml(candidate.classification)}</div>
+      </div>
+      <span class="badge ${admitted ? "ok" : "warn"}">${admitted ? "admitted" : "candidate"}</span>
+    </div>
+    <div class="cards">
+      ${section("Candidate lineage", candidate)}
+      <article class="card">
+        <h3>Speaker qualification</h3>
+        <p class="muted">A transcript label is not a principal. Use an existing verified Feishu identity binding; ambiguity remains blocked.</p>
+        ${inputField("commitment-external-subject", "Feishu external subject", resolved ? String(detail.resolution?.external_subject ?? "") : "", "ou_xxx")}
+        <label for="commitment-basis">Resolution basis (JSON)</label>
+        <textarea id="commitment-basis" rows="4">${escapeHtml(JSON.stringify(detail.resolution ?? { reviewed: true }, null, 2))}</textarea>
+        <button id="resolve-commitment-speaker" ${busy || admitted ? "disabled" : ""}>Resolve speaker identity</button>
+      </article>
+      <article class="card">
+        <h3>Human admission</h3>
+        <p class="muted">Only explicit self commitments can be admitted. Confirmation creates policy, approval, governance, responsibility, and a fixed-template draft.</p>
+        ${inputField("commitment-due-basis", "Qualified due-time basis", candidate.candidate_due_text || "", "timezone and meeting context")}
+        <label class="field" for="commitment-due-at"><span>Qualified due time</span><input id="commitment-due-at" type="datetime-local" /></label>
+        <button id="confirm-commitment" ${busy || admitted || !resolved ? "disabled" : ""}>Confirm and admit commitment</button>
+      </article>
+      ${detail.commitment ? section("Commitment record", detail.commitment) : ""}
+      ${section("Speaker resolution", detail.resolution)}
+    </div>`;
+}
+
 function inputField(id: string, label: string, value: string, placeholder: string): string {
   return `<label class="field" for="${id}"><span>${escapeHtml(label)}</span><input id="${id}" value="${escapeHtml(value)}" placeholder="${escapeHtml(placeholder)}" /></label>`;
 }
 
 function render(): void {
   const authenticated = Boolean(currentUser && !currentUser.expired);
-  const queueMarkup = activeView === "intake" ? renderIntakeQueue() : renderCaseQueue();
+  const queueMarkup =
+    activeView === "intake"
+      ? renderIntakeQueue()
+      : activeView === "commitments"
+        ? renderCommitmentQueue()
+        : renderCaseQueue();
   const detailMarkup =
     activeView === "intake"
       ? selectedCandidate
         ? renderIntakeDetail(selectedCandidate)
         : `<div class="empty detail-empty">Select a candidate for human review.</div>`
-      : selected
-        ? renderDetail(selected)
-        : `<div class="empty detail-empty">Select an exception case.</div>`;
+      : activeView === "commitments"
+        ? selectedCommitment
+          ? renderCommitmentDetail(selectedCommitment)
+          : `<div class="empty detail-empty">Select a meeting commitment candidate.</div>`
+        : selected
+          ? renderDetail(selected)
+          : `<div class="empty detail-empty">Select an exception case.</div>`;
   root.innerHTML = `
     <header class="topbar">
       <div>
@@ -567,6 +770,7 @@ function render(): void {
       <div class="topbar-right">
         <nav class="view-tabs" aria-label="Operations surface">
           <button id="view-intake" class="${activeView === "intake" ? "active" : ""}" ${authenticated ? "" : "disabled"}>Intake review</button>
+          <button id="view-commitments" class="${activeView === "commitments" ? "active" : ""}" ${authenticated ? "" : "disabled"}>Meeting commitments</button>
           <button id="view-cases" class="${activeView === "cases" ? "active" : ""}" ${authenticated ? "" : "disabled"}>Exception cases</button>
         </nav>
         <div class="session">
@@ -592,14 +796,22 @@ function render(): void {
   root.querySelector<HTMLButtonElement>("#login")?.addEventListener("click", () => void login());
   root.querySelector<HTMLButtonElement>("#logout")?.addEventListener("click", () => void logout());
   root.querySelector<HTMLButtonElement>("#view-intake")?.addEventListener("click", () => switchView("intake"));
+  root.querySelector<HTMLButtonElement>("#view-commitments")?.addEventListener("click", () => switchView("commitments"));
   root.querySelector<HTMLButtonElement>("#view-cases")?.addEventListener("click", () => switchView("cases"));
   root.querySelector<HTMLButtonElement>("#refresh-cases")?.addEventListener("click", () => void loadQueue());
   root.querySelector<HTMLButtonElement>("#refresh-intake")?.addEventListener("click", () => void loadIntakeQueue());
+  root.querySelector<HTMLButtonElement>("#refresh-commitments")?.addEventListener("click", () => void loadCommitmentQueue());
   root.querySelector<HTMLButtonElement>("#save-intake-assessment")?.addEventListener("click", () =>
     void finalizeIntakeAssessment(),
   );
   root.querySelector<HTMLButtonElement>("#promote-intake-candidate")?.addEventListener("click", () =>
     void promoteIntakeCandidate(),
+  );
+  root.querySelector<HTMLButtonElement>("#resolve-commitment-speaker")?.addEventListener("click", () =>
+    void resolveCommitmentSpeaker(),
+  );
+  root.querySelector<HTMLButtonElement>("#confirm-commitment")?.addEventListener("click", () =>
+    void confirmCommitment(),
   );
   root.querySelector<HTMLButtonElement>("#authoritative-refresh")?.addEventListener("click", () =>
     void refreshAuthoritativeFacts(),
@@ -617,6 +829,12 @@ function render(): void {
     button.addEventListener("click", () => {
       const candidateId = button.dataset.candidateId;
       if (candidateId) void selectCandidate(candidateId);
+    });
+  });
+  root.querySelectorAll<HTMLButtonElement>("[data-commitment-id]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const candidateId = button.dataset.commitmentId;
+      if (candidateId) void selectCommitment(candidateId);
     });
   });
 }

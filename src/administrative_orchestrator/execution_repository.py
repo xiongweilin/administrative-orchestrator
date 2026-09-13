@@ -49,6 +49,11 @@ class ExecutionRepository:
             )
             return None if row is None else self._decision_from_row(row)
 
+    def get_authorization(self, authorization_id: UUID) -> ExecutionAuthorization | None:
+        with self.store.sessions() as db:
+            row = db.get(AuthorizationRow, authorization_id)
+            return None if row is None else self._authorization_from_row(row)
+
     def put_authorization(
         self,
         authorization: ExecutionAuthorization,

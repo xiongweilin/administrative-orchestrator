@@ -122,12 +122,23 @@ class FakeBridge:
                 captured_at=NOW,
             )
         )
+        self.prepare_calls = 0
+        self.retry_priority_rejection = False
 
     def recovery_client(self):
         return self._recovery
 
     def evidence_client(self):
         return self._evidence
+
+    def should_retry_priority_rejection(self, projection) -> bool:
+        del projection
+        return self.retry_priority_rejection
+
+    def prepare_effect(self, effect, payload):
+        del effect, payload
+        self.prepare_calls += 1
+        return self.repository.projection
 
 
 def _projection():
@@ -238,4 +249,22 @@ def test_rejected_work_admission_is_definitive_failure_and_never_falls_back() ->
     assert execution.status is ProviderExecutionStatus.FAILED
     assert execution.retryable is False
     assert "portfolio-rejected" in (execution.error or "")
+    assert legacy.execute_calls == 0
+
+
+def test_priority_rejection_reenters_kernel_prepare_only_after_policy_revision() -> None:
+    projection = _projection()
+    projection.status = KernelProjectionStatus.REJECTED
+    projection.kernel_work_admission_status = "priority-rejected"
+    projection.kernel_execution_status = None
+    projection.kernel_execution_ref = None
+    bridge = FakeBridge(projection, _resolution())
+    bridge.retry_priority_rejection = True
+    legacy = ForbiddenLegacyProvider()
+    provider = KernelCutoverEffectProvider(legacy, bridge)
+
+    execution = provider.execute(_effect(projection), {})
+
+    assert execution.status is ProviderExecutionStatus.FAILED
+    assert bridge.prepare_calls == 1
     assert legacy.execute_calls == 0

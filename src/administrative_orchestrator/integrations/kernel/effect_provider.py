@@ -54,10 +54,18 @@ class KernelCutoverEffectProvider:
         if not self._kernel_owned(effect):
             return self.fallback.execute(effect, payload)
         projection = self._projection(effect)
+        retry_priority_rejection = (
+            projection is not None
+            and getattr(
+                self.bridge,
+                "should_retry_priority_rejection",
+                lambda _projection: False,
+            )(projection)
+        )
         if projection is None or (
             projection.status is KernelProjectionStatus.ADMITTED
             and projection.kernel_execution_status is None
-        ):
+        ) or retry_priority_rejection:
             prepare_effect = getattr(self.bridge, "prepare_effect", None)
             if prepare_effect is not None:
                 try:
