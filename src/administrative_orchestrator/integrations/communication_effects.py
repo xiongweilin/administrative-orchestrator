@@ -142,10 +142,10 @@ class AdministrativeCommunicationEffectConnector:
                     "read_state": "unknown",
                 },
             )
-        except (httpx.HTTPError, ValueError, UnicodeError):
+        except (httpx.HTTPError, ValueError, UnicodeError) as exc:
             return ConnectorResult(
                 ConnectorStatus.UNKNOWN,
-                error_code="CommunicationTransportUnknown",
+                error_code=type(exc).__name__,
                 error_message="communication transport outcome is unknown",
             )
 
