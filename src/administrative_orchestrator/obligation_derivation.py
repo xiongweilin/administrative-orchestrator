@@ -5,9 +5,9 @@ from uuid import UUID
 from .authority import AuthorityRepository
 from .domain import AdministrativeCase
 from .financial_obligations import derive_financial_obligations
+from .obligations import AdministrativeObligationSet, ObligationError
 from .offboarding_obligations import derive_offboarding_obligations
 from .onboarding_obligations import derive_onboarding_obligations
-from .obligations import AdministrativeObligationSet, ObligationError
 from .policy import OffboardingPolicy, PolicyEvaluation
 
 
