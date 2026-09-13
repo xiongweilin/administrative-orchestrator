@@ -138,6 +138,9 @@ def responsibility_snapshot(
     obligation_set,
     completion: CompletionAssessment,
     projections,
+    *,
+    bridge_factory=KernelExecutionBridge,
+    discharge_service_factory=AdministrativeResponsibilityDischargeService,
 ) -> dict[str, Any]:
     if obligation_set is None:
         return {
@@ -156,7 +159,7 @@ def responsibility_snapshot(
 
     bridge = None
     if runtime.settings.kernel_bridge_mode != "disabled":
-        bridge = KernelExecutionBridge(
+        bridge = bridge_factory(
             runtime.store,
             settings=runtime.settings,
             require_responsibility_discharge=True,
@@ -169,7 +172,7 @@ def responsibility_snapshot(
             "completion_satisfied": completion.satisfied,
         }
 
-    service = AdministrativeResponsibilityDischargeService(runtime.store, bridge)
+    service = discharge_service_factory(runtime.store, bridge)
     try:
         handles = service.project_responsibility_set(case, obligation_set)
     except ResponsibilityDischargeBlocked as exc:
@@ -226,7 +229,12 @@ def responsibility_snapshot(
     }
 
 
-def assemble_case_detail(runtime: OperationsRuntime, case: AdministrativeCase, *, include_audit: bool) -> dict[str, Any]:
+def assemble_case_detail(
+    runtime: OperationsRuntime,
+    case: AdministrativeCase,
+    *,
+    include_audit: bool,
+) -> dict[str, Any]:
     obligation_set = runtime.obligations.get_current(case.case_id, case.authority_epoch)
     effects = runtime.execution.list_effects(case.case_id, case.authority_epoch)
     outcomes = runtime.execution.list_outcomes(case.case_id, case.authority_epoch)
