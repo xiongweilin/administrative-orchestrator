@@ -4,13 +4,14 @@ import hashlib
 import hmac
 import json
 import time
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 from uuid import UUID, uuid5
 
 import httpx
 
-from .commitment_common import CommitmentIntakeError, M9_NAMESPACE
+from .commitment_common import M9_NAMESPACE, CommitmentIntakeError
 from .commitment_models import (
     CommitmentRecord,
     CommunicationDeliveryState,
@@ -21,9 +22,9 @@ from .commitment_repository import CommitmentRepository
 from .config import Settings
 from .domain import AuthorityClass, EffectReversibility, utcnow
 from .execution_repository import ExecutionConflict, ExecutionRepository
+from .intake.artifacts import ArtifactStore
 from .integrations.kernel.bridge import KernelExecutionBridge
 from .integrations.kernel.effect_provider import KernelCutoverEffectProvider
-from .intake.artifacts import ArtifactStore
 from .obligations import (
     AdministrativeObligation,
     AdministrativeObligationSet,
