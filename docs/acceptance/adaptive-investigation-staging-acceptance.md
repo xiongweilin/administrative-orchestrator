@@ -5,11 +5,17 @@ not a production-provider or independent meta-controller deployment claim.
 
 Acceptance date: 2026-09-13, Asia/Shanghai
 
+This record describes the isolated staging run performed before PR #89 was
+merged. The run's source identity is preserved below; the implementation was
+subsequently merged into `main`.
+
 ## Deployment identity
 
-- Administrative base revision: `0864a99a841eadbb8849900b28e6421178c16b05`
-  (PR #87 merge; the staging image also contains the current uncommitted
-  Adaptive Investigation changes recorded in the working tree).
+- Staging source revision: `0864a99a841eadbb8849900b28e6421178c16b05`
+  (PR #87 merge plus the Adaptive Investigation changes present in the
+  staging working tree at acceptance time).
+- Post-acceptance merged main revision: `7fb328a4023133848f0b49bb77d27ad12b8bd03f`
+  (PR #89 squash merge).
 - Agent Kernel pin: `706cb3514c7edd030518f016a8f9b232b98f8166`.
 - Migration head: `0031_adaptive_investigation`.
 - Compose project: `administrative-staging-v1`.
@@ -115,6 +121,10 @@ read-back is claimed for this vertical.
   are therefore not claimed here.
 - No independent meta-controller deployment boundary was exercised; the real
   model route plus production-shaped adapter was exercised.
+- This recorded vertical does not claim the original plan's real provider
+  effect/read-back/recovery gate or an independently deployed meta-controller
+  gate. Repository tests separately cover durable investigation state across
+  service restart and commitment lineage on authorized reopen.
 - The four failed attempts are retained as failure evidence and were not
   rewritten or replayed under the successful investigation identity.
 - The M9 staging project remains a separate operational surface. Do not use

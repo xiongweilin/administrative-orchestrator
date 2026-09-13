@@ -11,6 +11,8 @@ import pytest
 from fastapi.testclient import TestClient
 from pydantic import SecretStr, ValidationError
 
+from administrative_orchestrator.commitment_models import CommitmentRecord
+from administrative_orchestrator.commitment_repository import CommitmentRepository
 from administrative_orchestrator.config import Settings
 from administrative_orchestrator.domain import (
     AdministrativeRequest,
@@ -477,6 +479,17 @@ def test_authorized_reopen_advances_epoch_once_and_preserves_old_effect(tmp_path
         authority_class=AuthorityClass.NORMAL,
     )
     ExecutionRepository(store).put_effect(old_effect)
+    commitment = CommitmentRecord(
+        candidate_ref=uuid4(),
+        case_id=case.case_id,
+        authority_epoch=case.authority_epoch,
+        committer_principal_id="person:operator",
+        committer_external_subject="external:operator",
+        commitment_action="review the reopened case",
+        due_at=utcnow() + timedelta(days=1),
+        due_time_basis="test",
+    )
+    CommitmentRepository(store).put_commitment(commitment)
 
     service = InvestigationService(store)
     investigation = service.request_investigation(
@@ -519,6 +532,7 @@ def test_authorized_reopen_advances_epoch_once_and_preserves_old_effect(tmp_path
     assert updated.status is CaseStatus.GATHERING_FACTS
     assert ExecutionRepository(store).get_effect(old_effect.effect_id) is not None
     assert record.affected_execution_authorization_refs == (str(old_authorization.authorization_id),)
+    assert record.affected_commitment_refs == (str(commitment.commitment_id),)
     assert len(service.repository.list_reopen_records(case.case_id)) == 1
     with pytest.raises(TransitionError, match="stale"):
         validate_execution_authorization(
@@ -671,6 +685,62 @@ def test_investigation_deadline_expires_before_advisory_call() -> None:
         service.repository.get_request(request.investigation_id).status
         is InvestigationStatus.EXPIRED
     )
+
+
+def test_investigation_state_survives_service_restart_and_reopen_replay(tmp_path: Path) -> None:
+    database_path = tmp_path / "investigation-restart.db"
+    first_store = _store(database_path)
+    case = _case(first_store, status=CaseStatus.COMPLETED)
+    first_service = InvestigationService(first_store, client=_DynamicClient())
+    request = first_service.request_investigation(
+        case.case_id,
+        trigger_type=InvestigationTriggerType.CONFLICTING_FACTS,
+        reason="durable restart test",
+        requested_question="does the new evidence require reopening?",
+        created_by="person:operator",
+        idempotency_key="restart-request",
+        evidence_refs=("evidence:restart",),
+    )
+    proposal = first_service.run(request.investigation_id)
+
+    second_service = InvestigationService(_store(database_path))
+    restored = second_service.repository.get_request(request.investigation_id)
+    assert restored is not None
+    assert restored.status is InvestigationStatus.PROPOSAL_RECORDED
+    assert second_service.repository.list_proposals(request.investigation_id)
+    assessment = second_service.assess_reopen(
+        request.investigation_id,
+        disposition=ReopenAssessmentDisposition.REOPEN_REQUIRED,
+        reason="the durable evidence changes the closure question",
+        evidence_refs=("evidence:restart",),
+        proposal_ref=proposal.proposal_id,
+        assessment_kind=ReopenAssessmentKind.HUMAN,
+        assessed_by="person:operator",
+        idempotency_key="restart-assessment",
+    )
+
+    third_service = InvestigationService(_store(database_path))
+    record, updated, created = third_service.authorize_reopen(
+        case.case_id,
+        assessment_id=assessment.assessment_id,
+        authorized_by="person:operator",
+        idempotency_key="restart-reopen",
+    )
+    replay_record, replay_case, replay_created = InvestigationService(
+        _store(database_path)
+    ).authorize_reopen(
+        case.case_id,
+        assessment_id=assessment.assessment_id,
+        authorized_by="person:operator",
+        idempotency_key="restart-reopen",
+    )
+
+    assert created is True
+    assert replay_created is False
+    assert updated.authority_epoch == case.authority_epoch + 1
+    assert replay_case.authority_epoch == updated.authority_epoch
+    assert replay_record.reopen_id == record.reopen_id
+    assert len(third_service.repository.list_reopen_records(case.case_id)) == 1
 
 
 def test_http_investigation_client_accepts_wrapped_proposal_and_file_token(
