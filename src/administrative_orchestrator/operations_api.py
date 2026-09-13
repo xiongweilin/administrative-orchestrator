@@ -1,371 +1,178 @@
 from __future__ import annotations
 
-from datetime import datetime
-from typing import Annotated, Any
-from uuid import UUID
+from fastapi import FastAPI, HTTPException
 
-from fastapi import FastAPI, HTTPException, Query, Request
-from pydantic import BaseModel, Field
-from sqlalchemy import select
-from sqlalchemy.exc import OperationalError
-
-from .access_policy import AccessDenied, AdministrativeAccessPolicy, AdministrativePermission
-from .admission import (
-    AdmissionConflict,
-    AdmissionRejected,
-    IntakeAssessmentService,
-    IntakePromotionService,
-)
-from .auth import AuthenticatedPrincipal, Authenticator
-from .authority import AuthorityError, AuthorityRepository, IdentityBinding
-from .authority_lifecycle import AuthorityLifecycleEvent, AuthorityLifecycleRepository
-from .candidate_admission import CandidateAdministrativeAdmissionService
-from .commitment_models import (
-    CandidateCommitment,
-    CandidateCommitmentStatus,
-    CommitmentRecord,
-    SpeakerPrincipalResolution,
-)
-from .commitment_repository import CommitmentConflict, CommitmentRepository
-from .commitment_service import CommitmentIntakeError, MeetingCommitmentService
-from .completion import CompletionAssessment, assess_administrative_completion
-from .config import get_settings
-from .conversation import ConversationMessageRow, ConversationRow
-from .domain import (
-    AdministrativeCase,
-    AdministrativeRequest,
-    CaseStatus,
-    FactAuthority,
-    FactSnapshot,
-    utcnow,
-)
-from .execution_repository import ExecutionRepository
-from .fact_acquisition import (
-    FactAcquisitionError,
-    build_hris_source,
-    merge_authoritative_offboarding_facts,
-    merge_authoritative_onboarding_facts,
-)
-from .fact_transitions import replace_facts_for_reevaluation
-from .financial import (
-    AdministrativeCaseEvidenceLink,
-    ExpenseFacts,
-    InvoiceFacts,
-    ProcurementFacts,
-    TransactionQualificationAssessment,
-    TransactionQualificationResult,
-    has_material_financial_revision,
-)
-from .financial_admission import (
-    CandidateExpenseAdmissionService,
-    CandidateInvoiceAPAdmissionService,
-    CandidateProcurementAdmissionService,
-)
-from .governance import GovernanceRepository
-from .inspection import list_authorizations, list_decisions, list_realizations
-from .intake.models import (
-    CandidateAdministrativeRequest,
-    CandidateStatus,
-    IntakeAssessment,
-    IntakeDisposition,
-    PromotionRecord,
-)
-from .intake.repository import AssessmentConflict, IntakeRepository
+from .access_policy import AccessDenied, AdministrativePermission
+from .admission import IntakeAssessmentService, IntakePromotionService
 from .integrations.kernel.bridge import KernelExecutionBridge
-from .integrations.kernel.client import KernelResponsibilityDischargeError
-from .integrations.kernel.recovery import HttpKernelRecoveryClient
-from .integrations.kernel.repository import KernelBridgeRepository
-from .investigation_client import InvestigationClientError, build_investigation_client
-from .investigation_models import (
-    InvestigationConstraints,
-    InvestigationProposal,
-    InvestigationTriggerType,
-    ReopenAssessmentDisposition,
-    ReopenAssessmentKind,
+from .operations import projection as _projection
+from .operations.administration import (
+    _apply_authoritative_refresh as _apply_authoritative_refresh_impl,
 )
-from .investigation_reconciliation import LocalKernelReconciliationVerifier
-from .investigation_repository import (
-    InvestigationBudgetExceeded,
-    InvestigationConflict,
-    InvestigationNotFound,
-    InvestigationRepository,
+from .operations.administration import build_administration_router
+from .operations.cases import build_case_router
+from .operations.commitments import build_commitment_router
+from .operations.intake import _admission_bridge as _admission_bridge_impl
+from .operations.intake import build_intake_router
+from .operations.investigations import build_investigation_router
+from .operations.models import (
+    BindIdentityBody,
+    CommitmentCancellationBody,
+    CommitmentCandidateQueueItem,
+    CommitmentConfirmationBody,
+    CommitmentDueRevisionBody,
+    CommitmentFulfillmentBody,
+    CommitmentSpeakerResolutionBody,
+    ExpireAuthorityBody,
+    FinancialDocumentRevisionBody,
+    IntakeAssessmentBody,
+    IntakeCandidateDetail,
+    IntakePromotionBody,
+    IntakePromotionResponse,
+    IntakeQueueItem,
+    InvestigationEvidenceBody,
+    InvestigationEvidenceRequestBody,
+    InvestigationProposalBody,
+    InvestigationRequestBody,
+    OutboxReplayResponse,
+    QualificationAssessmentBody,
+    QueueItem,
+    RefreshFactsResponse,
+    ReopenAssessmentBody,
+    ReopenCaseBody,
 )
-from .investigation_service import InvestigationService
-from .messaging import (
-    OutboxEventNotFailed,
-    OutboxEventNotFound,
-    replay_failed_outbox,
-)
-from .obligations import ObligationRepository
-from .offboarding_admission import CandidateOffboardingAdmissionService
-from .onboarding_admission import (
-    CandidateOnboardingAdmissionService,
-    OnboardingAdmissionError,
-)
-from .persistence import CaseRow, ConcurrencyConflict, SqlStore
-from .policy import OffboardingFacts, OnboardingFacts, PolicyEvaluation
-from .policy_plane import (
-    PolicyPlaneError,
-    PolicyRepository,
-    compile_expense_policy,
-    compile_invoice_ap_policy,
-    compile_offboarding_policy,
-    compile_onboarding_policy,
-    compile_procurement_policy,
-)
+from .operations.runtime import OperationsRuntime, build_operations_runtime
+from .operations.transactions import build_transaction_router
 from .production_readiness import (
     ProductionReadinessError,
     validate_kernel_runtime_compatibility,
 )
-from .responsibility_discharge import (
-    AdministrativeResponsibilityDischargeService,
-    ResponsibilityDischargeBlocked,
-)
-from .service import TransitionError, apply_policy_evaluation, start_policy_evaluation
-from .transaction_repository import TransactionRepository
-from .transfer import TransferRequirementRepository
-from .unit_of_work import AdministrativeUnitOfWork
+from .responsibility_discharge import AdministrativeResponsibilityDischargeService
 
 app = FastAPI(title="Administrative Operations API", version="0.3.0")
+_runtime: OperationsRuntime = build_operations_runtime()
 
-_settings = get_settings()
-_store = SqlStore(_settings.database_url)
-_authority = AuthorityRepository(_store)
-_access = AdministrativeAccessPolicy(_authority)
-_authenticator = Authenticator(_store, _settings)
-_lifecycle = AuthorityLifecycleRepository(_store)
-_execution = ExecutionRepository(_store)
-_governance = GovernanceRepository(_store)
-_obligations = ObligationRepository(_store)
-_policies = PolicyRepository(_store)
-_transactions = TransactionRepository(_store)
-_uow = AdministrativeUnitOfWork(_store)
-_intake = IntakeRepository(_store)
-_intake_assessments = IntakeAssessmentService(_intake)
-_intake_promotions = IntakePromotionService(_store, _intake)
-_commitments = CommitmentRepository(_store)
-_commitment_service = MeetingCommitmentService(
-    _store,
-    repository=_commitments,
-    authority=_authority,
-    uow=_uow,
-    policies=_policies,
-    settings=_settings,
-)
-_investigations = InvestigationRepository(_store)
-_kernel_reconciliation_verifier = LocalKernelReconciliationVerifier(
-    repository=KernelBridgeRepository(_store),
-    recovery_client=HttpKernelRecoveryClient(
-        _settings.kernel_base_url,
-        timeout_seconds=_settings.kernel_contract_timeout_seconds,
-    ),
-)
-_investigation_service = InvestigationService(
-    _store,
-    repository=_investigations,
-    client=build_investigation_client(_settings),
-    reconciliation_verifier=_kernel_reconciliation_verifier,
-)
-_CONVERSATION_SCHEMA = (ConversationRow, ConversationMessageRow)
-if _settings.auto_create_schema:
-    _store.init_schema()
+# Compatibility aliases for existing tests, operational probes, and local
+# tooling. Ownership and construction live in operations.runtime; these names
+# remain mutable because the pre-refactor module was an established test seam.
+_settings = _runtime.settings
+_store = _runtime.store
+_authority = _runtime.authority
+_access = _runtime.access
+_authenticator = _runtime.authenticator
+_lifecycle = _runtime.lifecycle
+_execution = _runtime.execution
+_governance = _runtime.governance
+_obligations = _runtime.obligations
+_policies = _runtime.policies
+_transactions = _runtime.transactions
+_uow = _runtime.uow
+_intake = _runtime.intake
+_intake_assessments = _runtime.intake_assessments
+_intake_promotions = _runtime.intake_promotions
+_commitments = _runtime.commitments
+_commitment_service = _runtime.commitment_service
+_investigations = _runtime.investigations
+_investigation_service = _runtime.investigation_service
 
 
-class QueueItem(BaseModel):
-    case_id: UUID
-    case_kind: str
-    status: CaseStatus
-    subject_ref: str
-    requester_principal_id: str
-    version: int
-    authority_epoch: int
-    updated_at: datetime
+class _CompatibilityRuntime:
+    """Resolve router collaborators through the legacy mutable module seam."""
+
+    @property
+    def settings(self):
+        return _settings
+
+    @property
+    def store(self):
+        return _store
+
+    @property
+    def authority(self):
+        return _authority
+
+    @property
+    def access(self):
+        return _access
+
+    @property
+    def authenticator(self):
+        return _authenticator
+
+    @property
+    def lifecycle(self):
+        return _lifecycle
+
+    @property
+    def execution(self):
+        return _execution
+
+    @property
+    def governance(self):
+        return _governance
+
+    @property
+    def obligations(self):
+        return _obligations
+
+    @property
+    def policies(self):
+        return _policies
+
+    @property
+    def transactions(self):
+        return _transactions
+
+    @property
+    def uow(self):
+        return _uow
+
+    @property
+    def intake(self):
+        return _intake
+
+    @property
+    def intake_assessments(self):
+        return _intake_assessments
+
+    @property
+    def intake_promotions(self):
+        return _intake_promotions
+
+    @property
+    def commitments(self):
+        return _commitments
+
+    @property
+    def commitment_service(self):
+        return _commitment_service
+
+    @property
+    def investigations(self):
+        return _investigations
+
+    @property
+    def investigation_service(self):
+        return _investigation_service
+
+    def actor(self, request):
+        return _actor(request)
+
+    def require(self, actor, permission, *, case=None) -> None:
+        _require(actor, permission, case=case)
+
+    def require_intake_review(self, actor) -> None:
+        _require_intake_review(actor)
 
 
-class RefreshFactsResponse(BaseModel):
-    case: AdministrativeCase
-    source: str
-    source_ref: str
-    source_version: str
-    source_digest: str
+_http_runtime = _CompatibilityRuntime()
 
 
-class BindIdentityBody(BaseModel):
-    provider: str = Field(min_length=1, max_length=255)
-    external_subject: str = Field(min_length=1, max_length=512)
-    principal_id: str = Field(min_length=1, max_length=255)
-    valid_from: datetime | None = None
-    valid_until: datetime | None = None
-    reason: str = Field(min_length=1, max_length=2000)
-
-
-class ReasonBody(BaseModel):
-    reason: str = Field(min_length=1, max_length=2000)
-
-
-class QualificationAssessmentBody(BaseModel):
-    assessment_kind: str = Field(min_length=1, max_length=128)
-    input_refs: tuple[str, ...] = Field(min_length=1)
-    rule_ref: str = Field(min_length=1, max_length=512)
-    result: TransactionQualificationResult
-    blocking_reasons: tuple[str, ...] = ()
-
-
-class FinancialDocumentRevisionBody(BaseModel):
-    facts: dict[str, Any]
-    source_ref: str = Field(min_length=1, max_length=1000)
-    source_version: str = Field(min_length=1, max_length=256)
-    artifact_ref: UUID | None = None
-    representation_ref: UUID | None = None
-    declared_role: str = Field(default="material-revision", min_length=1, max_length=128)
-
-
-class OutboxReplayResponse(BaseModel):
-    event_id: UUID
-    status: str
-    attempts: int
-    audit_id: UUID
-
-
-class ExpireAuthorityBody(BaseModel):
-    reason: str = Field(min_length=1, max_length=2000)
-    at: datetime | None = None
-
-
-class IntakeQueueItem(BaseModel):
-    candidate_id: UUID
-    conversation_ref: str
-    candidate_requester: str
-    candidate_intent: str
-    status: CandidateStatus
-    created_at: datetime
-    latest_assessment: IntakeAssessment | None = None
-
-
-class IntakeCandidateDetail(BaseModel):
-    candidate: CandidateAdministrativeRequest
-    assessments: list[IntakeAssessment]
-    promotion: PromotionRecord | None = None
-
-
-class IntakeAssessmentBody(BaseModel):
-    disposition: IntakeDisposition
-    basis: dict[str, Any] = Field(default_factory=dict)
-
-
-class IntakePromotionBody(BaseModel):
-    assessment_id: UUID
-    source_system: str = Field(min_length=1, max_length=128)
-    tenant_ref: str = Field(min_length=1, max_length=512)
-    source_event_id: str = Field(min_length=1, max_length=512)
-    requester_principal_id: str = Field(min_length=1, max_length=255)
-    channel: str = Field(default="intake", min_length=1, max_length=64)
-    case_kind: str = Field(default="intake", min_length=1, max_length=128)
-    subject_ref: str | None = Field(default=None, max_length=512)
-    bridge_to_m5: bool = False
-    bridge_to_m8: bool = False
-    promotion_policy_ref: str = Field(
-        default="m6-human-confirmed-v1", min_length=1, max_length=512
-    )
-
-
-class IntakePromotionResponse(BaseModel):
-    promotion: PromotionRecord
-    request: AdministrativeRequest
-    case: AdministrativeCase
-    created: bool
-    policy_evaluation: PolicyEvaluation | None = None
-
-
-class CommitmentSpeakerResolutionBody(BaseModel):
-    external_subject: str = Field(min_length=1, max_length=1000)
-    provider: str = Field(default="feishu", min_length=1, max_length=128)
-    basis: dict[str, Any] = Field(min_length=1)
-
-
-class CommitmentConfirmationBody(BaseModel):
-    qualified_due_at: datetime
-    due_time_basis: str = Field(min_length=1, max_length=512)
-
-
-class CommitmentFulfillmentBody(BaseModel):
-    basis: dict[str, Any] = Field(min_length=1)
-
-
-class CommitmentDueRevisionBody(BaseModel):
-    due_at: datetime
-    basis: str = Field(min_length=1, max_length=512)
-
-
-class CommitmentCancellationBody(BaseModel):
-    basis: str = Field(min_length=1, max_length=2000)
-
-
-class CommitmentCandidateQueueItem(BaseModel):
-    candidate: CandidateCommitment
-    resolution: SpeakerPrincipalResolution | None = None
-    commitment: CommitmentRecord | None = None
-
-
-class InvestigationRequestBody(BaseModel):
-    trigger: InvestigationTriggerType
-    reason: str = Field(min_length=1, max_length=2000)
-    requested_question: str = Field(min_length=1, max_length=4000)
-    evidence_refs: tuple[str, ...] = ()
-    allowed_evidence_refs: tuple[str, ...] = ()
-    constraints: InvestigationConstraints = Field(default_factory=InvestigationConstraints)
-    source_type: str = Field(default="administrative", min_length=1, max_length=128)
-    reconciliation_ref: str | None = Field(default=None, max_length=512)
-    idempotency_key: str = Field(min_length=1, max_length=512)
-
-
-class InvestigationEvidenceRequestBody(BaseModel):
-    source_kind: str = Field(min_length=1, max_length=128)
-    requested_question: str = Field(min_length=1, max_length=4000)
-    allowed_evidence_refs: tuple[str, ...] = ()
-    idempotency_key: str = Field(min_length=1, max_length=512)
-
-
-class InvestigationEvidenceBody(BaseModel):
-    evidence_request_id: UUID | None = None
-    evidence_ref: str = Field(min_length=1, max_length=1000)
-    source_kind: str = Field(min_length=1, max_length=128)
-    source: str = Field(min_length=1, max_length=512)
-    owner: str = Field(min_length=1, max_length=255)
-    source_ref: str | None = Field(default=None, max_length=1000)
-    source_version: str | None = Field(default=None, max_length=256)
-    digest: str | None = Field(default=None, max_length=128)
-    idempotency_key: str = Field(min_length=1, max_length=512)
-
-
-class InvestigationProposalBody(BaseModel):
-    proposal: InvestigationProposal
-
-
-class ReopenAssessmentBody(BaseModel):
-    investigation_id: UUID
-    disposition: ReopenAssessmentDisposition
-    reason: str = Field(min_length=1, max_length=4000)
-    evidence_refs: tuple[str, ...] = ()
-    proposal_ref: UUID | None = None
-    idempotency_key: str = Field(min_length=1, max_length=512)
-
-
-class ReopenCaseBody(BaseModel):
-    assessment_id: UUID
-    idempotency_key: str = Field(min_length=1, max_length=512)
-
-
-def _actor(request: Request) -> AuthenticatedPrincipal:
+def _actor(request):
     return _authenticator.authenticate(request)
 
 
-def _require(
-    actor: AuthenticatedPrincipal,
-    permission: AdministrativePermission,
-    *,
-    case: AdministrativeCase | None = None,
-) -> None:
+def _require(actor, permission, *, case=None) -> None:
     try:
         _access.require(
             actor.principal_id,
@@ -377,16 +184,42 @@ def _require(
         raise HTTPException(status_code=403, detail=str(exc)) from exc
 
 
-def _require_intake_review(actor: AuthenticatedPrincipal) -> None:
+def _require_intake_review(actor) -> None:
     _require(actor, AdministrativePermission.INTAKE_REVIEW)
 
 
-@app.get("/healthz")
-def healthz() -> dict[str, str]:
-    return {"status": "ok"}
+# Preserve helper names previously defined by operations_api.py without
+# keeping their implementation in the HTTP composition root.
+_case_completion_assessment = _projection.case_completion_assessment
+_dedupe_json_records = _projection.dedupe_json_records
+_kernel_projection_snapshot = _projection.kernel_projection_snapshot
+_termination_snapshot = _projection.termination_snapshot
 
 
-@app.get("/readyz")
+def _authority_snapshot(case):
+    return _projection.authority_snapshot(_http_runtime, case)
+
+
+def _responsibility_snapshot(case, obligation_set, completion, projections):
+    return _projection.responsibility_snapshot(
+        _http_runtime,
+        case,
+        obligation_set,
+        completion,
+        projections,
+        bridge_factory=KernelExecutionBridge,
+        discharge_service_factory=AdministrativeResponsibilityDischargeService,
+    )
+
+
+def _apply_authoritative_refresh(case, record):
+    return _apply_authoritative_refresh_impl(_http_runtime, case, record)
+
+
+def _admission_bridge(case_kind):
+    return _admission_bridge_impl(_http_runtime, case_kind)
+
+
 def readyz() -> dict[str, str]:
     if (
         _settings.runtime_profile in {"staging", "production"}
@@ -414,1322 +247,183 @@ def readyz() -> dict[str, str]:
     }
 
 
-@app.get("/v1/operations/cases", response_model=list[QueueItem])
-def case_queue(
-    request: Request,
-    status_filter: Annotated[list[CaseStatus] | None, Query(alias="status")] = None,
-    limit: Annotated[int, Query(ge=1, le=1000)] = 200,
-) -> list[QueueItem]:
-    actor = _actor(request)
-    _require(actor, AdministrativePermission.OPERATIONS_READ)
-    with _store.sessions() as db:
-        statement = select(CaseRow).order_by(CaseRow.updated_at.desc()).limit(limit)
-        if status_filter:
-            statement = statement.where(CaseRow.status.in_([item.value for item in status_filter]))
-        rows = db.execute(statement).scalars().all()
-    return [
-        QueueItem(
-            case_id=row.case_id,
-            case_kind=row.case_kind,
-            status=CaseStatus(row.status),
-            subject_ref=row.subject_ref,
-            requester_principal_id=row.requester_principal_id,
-            version=row.version,
-            authority_epoch=row.authority_epoch,
-            updated_at=row.updated_at,
-        )
-        for row in rows
-    ]
+_case_router = build_case_router(_http_runtime)
+_investigation_router = build_investigation_router(_http_runtime)
+_transaction_router = build_transaction_router(_http_runtime)
+_intake_router = build_intake_router(_http_runtime)
+_commitment_router = build_commitment_router(_http_runtime)
+_administration_router = build_administration_router(_http_runtime)
+
+app.include_router(_case_router)
+app.include_router(_investigation_router)
+app.include_router(_transaction_router)
+app.include_router(_intake_router)
+app.include_router(_commitment_router)
+app.include_router(_administration_router)
 
 
-@app.get("/v1/operations/cases/{case_id}")
-def case_detail(case_id: UUID, request: Request) -> dict:
-    actor = _actor(request)
-    case = _store.get_case(case_id)
-    if case is None:
-        raise HTTPException(status_code=404, detail="case not found")
-    _require(actor, AdministrativePermission.OPERATIONS_READ)
-
-    obligation_set = _obligations.get_current(case.case_id, case.authority_epoch)
-    effects = _execution.list_effects(case.case_id, case.authority_epoch)
-    outcomes = _execution.list_outcomes(case.case_id, case.authority_epoch)
-    realizations = _execution.list_realizations(case.case_id, case.authority_epoch)
-    links = _obligations.list_links(case.case_id, case.authority_epoch)
-    fulfillments = _obligations.list_domain_state_fulfillments(
-        case.case_id, case.authority_epoch
-    )
-    completion = _case_completion_assessment(
-        obligation_set,
-        effects,
-        outcomes,
-        realizations=realizations,
-        links=links,
-        fulfillments=fulfillments,
-    )
-    projections = KernelBridgeRepository(_store).list_projections_for_case(case.case_id)
-    transfers = TransferRequirementRepository(_store).list_for_case(
-        case.case_id, case.authority_epoch
-    )
-    authority = _authority_snapshot(case)
-    audit = None
-    if _access.allows(actor.principal_id, AdministrativePermission.AUDIT_READ, case=case):
-        audit = _store.list_audit_events(case.case_id)
-    commitment = None
-    communications = []
-    try:
-        commitment_repository = CommitmentRepository(_store)
-        commitment = commitment_repository.get_commitment(case.case_id)
-        communications = commitment_repository.list_communications(case.case_id)
-    except OperationalError:
-        # M9 tables are introduced by the M9 migration.  Keep pre-M9 read-only
-        # case inspection compatible with an older test or rollback database.
-        commitment = None
-        communications = []
-    investigations = []
-    reopen_history = []
-    try:
-        investigations = _investigation_service.repository.list_requests(case.case_id)
-        reopen_history = _investigation_service.repository.list_reopen_records(case.case_id)
-    except OperationalError:
-        # The adaptive investigation tables are introduced by the next
-        # migration; older read-only databases remain inspectable.
-        investigations = []
-        reopen_history = []
-    return {
-        "case": case.model_dump(mode="json"),
-        "commitment": commitment.model_dump(mode="json") if commitment is not None else None,
-        "communications": [item.model_dump(mode="json") for item in communications],
-        "policy": (
-            evaluation.model_dump(mode="json")
-            if (evaluation := _store.get_latest_policy_evaluation(case.case_id)) is not None
-            else None
-        ),
-        "governance": (
-            basis.model_dump(mode="json")
-            if (basis := _governance.get_current_for_case(case.case_id, case.authority_epoch))
-            is not None
-            else None
-        ),
-        "obligations": obligation_set.model_dump(mode="json") if obligation_set else None,
-        "effects": [item.model_dump(mode="json") for item in effects],
-        "realizations": [
-            item.model_dump(mode="json") for item in list_realizations(_store, case.case_id)
-        ],
-        "outcomes": [item.model_dump(mode="json") for item in outcomes],
-        "decisions": [
-            item.model_dump(mode="json") for item in list_decisions(_store, case.case_id)
-        ],
-        "authorizations": [
-            item.model_dump(mode="json") for item in list_authorizations(_store, case.case_id)
-        ],
-        "termination": _termination_snapshot(case),
-        "authority": authority,
-        "transfers": [item.model_dump(mode="json") for item in transfers],
-        "domain_fulfillments": [item.model_dump(mode="json") for item in fulfillments],
-        "evidence_links": [
-            item.model_dump(mode="json")
-            for item in _transactions.list_evidence_links(case.case_id, case.authority_epoch)
-        ],
-        "qualification_assessments": [
-            item.model_dump(mode="json")
-            for item in _transactions.list_assessments(case.case_id, case.authority_epoch)
-        ],
-        "completion_assessment": completion.model_dump(mode="json"),
-        "kernel_projections": [_kernel_projection_snapshot(item) for item in projections],
-        "responsibility_discharge": _responsibility_snapshot(
-            case,
-            obligation_set,
-            completion,
-            projections,
-        ),
-        "investigations": [
-            item.model_dump(mode="json") for item in investigations
-        ],
-        "reopen_history": [
-            item.model_dump(mode="json") for item in reopen_history
-        ],
-        "audit": audit,
-    }
+def _endpoint(router, path: str, method: str):
+    method = method.upper()
+    for route in router.routes:
+        methods = getattr(route, "methods", None) or set()
+        if getattr(route, "path", None) == path and method in methods:
+            endpoint = getattr(route, "endpoint", None)
+            if endpoint is not None:
+                return endpoint
+    raise RuntimeError(f"operations route {method} {path!r} is unavailable")
 
 
-@app.post("/v1/operations/cases/{case_id}/investigations")
-def request_case_investigation(
-    case_id: UUID,
-    payload: InvestigationRequestBody,
-    request: Request,
-) -> dict[str, Any]:
-    actor = _actor(request)
-    case = _store.get_case(case_id)
-    if case is None:
-        raise HTTPException(status_code=404, detail="case not found")
-    _require(actor, AdministrativePermission.INVESTIGATION_REQUEST, case=case)
-    try:
-        investigation = _investigation_service.request_investigation(
-            case_id,
-            trigger_type=payload.trigger,
-            reason=payload.reason,
-            requested_question=payload.requested_question,
-            created_by=actor.principal_id,
-            idempotency_key=payload.idempotency_key,
-            evidence_refs=payload.evidence_refs,
-            allowed_evidence_refs=payload.allowed_evidence_refs,
-            constraints=payload.constraints,
-            source_type=payload.source_type,
-            reconciliation_ref=payload.reconciliation_ref,
-        )
-    except (InvestigationConflict, InvestigationBudgetExceeded, ValueError) as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    return {"investigation": investigation.model_dump(mode="json")}
-
-
-@app.get("/v1/operations/cases/{case_id}/investigations")
-def list_case_investigations(case_id: UUID, request: Request) -> list[dict[str, Any]]:
-    actor = _actor(request)
-    case = _store.get_case(case_id)
-    if case is None:
-        raise HTTPException(status_code=404, detail="case not found")
-    _require(actor, AdministrativePermission.INVESTIGATION_READ, case=case)
-    return [
-        item.model_dump(mode="json")
-        for item in _investigation_service.repository.list_requests(case_id)
-    ]
-
-
-@app.get("/v1/operations/investigations/{investigation_id}")
-def investigation_detail(investigation_id: UUID, request: Request) -> dict[str, Any]:
-    actor = _actor(request)
-    investigation = _investigation_service.repository.get_request(investigation_id)
-    if investigation is None:
-        raise HTTPException(status_code=404, detail="investigation not found")
-    case = _store.get_case(investigation.case_id)
-    if case is None:
-        raise HTTPException(status_code=404, detail="case not found")
-    _require(actor, AdministrativePermission.INVESTIGATION_READ, case=case)
-    return _investigation_service.detail(investigation_id)
-
-
-@app.post("/v1/operations/investigations/{investigation_id}/run")
-def run_investigation(investigation_id: UUID, request: Request) -> dict[str, Any]:
-    actor = _actor(request)
-    investigation = _investigation_service.repository.get_request(investigation_id)
-    if investigation is None:
-        raise HTTPException(status_code=404, detail="investigation not found")
-    case = _store.get_case(investigation.case_id)
-    if case is None:
-        raise HTTPException(status_code=404, detail="case not found")
-    _require(actor, AdministrativePermission.INVESTIGATION_REVIEW, case=case)
-    try:
-        proposal = _investigation_service.run(investigation_id)
-    except InvestigationNotFound as exc:
-        raise HTTPException(status_code=404, detail="investigation not found") from exc
-    except InvestigationClientError as exc:
-        raise HTTPException(status_code=503, detail="investigation advisory unavailable") from exc
-    except (InvestigationConflict, InvestigationBudgetExceeded, ValueError) as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    return {"proposal": proposal.model_dump(mode="json")}
-
-
-@app.post("/v1/operations/investigations/{investigation_id}/proposals")
-def record_investigation_proposal(
-    investigation_id: UUID,
-    payload: InvestigationProposalBody,
-    request: Request,
-) -> dict[str, Any]:
-    actor = _actor(request)
-    investigation = _investigation_service.repository.get_request(investigation_id)
-    if investigation is None:
-        raise HTTPException(status_code=404, detail="investigation not found")
-    case = _store.get_case(investigation.case_id)
-    if case is None:
-        raise HTTPException(status_code=404, detail="case not found")
-    _require(actor, AdministrativePermission.INVESTIGATION_REVIEW, case=case)
-    if payload.proposal.investigation_id != investigation_id:
-        raise HTTPException(status_code=409, detail="proposal investigation identity mismatch")
-    try:
-        proposal = _investigation_service.record_proposal(payload.proposal)
-    except (InvestigationConflict, InvestigationBudgetExceeded, ValueError) as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    return {"proposal": proposal.model_dump(mode="json")}
-
-
-@app.post("/v1/operations/investigations/{investigation_id}/evidence-requests")
-def request_investigation_evidence(
-    investigation_id: UUID,
-    payload: InvestigationEvidenceRequestBody,
-    request: Request,
-) -> dict[str, Any]:
-    actor = _actor(request)
-    investigation = _investigation_service.repository.get_request(investigation_id)
-    if investigation is None:
-        raise HTTPException(status_code=404, detail="investigation not found")
-    case = _store.get_case(investigation.case_id)
-    if case is None:
-        raise HTTPException(status_code=404, detail="case not found")
-    _require(actor, AdministrativePermission.INVESTIGATION_REVIEW, case=case)
-    try:
-        item = _investigation_service.request_evidence(
-            investigation_id,
-            source_kind=payload.source_kind,
-            requested_question=payload.requested_question,
-            requested_by=actor.principal_id,
-            idempotency_key=payload.idempotency_key,
-            allowed_evidence_refs=payload.allowed_evidence_refs,
-        )
-    except (InvestigationConflict, InvestigationBudgetExceeded, ValueError) as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    return {"evidence_request": item.model_dump(mode="json")}
-
-
-@app.post("/v1/operations/investigations/{investigation_id}/evidence")
-def add_investigation_evidence(
-    investigation_id: UUID,
-    payload: InvestigationEvidenceBody,
-    request: Request,
-) -> dict[str, Any]:
-    actor = _actor(request)
-    investigation = _investigation_service.repository.get_request(investigation_id)
-    if investigation is None:
-        raise HTTPException(status_code=404, detail="investigation not found")
-    case = _store.get_case(investigation.case_id)
-    if case is None:
-        raise HTTPException(status_code=404, detail="case not found")
-    _require(actor, AdministrativePermission.INVESTIGATION_REVIEW, case=case)
-    try:
-        item = _investigation_service.add_evidence(
-            investigation_id,
-            evidence_request_id=payload.evidence_request_id,
-            evidence_ref=payload.evidence_ref,
-            source_kind=payload.source_kind,
-            source=payload.source,
-            owner=payload.owner,
-            source_ref=payload.source_ref,
-            source_version=payload.source_version,
-            digest=payload.digest,
-            added_by=actor.principal_id,
-            idempotency_key=payload.idempotency_key,
-        )
-    except (InvestigationConflict, InvestigationBudgetExceeded, ValueError) as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    return {"evidence": item.model_dump(mode="json")}
-
-
-@app.post("/v1/operations/investigations/{investigation_id}/human-assessment")
-def assess_investigation_reopen(
-    investigation_id: UUID,
-    payload: ReopenAssessmentBody,
-    request: Request,
-) -> dict[str, Any]:
-    actor = _actor(request)
-    investigation = _investigation_service.repository.get_request(investigation_id)
-    if investigation is None:
-        raise HTTPException(status_code=404, detail="investigation not found")
-    case = _store.get_case(investigation.case_id)
-    if case is None:
-        raise HTTPException(status_code=404, detail="case not found")
-    _require(actor, AdministrativePermission.INVESTIGATION_REVIEW, case=case)
-    if payload.investigation_id != investigation_id:
-        raise HTTPException(status_code=409, detail="assessment investigation identity mismatch")
-    try:
-        assessment = _investigation_service.assess_reopen(
-            investigation_id,
-            disposition=payload.disposition,
-            reason=payload.reason,
-            evidence_refs=payload.evidence_refs,
-            proposal_ref=payload.proposal_ref,
-            assessment_kind=ReopenAssessmentKind.HUMAN,
-            assessed_by=actor.principal_id,
-            idempotency_key=payload.idempotency_key,
-        )
-    except (InvestigationConflict, InvestigationBudgetExceeded, ValueError) as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    return {"assessment": assessment.model_dump(mode="json")}
-
-
-@app.post("/v1/operations/cases/{case_id}/reopen-assessments")
-def assess_case_reopen(
-    case_id: UUID,
-    payload: ReopenAssessmentBody,
-    request: Request,
-) -> dict[str, Any]:
-    actor = _actor(request)
-    case = _store.get_case(case_id)
-    if case is None:
-        raise HTTPException(status_code=404, detail="case not found")
-    _require(actor, AdministrativePermission.INVESTIGATION_REVIEW, case=case)
-    investigation = _investigation_service.repository.get_request(payload.investigation_id)
-    if investigation is None or investigation.case_id != case_id:
-        raise HTTPException(status_code=404, detail="investigation not found for case")
-    try:
-        assessment = _investigation_service.assess_reopen(
-            payload.investigation_id,
-            disposition=payload.disposition,
-            reason=payload.reason,
-            evidence_refs=payload.evidence_refs,
-            proposal_ref=payload.proposal_ref,
-            assessment_kind=ReopenAssessmentKind.HUMAN,
-            assessed_by=actor.principal_id,
-            idempotency_key=payload.idempotency_key,
-        )
-    except (InvestigationConflict, InvestigationBudgetExceeded, ValueError) as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    return {"assessment": assessment.model_dump(mode="json")}
-
-
-@app.post("/v1/operations/cases/{case_id}/reopen")
-def authorize_case_reopen(
-    case_id: UUID,
-    payload: ReopenCaseBody,
-    request: Request,
-) -> dict[str, Any]:
-    actor = _actor(request)
-    case = _store.get_case(case_id)
-    if case is None:
-        raise HTTPException(status_code=404, detail="case not found")
-    _require(actor, AdministrativePermission.REOPEN_AUTHORIZE, case=case)
-    try:
-        record, updated, created = _investigation_service.authorize_reopen(
-            case_id,
-            assessment_id=payload.assessment_id,
-            authorized_by=actor.principal_id,
-            idempotency_key=payload.idempotency_key,
-        )
-    except InvestigationNotFound as exc:
-        raise HTTPException(status_code=404, detail="reopen assessment not found") from exc
-    except (InvestigationConflict, ConcurrencyConflict, ValueError) as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    return {
-        "reopen": record.model_dump(mode="json"),
-        "case": updated.model_dump(mode="json"),
-        "created": created,
-    }
-
-
-@app.get("/v1/operations/cases/{case_id}/reopen-history")
-def case_reopen_history(case_id: UUID, request: Request) -> list[dict[str, Any]]:
-    actor = _actor(request)
-    case = _store.get_case(case_id)
-    if case is None:
-        raise HTTPException(status_code=404, detail="case not found")
-    _require(actor, AdministrativePermission.INVESTIGATION_READ, case=case)
-    return [
-        item.model_dump(mode="json")
-        for item in _investigation_service.repository.list_reopen_records(case_id)
-    ]
-
-
-@app.post(
+# The old module exposed its route functions directly. Bind those names from
+# the source APIRouters before FastAPI copies their route registrations.
+healthz = _endpoint(_case_router, "/healthz", "GET")
+case_queue = _endpoint(_case_router, "/v1/operations/cases", "GET")
+case_detail = _endpoint(_case_router, "/v1/operations/cases/{case_id}", "GET")
+request_case_investigation = _endpoint(
+    _investigation_router, "/v1/operations/cases/{case_id}/investigations", "POST"
+)
+list_case_investigations = _endpoint(
+    _investigation_router, "/v1/operations/cases/{case_id}/investigations", "GET"
+)
+investigation_detail = _endpoint(
+    _investigation_router, "/v1/operations/investigations/{investigation_id}", "GET"
+)
+run_investigation = _endpoint(
+    _investigation_router, "/v1/operations/investigations/{investigation_id}/run", "POST"
+)
+record_investigation_proposal = _endpoint(
+    _investigation_router,
+    "/v1/operations/investigations/{investigation_id}/proposals",
+    "POST",
+)
+request_investigation_evidence = _endpoint(
+    _investigation_router,
+    "/v1/operations/investigations/{investigation_id}/evidence-requests",
+    "POST",
+)
+add_investigation_evidence = _endpoint(
+    _investigation_router,
+    "/v1/operations/investigations/{investigation_id}/evidence",
+    "POST",
+)
+assess_investigation_reopen = _endpoint(
+    _investigation_router,
+    "/v1/operations/investigations/{investigation_id}/human-assessment",
+    "POST",
+)
+assess_case_reopen = _endpoint(
+    _investigation_router, "/v1/operations/cases/{case_id}/reopen-assessments", "POST"
+)
+authorize_case_reopen = _endpoint(
+    _investigation_router, "/v1/operations/cases/{case_id}/reopen", "POST"
+)
+case_reopen_history = _endpoint(
+    _investigation_router, "/v1/operations/cases/{case_id}/reopen-history", "GET"
+)
+append_qualification_assessment = _endpoint(
+    _transaction_router,
     "/v1/operations/cases/{case_id}/qualification-assessments",
-    response_model=TransactionQualificationAssessment,
+    "POST",
 )
-def append_qualification_assessment(
-    case_id: UUID,
-    payload: QualificationAssessmentBody,
-    request: Request,
-) -> TransactionQualificationAssessment:
-    actor = _actor(request)
-    case = _store.get_case(case_id)
-    if case is None:
-        raise HTTPException(status_code=404, detail="case not found")
-    if case.case_kind not in {
-        "procurement-request",
-        "invoice-ap-preparation",
-        "expense-reimbursement",
-    }:
-        raise HTTPException(status_code=409, detail="case kind is not a transaction case")
-    _require(actor, AdministrativePermission.FACTS_ATTEST, case=case)
-    assessment = TransactionQualificationAssessment(
-        case_id=case.case_id,
-        authority_epoch=case.authority_epoch,
-        assessment_kind=payload.assessment_kind,
-        input_refs=payload.input_refs,
-        rule_ref=payload.rule_ref,
-        result=payload.result,
-        blocking_reasons=payload.blocking_reasons,
-    )
-    return _transactions.append_assessment(assessment)
-
-
-@app.post(
-    "/v1/operations/cases/{case_id}/document-revision",
-    response_model=AdministrativeCase,
+apply_financial_document_revision = _endpoint(
+    _transaction_router, "/v1/operations/cases/{case_id}/document-revision", "POST"
 )
-def apply_financial_document_revision(
-    case_id: UUID,
-    payload: FinancialDocumentRevisionBody,
-    request: Request,
-) -> AdministrativeCase:
-    """Invalidate the current financial governance world for a new document revision."""
-
-    actor = _actor(request)
-    case = _store.get_case(case_id)
-    if case is None:
-        raise HTTPException(status_code=404, detail="case not found")
-    if case.case_kind not in {
-        "procurement-request",
-        "invoice-ap-preparation",
-        "expense-reimbursement",
-    }:
-        raise HTTPException(status_code=409, detail="case kind is not a transaction case")
-    _require(actor, AdministrativePermission.FACTS_ATTEST, case=case)
-    if case.fact_snapshot is None:
-        raise HTTPException(status_code=409, detail="case has no current document facts")
-    if case.status in {CaseStatus.COMPLETED, CaseStatus.CANCELLED}:
-        raise HTTPException(status_code=409, detail="terminal case cannot accept a document revision")
-
-    typed_facts: Any
-    if case.case_kind == "procurement-request":
-        typed_facts = ProcurementFacts.model_validate(payload.facts)
-    elif case.case_kind == "invoice-ap-preparation":
-        typed_facts = InvoiceFacts.model_validate(payload.facts)
-    else:
-        typed_facts = ExpenseFacts.model_validate(payload.facts)
-    facts = typed_facts.model_dump(mode="json")
-    try:
-        material = has_material_financial_revision(
-            case.case_kind,
-            case.fact_snapshot.facts,
-            facts,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    if not material:
-        raise HTTPException(status_code=409, detail="document revision has no material financial change")
-
-    snapshot = FactSnapshot(
-        source=f"document-revision:{actor.principal_id}",
-        owner=actor.principal_id,
-        authority=FactAuthority.CLAIM,
-        source_ref=payload.source_ref,
-        source_version=payload.source_version,
-        facts=facts,
-    )
-    changed = replace_facts_for_reevaluation(case, snapshot)
-    try:
-        policy_record = _policies.resolve_current(
-            {
-                "procurement-request": "procurement-request",
-                "invoice-ap-preparation": "invoice-ap-preparation",
-                "expense-reimbursement": "expense-reimbursement",
-            }[case.case_kind]
-        )
-        if case.case_kind == "procurement-request":
-            evaluation = compile_procurement_policy(policy_record).evaluate(typed_facts)
-        elif case.case_kind == "invoice-ap-preparation":
-            evaluation = compile_invoice_ap_policy(policy_record).evaluate(typed_facts)
-        else:
-            evaluation = compile_expense_policy(policy_record).evaluate(typed_facts)
-        updated = apply_policy_evaluation(changed, evaluation)
-        _uow.replace_facts_and_apply_policy(case, updated, evaluation)
-    except (ConcurrencyConflict, TransitionError, PolicyPlaneError, ValueError) as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-
-    if payload.artifact_ref is not None:
-        _transactions.append_evidence_link(
-            AdministrativeCaseEvidenceLink(
-                case_id=updated.case_id,
-                authority_epoch=updated.authority_epoch,
-                artifact_ref=payload.artifact_ref,
-                representation_ref=payload.representation_ref,
-                declared_role=payload.declared_role,
-                source=payload.source_ref,
-                linked_by=actor.principal_id,
-            )
-        )
-    return updated
-
-
-def _case_completion_assessment(
-    obligation_set,
-    effects,
-    outcomes,
-    *,
-    realizations,
-    links,
-    fulfillments,
-) -> CompletionAssessment:
-    if obligation_set is None:
-        return CompletionAssessment(
-            requirement_id="missing-current-obligation-set",
-            satisfied=False,
-            blocking_reasons=("missing current obligation set",),
-        )
-    return assess_administrative_completion(
-        obligation_set,
-        effects,
-        outcomes,
-        realizations=realizations,
-        links=links,
-        fulfillments=fulfillments,
-    )
-
-
-def _termination_snapshot(case: AdministrativeCase) -> dict[str, Any]:
-    facts = case.fact_snapshot.facts if case.fact_snapshot is not None else {}
-    return {
-        "termination_status": facts.get("termination_status"),
-        "termination_effective_at": facts.get("termination_effective_at"),
-        "employment_episode_ref": facts.get("employment_episode_ref"),
-        "authoritative_fact_snapshot": (
-            case.fact_snapshot.model_dump(mode="json") if case.fact_snapshot else None
-        ),
-    }
-
-
-def _authority_snapshot(case: AdministrativeCase) -> dict[str, list[dict[str, Any]]]:
-    facts = case.fact_snapshot.facts if case.fact_snapshot is not None else {}
-    principal_ids = {
-        str(value)
-        for key, value in facts.items()
-        if key.endswith("principal_id") and isinstance(value, str) and value.strip()
-    }
-    principal_ids.add(case.requester_principal_id)
-    bindings: list[dict[str, Any]] = []
-    roles: list[dict[str, Any]] = []
-    delegations: list[dict[str, Any]] = []
-    observed_at = utcnow()
-    for principal_id in sorted(principal_ids):
-        bindings.extend(
-            item.model_dump(mode="json")
-            for item in _authority.list_current_identity_bindings(
-                principal_id, at=observed_at
-            )
-        )
-        roles.extend(
-            item.model_dump(mode="json")
-            for item in _authority.list_current_role_assignments(
-                principal_id, at=observed_at
-            )
-        )
-        delegations.extend(
-            item.model_dump(mode="json")
-            for item in _authority.list_current_delegations_involving(
-                principal_id, at=observed_at
-            )
-        )
-    return {
-        "bindings": _dedupe_json_records(bindings),
-        "role_assignments": _dedupe_json_records(roles),
-        "delegations": _dedupe_json_records(delegations),
-    }
-
-
-def _kernel_projection_snapshot(projection) -> dict[str, Any]:
-    return {
-        "projection_id": str(projection.projection_id),
-        "obligation_id": str(projection.obligation_id),
-        "authority_epoch": projection.authority_epoch,
-        "status": projection.status.value,
-        "responsibility_ref": projection.kernel_responsibility_ref,
-        "responsibility_version": projection.admission_payload.get("responsibility_version"),
-        "admission_ref": projection.kernel_admission_ref,
-        "assessment_ref": projection.kernel_assessment_ref,
-        "proposal_ref": projection.kernel_proposal_ref,
-        "work_ref": projection.kernel_work_ref,
-        "execution": {
-            "status": (
-                projection.kernel_execution_status.value
-                if projection.kernel_execution_status is not None
-                else None
-            ),
-            "execution_ref": projection.kernel_execution_ref,
-            "run_ref": projection.kernel_run_ref,
-            "request_ref": projection.kernel_request_ref,
-            "authorization_ref": projection.kernel_authorization_ref,
-            "provider_id": projection.kernel_provider_id,
-            "action_ref": projection.kernel_action_ref,
-            "outcome_ref": projection.kernel_outcome_ref,
-            "evidence_ref": projection.kernel_evidence_ref,
-            "responsibility_ref": projection.kernel_execution_responsibility_ref,
-            "processed_at": (
-                projection.kernel_execution_processed_at.isoformat()
-                if projection.kernel_execution_processed_at is not None
-                else None
-            ),
-        },
-    }
-
-
-def _responsibility_snapshot(
-    case: AdministrativeCase,
-    obligation_set,
-    completion: CompletionAssessment,
-    projections,
-) -> dict[str, Any]:
-    if obligation_set is None:
-        return {
-            "status": "pending",
-            "blocker": "missing_current_obligation_set",
-            "responsibilities": [],
-            "completion_satisfied": completion.satisfied,
-        }
-    if not completion.satisfied:
-        return {
-            "status": "pending",
-            "blocker": "completion_assessment_not_satisfied",
-            "responsibilities": [],
-            "completion_satisfied": False,
-        }
-
-    bridge = None
-    if _settings.kernel_bridge_mode != "disabled":
-        bridge = KernelExecutionBridge(
-            _store,
-            settings=_settings,
-            require_responsibility_discharge=True,
-        )
-    if bridge is None or not bridge.cutover:
-        return {
-            "status": "pending",
-            "blocker": "kernel_cutover_required",
-            "responsibilities": [],
-            "completion_satisfied": completion.satisfied,
-        }
-
-    service = AdministrativeResponsibilityDischargeService(_store, bridge)
-    try:
-        handles = service.project_responsibility_set(case, obligation_set)
-    except ResponsibilityDischargeBlocked as exc:
-        return {
-            "status": "pending",
-            "blocker": str(exc),
-            "responsibilities": [],
-            "completion_satisfied": completion.satisfied,
-        }
-
-    client = bridge.client()
-    observations: list[dict[str, Any]] = []
-    for handle in handles:
-        assessment_ref, decision_ref, transition_ref = service.discharge_chain_refs(
-            case, handle
-        )
-        current_status = "unknown"
-        blocker = None
-        try:
-            current_status = client.get_responsibility_status(
-                handle.responsibility_ref,
-                expected_version=handle.responsibility_version,
-            ).current_status
-        except KernelResponsibilityDischargeError:
-            blocker = "kernel_responsibility_status_unavailable"
-        observations.append(
-            {
-                "responsibility_ref": handle.responsibility_ref,
-                "responsibility_version": handle.responsibility_version,
-                "obligation_ids": [str(item) for item in handle.obligation_ids],
-                "current_status": current_status,
-                "assessment_ref": assessment_ref,
-                "decision_ref": decision_ref,
-                "transition_ref": transition_ref,
-                "blocker": blocker,
-            }
-        )
-
-    statuses = {item["current_status"] for item in observations}
-    if not observations or statuses == {"discharged"}:
-        overall = "discharged"
-        blocker = None
-    else:
-        overall = "pending"
-        blocker = next(
-            (item["blocker"] for item in observations if item["blocker"]),
-            "responsibility_set_not_discharged",
-        )
-    return {
-        "status": overall,
-        "blocker": blocker,
-        "completion_satisfied": completion.satisfied,
-        "responsibilities": observations,
-    }
-
-
-def _dedupe_json_records(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    unique: dict[str, dict[str, Any]] = {}
-    for record in records:
-        key = repr(sorted(record.items()))
-        unique[key] = record
-    return [unique[key] for key in sorted(unique)]
-
-
-@app.get("/v1/operations/intake/candidates", response_model=list[IntakeQueueItem])
-def intake_candidate_queue(
-    request: Request,
-    status_filter: Annotated[CandidateStatus | None, Query(alias="status")] = CandidateStatus.ACTIVE,
-    limit: Annotated[int, Query(ge=1, le=1000)] = 200,
-) -> list[IntakeQueueItem]:
-    actor = _actor(request)
-    _require(actor, AdministrativePermission.OPERATIONS_READ)
-    candidates = _intake.list_candidates(status=status_filter, limit=limit)
-    result: list[IntakeQueueItem] = []
-    for candidate in candidates:
-        assessments = _intake.list_assessments(candidate.candidate_id)
-        result.append(
-            IntakeQueueItem(
-                candidate_id=candidate.candidate_id,
-                conversation_ref=candidate.conversation_ref,
-                candidate_requester=candidate.candidate_requester,
-                candidate_intent=candidate.candidate_intent,
-                status=candidate.status,
-                created_at=candidate.created_at,
-                latest_assessment=assessments[-1] if assessments else None,
-            )
-        )
-    return result
-
-
-@app.get(
-    "/v1/operations/intake/candidates/{candidate_id}",
-    response_model=IntakeCandidateDetail,
+intake_candidate_queue = _endpoint(_intake_router, "/v1/operations/intake/candidates", "GET")
+intake_candidate_detail = _endpoint(
+    _intake_router, "/v1/operations/intake/candidates/{candidate_id}", "GET"
 )
-def intake_candidate_detail(candidate_id: UUID, request: Request) -> IntakeCandidateDetail:
-    actor = _actor(request)
-    candidate = _intake.get_candidate(candidate_id)
-    if candidate is None:
-        raise HTTPException(status_code=404, detail="intake candidate not found")
-    _require(actor, AdministrativePermission.OPERATIONS_READ)
-    return IntakeCandidateDetail(
-        candidate=candidate,
-        assessments=_intake.list_assessments(candidate_id),
-        promotion=_intake.get_promotion(candidate_id),
-    )
-
-
-@app.get(
-    "/v1/operations/commitments/candidates",
-    response_model=list[CommitmentCandidateQueueItem],
-)
-def commitment_candidate_queue(
-    request: Request,
-    status_filter: Annotated[
-        CandidateCommitmentStatus | None, Query(alias="status")
-    ] = CandidateCommitmentStatus.ACTIVE,
-    limit: Annotated[int, Query(ge=1, le=1000)] = 200,
-) -> list[CommitmentCandidateQueueItem]:
-    actor = _actor(request)
-    _require(actor, AdministrativePermission.OPERATIONS_READ)
-    return [
-        CommitmentCandidateQueueItem(
-            candidate=item,
-            resolution=_commitments.get_resolution(item.candidate_commitment_id),
-            commitment=_commitments.get_commitment_for_candidate(item.candidate_commitment_id),
-        )
-        for item in _commitments.list_candidates(status=status_filter, limit=limit)
-    ]
-
-
-@app.get(
-    "/v1/operations/commitments/candidates/{candidate_id}",
-    response_model=CommitmentCandidateQueueItem,
-)
-def commitment_candidate_detail(
-    candidate_id: UUID,
-    request: Request,
-) -> CommitmentCandidateQueueItem:
-    actor = _actor(request)
-    _require(actor, AdministrativePermission.OPERATIONS_READ)
-    candidate = _commitments.get_candidate(candidate_id)
-    if candidate is None:
-        raise HTTPException(status_code=404, detail="commitment candidate not found")
-    return CommitmentCandidateQueueItem(
-        candidate=candidate,
-        resolution=_commitments.get_resolution(candidate_id),
-        commitment=_commitments.get_commitment_for_candidate(candidate_id),
-    )
-
-
-@app.post(
-    "/v1/operations/commitments/candidates/{candidate_id}/resolve-speaker",
-    response_model=SpeakerPrincipalResolution,
-)
-def resolve_commitment_speaker(
-    candidate_id: UUID,
-    payload: CommitmentSpeakerResolutionBody,
-    request: Request,
-) -> SpeakerPrincipalResolution:
-    actor = _actor(request)
-    _require_intake_review(actor)
-    try:
-        return _commitment_service.resolve_speaker(
-            candidate_id,
-            reviewer_principal_id=actor.principal_id,
-            external_subject=payload.external_subject,
-            provider=payload.provider,
-            basis=payload.basis,
-        )
-    except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
-    except (CommitmentIntakeError, ValueError) as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-
-
-@app.post(
-    "/v1/operations/commitments/candidates/{candidate_id}/confirm",
-)
-def confirm_commitment_candidate(
-    candidate_id: UUID,
-    payload: CommitmentConfirmationBody,
-    request: Request,
-) -> dict[str, Any]:
-    actor = _actor(request)
-    _require_intake_review(actor)
-    try:
-        case, commitment = _commitment_service.confirm_candidate(
-            candidate_id,
-            reviewer_principal_id=actor.principal_id,
-            qualified_due_at=payload.qualified_due_at,
-            due_time_basis=payload.due_time_basis,
-        )
-    except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
-    except (CommitmentIntakeError, CommitmentConflict, ValueError) as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    return {
-        "case": case.model_dump(mode="json"),
-        "commitment": commitment.model_dump(mode="json"),
-        "communication": [
-            item.model_dump(mode="json")
-            for item in _commitments.list_communications(case.case_id)
-        ],
-    }
-
-
-@app.get("/v1/operations/commitments/{case_id}")
-def commitment_detail(case_id: UUID, request: Request) -> dict[str, Any]:
-    actor = _actor(request)
-    case = _store.get_case(case_id)
-    if case is None:
-        raise HTTPException(status_code=404, detail="case not found")
-    _require(actor, AdministrativePermission.OPERATIONS_READ)
-    commitment = _commitments.get_commitment(case_id)
-    if commitment is None:
-        raise HTTPException(status_code=404, detail="commitment not found")
-    return {
-        "case": case.model_dump(mode="json"),
-        "commitment": commitment.model_dump(mode="json"),
-        "candidate": (
-            candidate.model_dump(mode="json")
-            if (candidate := _commitments.get_candidate(commitment.candidate_ref)) is not None
-            else None
-        ),
-        "speaker_resolution": (
-            resolution.model_dump(mode="json")
-            if (resolution := _commitments.get_resolution(commitment.candidate_ref)) is not None
-            else None
-        ),
-        "communications": [
-            item.model_dump(mode="json")
-            for item in _commitments.list_communications(case_id)
-        ],
-    }
-
-
-@app.post("/v1/operations/commitments/{case_id}/fulfillment")
-def attest_commitment_fulfillment(
-    case_id: UUID,
-    payload: CommitmentFulfillmentBody,
-    request: Request,
-) -> dict[str, Any]:
-    actor = _actor(request)
-    case = _store.get_case(case_id)
-    if case is None:
-        raise HTTPException(status_code=404, detail="case not found")
-    commitment = _commitments.get_commitment(case_id)
-    if commitment is None:
-        raise HTTPException(status_code=404, detail="commitment not found")
-    if actor.principal_id != commitment.committer_principal_id:
-        _require(actor, AdministrativePermission.COMMITMENT_ATTEST, case=case)
-    try:
-        commitment = _commitment_service.attest_fulfillment(
-            case_id,
-            principal_id=actor.principal_id,
-            basis=payload.basis,
-        )
-    except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
-    except (CommitmentIntakeError, CommitmentConflict, ValueError) as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    return {"commitment": commitment.model_dump(mode="json")}
-
-
-@app.post("/v1/operations/commitments/{case_id}/due-revision")
-def revise_commitment_due(
-    case_id: UUID,
-    payload: CommitmentDueRevisionBody,
-    request: Request,
-) -> dict[str, Any]:
-    actor = _actor(request)
-    case = _store.get_case(case_id)
-    if case is None:
-        raise HTTPException(status_code=404, detail="case not found")
-    _require_intake_review(actor)
-    try:
-        commitment = _commitment_service.revise_due_at(
-            case_id,
-            reviewer_principal_id=actor.principal_id,
-            due_at=payload.due_at,
-            basis=payload.basis,
-        )
-    except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
-    except (CommitmentIntakeError, CommitmentConflict, ValueError) as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    return {"commitment": commitment.model_dump(mode="json")}
-
-
-@app.post("/v1/operations/commitments/{case_id}/cancel")
-def cancel_commitment(
-    case_id: UUID,
-    payload: CommitmentCancellationBody,
-    request: Request,
-) -> dict[str, Any]:
-    actor = _actor(request)
-    case = _store.get_case(case_id)
-    if case is None:
-        raise HTTPException(status_code=404, detail="case not found")
-    _require_intake_review(actor)
-    try:
-        commitment = _commitment_service.cancel_commitment(
-            case_id,
-            reviewer_principal_id=actor.principal_id,
-            basis=payload.basis,
-        )
-    except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
-    except (CommitmentIntakeError, CommitmentConflict, ValueError) as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    return {
-        "case": (_store.get_case(case_id) or case).model_dump(mode="json"),
-        "commitment": commitment.model_dump(mode="json"),
-    }
-
-
-@app.post(
+finalize_intake_assessment = _endpoint(
+    _intake_router,
     "/v1/operations/intake/candidates/{candidate_id}/assessments",
-    response_model=IntakeAssessment,
+    "POST",
 )
-def finalize_intake_assessment(
-    candidate_id: UUID,
-    payload: IntakeAssessmentBody,
-    request: Request,
-) -> IntakeAssessment:
-    actor = _actor(request)
-    _require_intake_review(actor)
-    if _intake.get_candidate(candidate_id) is None:
-        raise HTTPException(status_code=404, detail="intake candidate not found")
-    try:
-        return _intake_assessments.finalize_human(
-            candidate_id,
-            payload.disposition,
-            reviewer_principal_id=actor.principal_id,
-            basis=payload.basis,
-        )
-    except (AdmissionRejected, AssessmentConflict, ValueError) as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-
-
-def _admission_bridge(case_kind: str) -> CandidateAdministrativeAdmissionService:
-    """Select the typed candidate admission service for one case kind."""
-    if case_kind == "employee-onboarding":
-        return CandidateOnboardingAdmissionService(
-            _store, _intake, _intake_promotions, policies=_policies, uow=_uow
-        )
-    if case_kind == "employee-offboarding":
-        return CandidateOffboardingAdmissionService(
-            _store, _intake, _intake_promotions, policies=_policies, uow=_uow
-        )
-    if case_kind == "procurement-request":
-        return CandidateProcurementAdmissionService(
-            _store, _intake, _intake_promotions, policies=_policies, uow=_uow
-        )
-    if case_kind == "invoice-ap-preparation":
-        return CandidateInvoiceAPAdmissionService(
-            _store, _intake, _intake_promotions, policies=_policies, uow=_uow
-        )
-    if case_kind == "expense-reimbursement":
-        return CandidateExpenseAdmissionService(
-            _store, _intake, _intake_promotions, policies=_policies, uow=_uow
-        )
-    raise OnboardingAdmissionError(
-        f"typed admission does not support case_kind={case_kind!r}"
-    )
-
-
-@app.post(
-    "/v1/operations/intake/candidates/{candidate_id}/promote",
-    response_model=IntakePromotionResponse,
+promote_intake_candidate = _endpoint(
+    _intake_router, "/v1/operations/intake/candidates/{candidate_id}/promote", "POST"
 )
-def promote_intake_candidate(
-    candidate_id: UUID,
-    payload: IntakePromotionBody,
-    request: Request,
-) -> IntakePromotionResponse:
-    actor = _actor(request)
-    _require_intake_review(actor)
-    candidate = _intake.get_candidate(candidate_id)
-    if candidate is None:
-        raise HTTPException(status_code=404, detail="intake candidate not found")
-    assessment = _intake.get_assessment(payload.assessment_id)
-    if assessment is None or assessment.candidate_ref != candidate_id:
-        raise HTTPException(status_code=404, detail="intake assessment not found")
-    try:
-        if payload.bridge_to_m5 or payload.bridge_to_m8:
-            if payload.subject_ref is None:
-                raise OnboardingAdmissionError(
-                    "typed promotion requires subject_ref"
-                )
-            admission = _admission_bridge(payload.case_kind).promote_and_evaluate(
-                candidate,
-                assessment,
-                source_system=payload.source_system,
-                tenant_ref=payload.tenant_ref,
-                source_event_id=payload.source_event_id,
-                requester_principal_id=payload.requester_principal_id,
-                subject_ref=payload.subject_ref,
-                channel=payload.channel,
-                promotion_policy_ref=payload.promotion_policy_ref,
-            )
-            result = admission.promotion
-            promoted_case = admission.case
-            policy_evaluation = admission.policy_evaluation
-        else:
-            result = _intake_promotions.promote(
-                candidate,
-                assessment,
-                source_system=payload.source_system,
-                tenant_ref=payload.tenant_ref,
-                source_event_id=payload.source_event_id,
-                requester_principal_id=payload.requester_principal_id,
-                channel=payload.channel,
-                case_kind=payload.case_kind,
-                subject_ref=payload.subject_ref,
-                promotion_policy_ref=payload.promotion_policy_ref,
-            )
-            promoted_case = result.case
-            policy_evaluation = None
-    except (AdmissionConflict, AdmissionRejected, OnboardingAdmissionError, ValueError) as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    return IntakePromotionResponse(
-        promotion=result.promotion,
-        request=result.request,
-        case=promoted_case,
-        created=result.created,
-        policy_evaluation=policy_evaluation,
-    )
-
-
-def _apply_authoritative_refresh(
-    case: AdministrativeCase,
-    record: object,
-) -> AdministrativeCase:
-    """Merge authoritative HR facts and re-evaluate the case-kind policy."""
-    if case.case_kind == "employee-onboarding":
-        snapshot = merge_authoritative_onboarding_facts(case, record)  # type: ignore[arg-type]
-        policy_id = "employee-onboarding"
-        facts_model = OnboardingFacts
-        compile_policy = compile_onboarding_policy
-    elif case.case_kind == "employee-offboarding":
-        snapshot = merge_authoritative_offboarding_facts(case, record)  # type: ignore[arg-type]
-        policy_id = "employee-offboarding"
-        facts_model = OffboardingFacts
-        compile_policy = compile_offboarding_policy
-    else:
-        raise FactAcquisitionError(
-            f"authoritative refresh does not support case kind {case.case_kind!r}"
-        )
-    changed = replace_facts_for_reevaluation(case, snapshot)
-    ready = start_policy_evaluation(changed)
-    policy_record = _policies.resolve_current(policy_id)
-    facts = facts_model.model_validate(snapshot.facts)
-    evaluation = compile_policy(policy_record).evaluate(facts)
-    updated = apply_policy_evaluation(ready, evaluation)
-    _uow.replace_facts_and_apply_policy(case, updated, evaluation)
-    return updated
-
-
-@app.post(
+commitment_candidate_queue = _endpoint(
+    _commitment_router, "/v1/operations/commitments/candidates", "GET"
+)
+commitment_candidate_detail = _endpoint(
+    _commitment_router,
+    "/v1/operations/commitments/candidates/{candidate_id}",
+    "GET",
+)
+resolve_commitment_speaker = _endpoint(
+    _commitment_router,
+    "/v1/operations/commitments/candidates/{candidate_id}/resolve-speaker",
+    "POST",
+)
+confirm_commitment_candidate = _endpoint(
+    _commitment_router,
+    "/v1/operations/commitments/candidates/{candidate_id}/confirm",
+    "POST",
+)
+commitment_detail = _endpoint(
+    _commitment_router, "/v1/operations/commitments/{case_id}", "GET"
+)
+attest_commitment_fulfillment = _endpoint(
+    _commitment_router, "/v1/operations/commitments/{case_id}/fulfillment", "POST"
+)
+revise_commitment_due = _endpoint(
+    _commitment_router, "/v1/operations/commitments/{case_id}/due-revision", "POST"
+)
+cancel_commitment = _endpoint(
+    _commitment_router, "/v1/operations/commitments/{case_id}/cancel", "POST"
+)
+refresh_authoritative_facts = _endpoint(
+    _administration_router,
     "/v1/operations/cases/{case_id}/authoritative-facts/refresh",
-    response_model=RefreshFactsResponse,
+    "POST",
 )
-def refresh_authoritative_facts(case_id: UUID, request: Request) -> RefreshFactsResponse:
-    actor = _actor(request)
-    case = _store.get_case(case_id)
-    if case is None:
-        raise HTTPException(status_code=404, detail="case not found")
-    _require(actor, AdministrativePermission.FACTS_REFRESH_AUTHORITATIVE, case=case)
-    if case.case_kind not in {"employee-onboarding", "employee-offboarding"}:
-        raise HTTPException(
-            status_code=409, detail="authoritative refresh does not support this case kind"
-        )
-    source = build_hris_source(_settings)
-    if source is None:
-        raise HTTPException(status_code=503, detail="authoritative HRIS source is not configured")
-    try:
-        record = source.read_employee(case.subject_ref)
-        if not record.is_fresh_at(
-            utcnow(),
-            max_age_seconds=_settings.authoritative_fact_max_age_seconds,
-        ):
-            raise FactAcquisitionError("authoritative HRIS observation is stale")
-        updated = _apply_authoritative_refresh(case, record)
-    except (
-        FactAcquisitionError,
-        PolicyPlaneError,
-        TransitionError,
-        ConcurrencyConflict,
-        ValueError,
-    ) as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    return RefreshFactsResponse(
-        case=updated,
-        source=record.source,
-        source_ref=record.source_ref,
-        source_version=record.source_version,
-        source_digest=record.digest,
-    )
-
-
-@app.post(
-    "/v1/operations/outbox/dead-letter/{event_id}/replay",
-    response_model=OutboxReplayResponse,
+replay_dead_letter = _endpoint(
+    _administration_router, "/v1/operations/outbox/dead-letter/{event_id}/replay", "POST"
 )
-def replay_dead_letter(
-    event_id: UUID,
-    payload: ReasonBody,
-    request: Request,
-) -> OutboxReplayResponse:
-    actor = _actor(request)
-    _require(actor, AdministrativePermission.DEAD_LETTER_REPLAY)
-    try:
-        replayed = replay_failed_outbox(
-            _store,
-            event_id,
-            reason=payload.reason,
-            actor_principal_id=actor.principal_id,
-        )
-    except OutboxEventNotFound as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except OutboxEventNotFailed as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    return OutboxReplayResponse(
-        event_id=replayed.event_id,
-        status=replayed.status,
-        attempts=replayed.attempts,
-        audit_id=replayed.audit_id,
-    )
-
-
-@app.post("/v1/operations/identities/bind", response_model=AuthorityLifecycleEvent)
-def bind_identity(payload: BindIdentityBody, request: Request) -> AuthorityLifecycleEvent:
-    actor = _actor(request)
-    _require(actor, AdministrativePermission.IDENTITY_MANAGE)
-    valid_from = payload.valid_from or utcnow()
-    try:
-        binding = IdentityBinding(
-            provider=payload.provider.rstrip("/"),
-            external_subject=payload.external_subject,
-            principal_id=payload.principal_id,
-            valid_from=valid_from,
-            valid_until=payload.valid_until,
-        )
-        return _lifecycle.bind_identity(
-            binding,
-            actor_principal_id=actor.principal_id,
-            reason=payload.reason,
-        )
-    except (AuthorityError, ValueError) as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-
-
-@app.post(
-    "/v1/operations/identities/{binding_id}/revoke",
-    response_model=AuthorityLifecycleEvent,
+bind_identity = _endpoint(_administration_router, "/v1/operations/identities/bind", "POST")
+revoke_identity = _endpoint(
+    _administration_router, "/v1/operations/identities/{binding_id}/revoke", "POST"
 )
-def revoke_identity(
-    binding_id: UUID,
-    payload: ReasonBody,
-    request: Request,
-) -> AuthorityLifecycleEvent:
-    actor = _actor(request)
-    _require(actor, AdministrativePermission.IDENTITY_MANAGE)
-    try:
-        return _lifecycle.expire_identity_binding(
-            binding_id,
-            actor_principal_id=actor.principal_id,
-            reason=payload.reason,
-        )
-    except AuthorityError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-
-
-@app.post(
-    "/v1/operations/principals/{principal_id}/deactivate",
-    response_model=AuthorityLifecycleEvent,
+deactivate_principal = _endpoint(
+    _administration_router, "/v1/operations/principals/{principal_id}/deactivate", "POST"
 )
-def deactivate_principal(
-    principal_id: str,
-    payload: ReasonBody,
-    request: Request,
-) -> AuthorityLifecycleEvent:
-    actor = _actor(request)
-    _require(actor, AdministrativePermission.IDENTITY_MANAGE)
-    try:
-        return _lifecycle.deactivate_principal(
-            principal_id,
-            actor_principal_id=actor.principal_id,
-            reason=payload.reason,
-        )
-    except AuthorityError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-
-
-@app.post(
+expire_role_assignment = _endpoint(
+    _administration_router,
     "/v1/operations/role-assignments/{assignment_id}/expire",
-    response_model=AuthorityLifecycleEvent,
+    "POST",
 )
-def expire_role_assignment(
-    assignment_id: UUID,
-    payload: ExpireAuthorityBody,
-    request: Request,
-) -> AuthorityLifecycleEvent:
-    actor = _actor(request)
-    _require(actor, AdministrativePermission.IDENTITY_MANAGE)
-    try:
-        return _lifecycle.expire_role_assignment(
-            assignment_id,
-            actor_principal_id=actor.principal_id,
-            reason=payload.reason,
-            at=payload.at,
-        )
-    except (AuthorityError, ValueError) as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-
-
-@app.post(
-    "/v1/operations/delegations/{delegation_id}/expire",
-    response_model=AuthorityLifecycleEvent,
+expire_delegation = _endpoint(
+    _administration_router, "/v1/operations/delegations/{delegation_id}/expire", "POST"
 )
-def expire_delegation(
-    delegation_id: UUID,
-    payload: ExpireAuthorityBody,
-    request: Request,
-) -> AuthorityLifecycleEvent:
-    actor = _actor(request)
-    _require(actor, AdministrativePermission.IDENTITY_MANAGE)
-    try:
-        return _lifecycle.expire_delegation(
-            delegation_id,
-            actor_principal_id=actor.principal_id,
-            reason=payload.reason,
-            at=payload.at,
-        )
-    except (AuthorityError, ValueError) as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+authority_events = _endpoint(_administration_router, "/v1/operations/authority-events", "GET")
 
 
-@app.get("/v1/operations/authority-events", response_model=list[AuthorityLifecycleEvent])
-def authority_events(
-    request: Request,
-    limit: Annotated[int, Query(ge=1, le=1000)] = 200,
-) -> list[AuthorityLifecycleEvent]:
-    actor = _actor(request)
-    _require(actor, AdministrativePermission.OPERATIONS_READ)
-    return _lifecycle.list_events(limit=limit)
+__all__ = [
+    "app",
+    "AdministrativeResponsibilityDischargeService",
+    "BindIdentityBody",
+    "CommitmentCancellationBody",
+    "CommitmentCandidateQueueItem",
+    "CommitmentConfirmationBody",
+    "CommitmentDueRevisionBody",
+    "CommitmentFulfillmentBody",
+    "CommitmentSpeakerResolutionBody",
+    "ExpireAuthorityBody",
+    "FinancialDocumentRevisionBody",
+    "IntakeAssessmentBody",
+    "IntakeAssessmentService",
+    "IntakeCandidateDetail",
+    "IntakePromotionBody",
+    "IntakePromotionResponse",
+    "IntakePromotionService",
+    "IntakeQueueItem",
+    "InvestigationEvidenceBody",
+    "InvestigationEvidenceRequestBody",
+    "InvestigationProposalBody",
+    "InvestigationRequestBody",
+    "KernelExecutionBridge",
+    "OutboxReplayResponse",
+    "QualificationAssessmentBody",
+    "QueueItem",
+    "RefreshFactsResponse",
+    "ReopenAssessmentBody",
+    "ReopenCaseBody",
+    "validate_kernel_runtime_compatibility",
+]
