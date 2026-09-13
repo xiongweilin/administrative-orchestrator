@@ -1,0 +1,41 @@
+name: Sonar PR96 Diagnostic
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Read Sonar quality gate conditions
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        run: |
+          set -euo pipefail
+          task_json="$(curl --fail --silent --show-error --user "${SONAR_TOKEN}:" 'https://sonarcloud.io/api/ce/task?id=AaCbBkCAnRgreyMtFheY')"
+          analysis_id="$(TASK_JSON="$task_json" python - <<'PY'
+          import json
+          import os
+          print(json.loads(os.environ['TASK_JSON'])['task']['analysisId'])
+          PY
+          )"
+          gate_json="$(curl --fail --silent --show-error --user "${SONAR_TOKEN}:" "https://sonarcloud.io/api/qualitygates/project_status?analysisId=${analysis_id}")"
+          GATE_JSON="$gate_json" python - <<'PY'
+          import json
+          import os
+
+          status = json.loads(os.environ['GATE_JSON'])['projectStatus']
+          print(f"quality_gate_status={status['status']}")
+          for condition in status.get('conditions', []):
+              print(
+                  'condition '
+                  f"metric={condition.get('metricKey')} "
+                  f"status={condition.get('status')} "
+                  f"actual={condition.get('actualValue')} "
+                  f"comparator={condition.get('comparator')} "
+                  f"threshold={condition.get('errorThreshold')}"
+              )
+          PY
