@@ -19,7 +19,7 @@ subsequently merged into `main`.
 - Post-acceptance merged main revision: `7fb328a4023133848f0b49bb77d27ad12b8bd03f`
   (PR #89 squash merge).
 - Follow-up payload-field wiring revision:
-  `360a8df8ae04e1ca515ff001f7367d301748099d`.
+  `c023532f9e3754f98acd7f284fad06cb7af7aa6e`.
 - Agent Kernel pin: `706cb3514c7edd030518f016a8f9b232b98f8166`.
 - Migration head: `0031_adaptive_investigation`.
 - Compose project: `administrative-staging-v1`.
