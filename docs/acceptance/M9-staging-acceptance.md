@@ -207,6 +207,9 @@ Historical fail-closed transport/readback evidence is retained, not replayed:
 - PASS — post-merge Admin main CI run `34741169307` and M5 Production Trust
   run `34741169306` for `58ff8d0`.
 - PASS — post-merge Gateway main CI run `34741169417` for `cf98448`.
+- PASS — final closure merge commit `0a743ac90d9d7099e8c9b0746a482940af9b9073`
+  passed Admin main CI run `34741483579` and M5 Production Trust run
+  `34741483542`.
 
 ## Residual risks and explicit boundaries
 
@@ -226,5 +229,7 @@ Historical fail-closed transport/readback evidence is retained, not replayed:
 - [x] Gateway M9 PR #16 merged at `cf98448`
 - [x] required CI, Sonar/new-code, and M5–M8 regression lanes green
 - [x] post-merge main revisions and CI verified
+- [x] final closure merge `0a743ac90d9d7099e8c9b0746a482940af9b9073` and its
+  post-merge main CI are green
 - [x] this acceptance record is the closure record on the merged Admin main
 - [x] annotated tag `m9-accepted-2026-09-13` created after all gates pass

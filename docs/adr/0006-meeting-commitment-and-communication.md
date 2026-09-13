@@ -1,6 +1,9 @@
 # ADR 0006 — Meeting commitments and governed internal communication
 
-Status: proposed for M9 implementation
+Status: **accepted for the recorded isolated-staging scope; Admin PR #83 and
+Gateway PR #16 merged; closure recorded in
+`docs/acceptance/M9-staging-acceptance.md` and tag
+`m9-accepted-2026-09-13`**
 
 ## Decision
 

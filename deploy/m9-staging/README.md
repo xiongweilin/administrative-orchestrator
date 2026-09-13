@@ -3,7 +3,7 @@
 This directory is the isolated M9 staging control surface. It uses the
 `administrative-m9-staging` Compose project, separate PostgreSQL/Keycloak/Odoo
 databases, separate Kernel and artifact volumes, and host ports `18201`–`18205`.
-It does not reuse the stopped M6/M7 services or their volumes.
+It does not reuse prior-milestone services or their volumes.
 
 The intended topology is:
 
