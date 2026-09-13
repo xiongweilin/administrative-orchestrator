@@ -151,6 +151,13 @@ be bound to the current case authority epoch and an explicit supersession chain;
 only the current assessment for each required kind can satisfy the gate, and
 vendor ambiguity, duplicate invoice identity, or deterministic three-way
 mismatch prevents the ERP effect.
+The transaction payload field is a deployment-scoped contract and must match
+the installed Odoo addon: M8 defaults to
+`x_administrative_m8_payload_json`, while M9 staging defaults to
+`x_administrative_m9_payload_json` through
+`ADMIN_ODOO_TRANSACTION_PAYLOAD_FIELD`. A mismatch is rejected by Odoo before
+record creation; diagnose the field/addon alignment before considering any
+retry, and verify the exact request identity by independent read-back.
 Back up the Administrative database, DBOS database, Kernel state, and M8
 artifact store together. Do not use M7 volumes as an M8 rollback target.
 
