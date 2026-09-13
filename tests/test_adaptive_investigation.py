@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import json
 from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from uuid import UUID, uuid4
 
+import httpx
 import pytest
+from fastapi.testclient import TestClient
 from pydantic import SecretStr, ValidationError
 
 from administrative_orchestrator.config import Settings
@@ -23,6 +26,8 @@ from administrative_orchestrator.domain import (
 from administrative_orchestrator.execution_repository import ExecutionRepository
 from administrative_orchestrator.integrations.kernel.models import KernelExecutionStatus
 from administrative_orchestrator.investigation_client import (
+    HttpInvestigationClient,
+    InvestigationClientError,
     InvestigationRequestEnvelope,
     UnavailableInvestigationClient,
     build_investigation_client,
@@ -44,7 +49,6 @@ from administrative_orchestrator.investigation_reconciliation import (
 )
 from administrative_orchestrator.investigation_service import (
     InvestigationBudgetExceeded,
-    InvestigationClientError,
     InvestigationConflict,
     InvestigationService,
 )
@@ -119,6 +123,49 @@ def _proposal(investigation_id: UUID, case_id: UUID, epoch: int, key: str) -> In
     )
 
 
+def _request_envelope() -> InvestigationRequestEnvelope:
+    return InvestigationRequestEnvelope(
+        investigation_id=uuid4(),
+        case_id=uuid4(),
+        tenant_id="tenant:test",
+        case_kind="test-case",
+        case_status=CaseStatus.RECEIVED.value,
+        authority_epoch=1,
+        trigger_type=InvestigationTriggerType.AMBIGUOUS_EVIDENCE,
+        requested_question="inspect bounded ambiguity",
+        constraints=InvestigationConstraints(),
+    )
+
+
+def _model_output() -> dict[str, object]:
+    return {
+        "hypotheses": [
+            {
+                "statement": "the current evidence is incomplete",
+                "basis_refs": ["evidence:one"],
+                "uncertainty": 0.4,
+            }
+        ],
+        "recommended_queries": [
+            {
+                "question": "read the authoritative evidence",
+                "source_kind": "administrative",
+                "expected_discrimination": 0.8,
+                "basis_refs": ["evidence:one"],
+            }
+        ],
+        "possible_reframings": [
+            {
+                "current_frame": "closed case",
+                "proposed_frame": "case requiring fresh evidence",
+                "reason": "the current evidence is incomplete",
+            }
+        ],
+        "possible_reopen_targets": ["governance-basis"],
+        "uncertainty": {"decision_relevance": "medium"},
+    }
+
+
 class _Client:
     def __init__(self, proposal: InvestigationProposal) -> None:
         self.proposal = proposal
@@ -127,6 +174,16 @@ class _Client:
     def investigate(self, request: InvestigationRequestEnvelope) -> InvestigationProposal:
         self.request = request
         return self.proposal
+
+
+class _DynamicClient:
+    def investigate(self, request: InvestigationRequestEnvelope) -> InvestigationProposal:
+        return _proposal(
+            request.investigation_id,
+            request.case_id,
+            request.authority_epoch,
+            "dynamic-proposal",
+        )
 
 
 class _FailingClient:
@@ -614,3 +671,331 @@ def test_investigation_deadline_expires_before_advisory_call() -> None:
         service.repository.get_request(request.investigation_id).status
         is InvestigationStatus.EXPIRED
     )
+
+
+def test_http_investigation_client_accepts_wrapped_proposal_and_file_token(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    from administrative_orchestrator import investigation_client
+
+    request = _request_envelope()
+    proposal = _proposal(request.investigation_id, request.case_id, request.authority_epoch, "http")
+    token_file = tmp_path / "advisory-token"
+    token_file.write_text("file-token\n", encoding="utf-8")
+    captured: dict[str, object] = {}
+
+    def post(url: str, **kwargs):
+        captured["url"] = url
+        captured.update(kwargs)
+        return _ModelResponse({"proposal": proposal.model_dump(mode="json")})
+
+    monkeypatch.setattr(investigation_client.httpx, "post", post)
+    client = build_investigation_client(
+        SimpleNamespace(
+            investigation_client_url=" https://advisory.example.test/ ",
+            investigation_client_api_key=None,
+            investigation_client_api_key_file=str(token_file),
+            investigation_client_timeout_seconds=3,
+            investigation_model_url="",
+        )
+    )
+
+    assert isinstance(client, HttpInvestigationClient)
+    assert client.investigate(request) == proposal
+    assert captured["url"] == "https://advisory.example.test/v1/investigations"
+    assert captured["headers"] == {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer file-token",
+    }
+    assert client.timeout_seconds == 3
+
+
+@pytest.mark.parametrize(
+    ("payload", "message"),
+    [
+        ([], "not an object"),
+        ({"proposal": {"unknown": True}}, "schema validation"),
+    ],
+)
+def test_http_investigation_client_fails_closed_on_invalid_payload(
+    monkeypatch,
+    payload: object,
+    message: str,
+) -> None:
+    from administrative_orchestrator import investigation_client
+
+    monkeypatch.setattr(
+        investigation_client.httpx,
+        "post",
+        lambda *args, **kwargs: _ModelResponse(payload),
+    )
+    client = HttpInvestigationClient("https://advisory.example.test")
+
+    with pytest.raises(InvestigationClientError, match=message):
+        client.investigate(_request_envelope())
+
+
+def test_http_investigation_client_translates_transport_failure(monkeypatch) -> None:
+    from administrative_orchestrator import investigation_client
+
+    def post(*args, **kwargs):
+        raise httpx.ConnectError("advisory unavailable")
+
+    monkeypatch.setattr(investigation_client.httpx, "post", post)
+    client = HttpInvestigationClient("https://advisory.example.test")
+
+    with pytest.raises(InvestigationClientError, match="request failed"):
+        client.investigate(_request_envelope())
+
+
+def test_model_investigation_client_supports_chat_and_responses_routes(monkeypatch) -> None:
+    from administrative_orchestrator import model_investigation_client
+
+    request = _request_envelope()
+    encoded = json.dumps(_model_output(), ensure_ascii=False)
+    captured: list[tuple[str, dict[str, object]]] = []
+
+    def post(url: str, **kwargs):
+        captured.append((url, kwargs))
+        if url.endswith("/responses"):
+            return _ModelResponse(
+                {"output": [{"content": [{"text": encoded}]}]}
+            )
+        return _ModelResponse(
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "content": f"```json\n{encoded}\n```",
+                        }
+                    }
+                ]
+            }
+        )
+
+    monkeypatch.setattr(model_investigation_client.httpx, "post", post)
+    chat_client = ModelInvestigationClient(
+        "https://model.example.test/v1",
+        model="investigation-model",
+        bearer_token="model-token",
+        max_tokens=321,
+    )
+    chat_proposal = chat_client.investigate(request)
+    response_client = ModelInvestigationClient(
+        "https://model.example.test/v1",
+        model="investigation-model",
+        protocol="openai-responses",
+        max_tokens=654,
+    )
+    response_proposal = response_client.investigate(request)
+
+    assert chat_proposal.investigation_id == request.investigation_id
+    assert chat_proposal.possible_reframings[0].status.value == "proposed"
+    assert chat_proposal.recommended_queries[0].effect_class == "read-only"
+    assert response_proposal.model_provenance.provider == "configured-model-gateway"
+    assert captured[0][0] == "https://model.example.test/v1/chat/completions"
+    assert captured[0][1]["headers"]["Authorization"] == "Bearer model-token"
+    assert captured[1][0] == "https://model.example.test/v1/responses"
+    assert captured[1][1]["json"]["max_output_tokens"] == 654
+
+
+def test_model_investigation_client_rejects_invalid_shapes_and_limits(monkeypatch) -> None:
+    from administrative_orchestrator import model_investigation_client
+
+    with pytest.raises(InvestigationClientError, match="not an object"):
+        ModelInvestigationClient._response_text([])
+    with pytest.raises(InvestigationClientError, match="no assistant content"):
+        ModelInvestigationClient._response_text({})
+    with pytest.raises(InvestigationClientError, match="not a JSON object"):
+        ModelInvestigationClient._decode_json("[]")
+    with pytest.raises(ValueError, match="limits"):
+        ModelInvestigationClient("https://model.example.test", model="m", max_tokens=0)
+
+    monkeypatch.setattr(
+        model_investigation_client.httpx,
+        "post",
+        lambda *args, **kwargs: _ModelResponse(
+            {"choices": [{"message": {"content": '{"unexpected": true}'}}]}
+        ),
+    )
+    with pytest.raises(InvestigationClientError, match="unknown fields"):
+        ModelInvestigationClient("https://model.example.test", model="m").investigate(
+            _request_envelope()
+        )
+
+
+def test_kernel_reconciliation_verifier_rejects_unusable_resolution() -> None:
+    from administrative_orchestrator.integrations.kernel.recovery import KernelRecoveryError
+
+    case_id = uuid4()
+
+    class Repository:
+        def __init__(self, projection) -> None:
+            self.projection = projection
+
+        def list_projections_for_case(self, requested_case_id):
+            assert requested_case_id == case_id
+            return [self.projection]
+
+    class Recovery:
+        def __init__(self, result=None, error=False) -> None:
+            self.result = result
+            self.error = error
+
+        def inspect(self, execution_ref, *, expected_work_ref):
+            assert execution_ref == "kernel:execution:unknown"
+            assert expected_work_ref == "kernel:work:one"
+            if self.error:
+                raise KernelRecoveryError("recovery unavailable")
+            return self.result
+
+    def verifier(*, epoch=1, status=KernelExecutionStatus.EXECUTION_UNKNOWN, recovery):
+        return LocalKernelReconciliationVerifier(
+            repository=Repository(
+                SimpleNamespace(
+                    authority_epoch=epoch,
+                    kernel_execution_ref="kernel:execution:unknown",
+                    kernel_execution_status=status,
+                    kernel_work_ref="kernel:work:one",
+                )
+            ),
+            recovery_client=recovery,
+        )
+
+    with pytest.raises(KernelReconciliationVerificationError, match="must not be blank"):
+        verifier(recovery=Recovery()).verify(case_id, 1, " ")
+    with pytest.raises(KernelReconciliationVerificationError, match="future"):
+        verifier(epoch=2, recovery=Recovery()).verify(case_id, 1, "kernel:execution:unknown")
+    with pytest.raises(KernelReconciliationVerificationError, match="not an execution-unknown"):
+        verifier(status=KernelExecutionStatus.COMPLETED, recovery=Recovery()).verify(
+            case_id, 1, "kernel:execution:unknown"
+        )
+    with pytest.raises(KernelReconciliationVerificationError, match="unavailable"):
+        verifier(recovery=Recovery(error=True)).verify(case_id, 1, "kernel:execution:unknown")
+    with pytest.raises(KernelReconciliationVerificationError, match="terminal"):
+        verifier(recovery=Recovery(SimpleNamespace(current_status="pending"))).verify(
+            case_id, 1, "kernel:execution:unknown"
+        )
+
+
+def test_investigation_operations_api_round_trip(monkeypatch) -> None:
+    from administrative_orchestrator import operations_api
+    from administrative_orchestrator.auth import AuthenticatedPrincipal
+    from administrative_orchestrator.domain import Principal
+
+    store = _store()
+    case = _case(store)
+    service = InvestigationService(store, client=_DynamicClient())
+    actor = AuthenticatedPrincipal(
+        principal=Principal(principal_id="person:operator", display_name="Operator"),
+        auth_mode="test",
+        external_subject="external:operator",
+    )
+    monkeypatch.setattr(operations_api, "_store", store)
+    monkeypatch.setattr(operations_api, "_investigation_service", service)
+    monkeypatch.setattr(operations_api, "_actor", lambda request: actor)
+    monkeypatch.setattr(operations_api, "_require", lambda *args, **kwargs: None)
+    client = TestClient(operations_api.app)
+
+    created = client.post(
+        f"/v1/operations/cases/{case.case_id}/investigations",
+        json={
+            "trigger": "ambiguous_evidence",
+            "reason": "the current framing is incomplete",
+            "requested_question": "which evidence is authoritative?",
+            "evidence_refs": ["evidence:api"],
+            "idempotency_key": "api-request",
+        },
+    )
+    assert created.status_code == 200
+    investigation_id = UUID(created.json()["investigation"]["investigation_id"])
+    assert client.get(f"/v1/operations/cases/{case.case_id}/investigations").status_code == 200
+    assert client.get(f"/v1/operations/investigations/{investigation_id}").status_code == 200
+
+    proposal = _proposal(investigation_id, case.case_id, case.authority_epoch, "api-recorded")
+    recorded = client.post(
+        f"/v1/operations/investigations/{investigation_id}/proposals",
+        json={"proposal": proposal.model_dump(mode="json")},
+    )
+    assert recorded.status_code == 200
+    assert client.post(f"/v1/operations/investigations/{investigation_id}/run").status_code == 200
+
+    evidence_request = client.post(
+        f"/v1/operations/investigations/{investigation_id}/evidence-requests",
+        json={
+            "source_kind": "administrative",
+            "requested_question": "read the current evidence",
+            "idempotency_key": "api-evidence-request",
+        },
+    )
+    assert evidence_request.status_code == 200
+    evidence_request_id = evidence_request.json()["evidence_request"]["evidence_request_id"]
+    evidence = client.post(
+        f"/v1/operations/investigations/{investigation_id}/evidence",
+        json={
+            "evidence_request_id": evidence_request_id,
+            "evidence_ref": "evidence:api",
+            "source_kind": "administrative",
+            "source": "case-review",
+            "owner": "person:operator",
+            "idempotency_key": "api-evidence",
+        },
+    )
+    assert evidence.status_code == 200
+    assessment = client.post(
+        f"/v1/operations/investigations/{investigation_id}/human-assessment",
+        json={
+            "investigation_id": str(investigation_id),
+            "disposition": "preserve_closure",
+            "reason": "the evidence does not change the current closure",
+            "evidence_refs": ["evidence:api"],
+            "idempotency_key": "api-assessment",
+        },
+    )
+    assert assessment.status_code == 200
+    assert client.get(f"/v1/operations/cases/{case.case_id}/reopen-history").json() == []
+
+    run_created = client.post(
+        f"/v1/operations/cases/{case.case_id}/investigations",
+        json={
+            "trigger": "unexpected_reality_state",
+            "reason": "a fresh model run is needed",
+            "requested_question": "what changed?",
+            "idempotency_key": "api-run-request",
+        },
+    )
+    run_id = UUID(run_created.json()["investigation"]["investigation_id"])
+    assert client.post(f"/v1/operations/investigations/{run_id}/run").status_code == 200
+
+    reopen_case = _case(store, status=CaseStatus.COMPLETED)
+    reopen_request = client.post(
+        f"/v1/operations/cases/{reopen_case.case_id}/investigations",
+        json={
+            "trigger": "late_evidence",
+            "reason": "authoritative evidence arrived after closure",
+            "requested_question": "does the evidence require reopening?",
+            "idempotency_key": "api-reopen-request",
+        },
+    )
+    reopen_investigation_id = reopen_request.json()["investigation"]["investigation_id"]
+    reopen_assessment = client.post(
+        f"/v1/operations/cases/{reopen_case.case_id}/reopen-assessments",
+        json={
+            "investigation_id": reopen_investigation_id,
+            "disposition": "reopen_required",
+            "reason": "fresh evidence invalidates the old closure",
+            "idempotency_key": "api-reopen-assessment",
+        },
+    )
+    assert reopen_assessment.status_code == 200
+    reopen = client.post(
+        f"/v1/operations/cases/{reopen_case.case_id}/reopen",
+        json={
+            "assessment_id": reopen_assessment.json()["assessment"]["assessment_id"],
+            "idempotency_key": "api-reopen",
+        },
+    )
+    assert reopen.status_code == 200
+    assert reopen.json()["created"] is True
+    assert client.get(f"/v1/operations/cases/{reopen_case.case_id}/reopen-history").json()
