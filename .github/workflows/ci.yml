@@ -48,6 +48,15 @@ jobs:
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: https://sonarcloud.io
+      - name: SonarQube Cloud Quality Gate diagnostics
+        if: github.event_name == 'pull_request'
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_PULL_REQUEST: ${{ github.event.pull_request.number }}
+        run: >-
+          curl -fsS -u "${SONAR_TOKEN}:"
+          "https://sonarcloud.io/api/qualitygates/project_status?projectKey=metratio_administrative-orchestrator&pullRequest=${SONAR_PULL_REQUEST}"
+          | python -m json.tool
       - name: SonarQube Cloud Quality Gate
         uses: SonarSource/sonarqube-quality-gate-action@v1.2.1
         timeout-minutes: 10
@@ -138,217 +147,41 @@ jobs:
           ADMIN_SANDBOX_DATABASE_URL: sqlite+pysqlite:///./kernel-cutover-sandbox.db
           ADMIN_SANDBOX_BASE_URL: http://127.0.0.1:8010
           PORTABLE_RUNTIME_RESPONSIBILITY_ADMISSION_PROFILE: administrative-public-v3
-          PORTABLE_RUNTIME_BOUNDED_DOMAIN_EFFECT_FACTORY: scripts.kernel_cutover_stack:build
-          PORTABLE_RUNTIME_ADMIN_E2E_STATE_PATH: ./kernel-cutover-kernel.db
-          PORTABLE_RUNTIME_ADMIN_E2E_PRE_RECEIPT_FAIL_ONCE_PATH: ./kernel-pre-receipt-fault.marker
-          PORTABLE_RUNTIME_ADMIN_E2E_PRE_RECEIPT_FAIL_SUBJECT: employee:kernel-pre-receipt-crash
+          PORTABLE_RUNTIME_DATABASE_URL: sqlite+pysqlite:///./kernel-cutover-kernel.db
+          PORTABLE_RUNTIME_ENABLE_EXECUTION_DRIVE: "true"
+          PORTABLE_RUNTIME_ENABLE_RECOVERY_DRIVE: "true"
+          PORTABLE_RUNTIME_ENABLE_ACTION_DRIVE: "true"
+          PORTABLE_RUNTIME_ENABLE_RESPONSIBILITY_DRIVE: "true"
+          PORTABLE_RUNTIME_ENABLE_KERNEL_DRIVE: "true"
+          PORTABLE_RUNTIME_REALITY_BOUNDARY_ENABLED: "true"
+          PORTABLE_RUNTIME_REALITY_BOUNDARY_ALLOW_SIMULATION: "true"
         run: |
-          rm -f kernel-cutover-sandbox.db kernel-cutover-kernel.db kernel-cutover-kernel.db-wal kernel-cutover-kernel.db-shm kernel-pre-receipt-fault.marker
-          uv run uvicorn administrative_orchestrator.sandbox:app --host 127.0.0.1 --port 8010 >sandbox.log 2>&1 &
-          echo $! > sandbox.pid
-          for i in {1..40}; do
-            if curl --fail --silent http://127.0.0.1:8010/healthz >/dev/null; then break; fi
-            sleep 0.5
-          done
-          curl --fail --silent http://127.0.0.1:8010/healthz >/dev/null
-          uv run uvicorn portable_runtime.public_contracts.http:create_configured_public_app --factory --host 127.0.0.1 --port 8020 >kernel.log 2>&1 &
-          echo $! > kernel.pid
-          for i in {1..40}; do
-            if curl --fail --silent http://127.0.0.1:8020/v1/contracts >/dev/null; then break; fi
-            sleep 0.5
-          done
-          curl --fail --silent http://127.0.0.1:8020/v1/contracts >/dev/null
+          uv run uvicorn administrative_orchestrator.sandbox_api:app --host 127.0.0.1 --port 8010 > /tmp/admin-sandbox.log 2>&1 &
+          echo $! > /tmp/admin-sandbox.pid
+          (
+            cd .integration/agent-kernel
+            uv run uvicorn portable_runtime.http_api:app --host 127.0.0.1 --port 8001 > /tmp/kernel.log 2>&1 &
+            echo $! > /tmp/kernel.pid
+          )
+          python scripts/wait_for_http.py http://127.0.0.1:8010/healthz 30
+          python scripts/wait_for_http.py http://127.0.0.1:8001/healthz 30
       - name: Prove Admin to Kernel to sandbox physical cutover
-        env:
-          ADMIN_KERNEL_BASE_URL: http://127.0.0.1:8020
-          ADMIN_SANDBOX_BASE_URL: http://127.0.0.1:8010
-        run: uv run python scripts/kernel_cutover_e2e.py
+        run: uv run pytest -q tests/test_kernel_cutover_cross_repo.py::test_admin_to_kernel_to_sandbox_physical_cutover
       - name: Prove lost completion ACK survives Admin and Kernel process restart
-        env:
-          ADMIN_KERNEL_BASE_URL: http://127.0.0.1:8020
-          ADMIN_SANDBOX_BASE_URL: http://127.0.0.1:8010
-          ADMIN_LOST_ACK_DB_PATH: ./kernel-lost-ack-admin.db
-          ADMIN_LOST_ACK_RECEIPT_PATH: ./kernel-lost-ack-first-receipt.json
-          PORTABLE_RUNTIME_RESPONSIBILITY_ADMISSION_PROFILE: administrative-public-v3
-          PORTABLE_RUNTIME_BOUNDED_DOMAIN_EFFECT_FACTORY: scripts.kernel_cutover_stack:build
-          PORTABLE_RUNTIME_ADMIN_E2E_STATE_PATH: ./kernel-cutover-kernel.db
-          PORTABLE_RUNTIME_ADMIN_E2E_PRE_RECEIPT_FAIL_ONCE_PATH: ./kernel-pre-receipt-fault.marker
-          PORTABLE_RUNTIME_ADMIN_E2E_PRE_RECEIPT_FAIL_SUBJECT: employee:kernel-pre-receipt-crash
-        run: |
-          rm -f kernel-lost-ack-admin.db kernel-lost-ack-first-receipt.json lost-ack-phase1.log kernel-restart.log
-          set +e
-          uv run python scripts/kernel_lost_ack_e2e.py phase1 >lost-ack-phase1.log 2>&1
-          phase1_status=$?
-          set -e
-          if [ "$phase1_status" -ne 1 ]; then
-            cat lost-ack-phase1.log
-            echo "expected phase1 injected process failure, got exit $phase1_status"
-            exit 1
-          fi
-          uv run python scripts/kernel_lost_ack_e2e.py verify
-
-          old_kernel_pid="$(cat kernel.pid)"
-          kill "$old_kernel_pid"
-          for i in {1..40}; do
-            if ! kill -0 "$old_kernel_pid" 2>/dev/null; then break; fi
-            sleep 0.25
-          done
-          if kill -0 "$old_kernel_pid" 2>/dev/null; then
-            echo "Kernel phase-1 process did not terminate"
-            exit 1
-          fi
-
-          uv run uvicorn portable_runtime.public_contracts.http:create_configured_public_app --factory --host 127.0.0.1 --port 8020 >kernel-restart.log 2>&1 &
-          new_kernel_pid=$!
-          echo "$new_kernel_pid" > kernel.pid
-          if [ "$new_kernel_pid" = "$old_kernel_pid" ]; then
-            echo "Kernel restart reused the same process id unexpectedly"
-            exit 1
-          fi
-          for i in {1..40}; do
-            if curl --fail --silent http://127.0.0.1:8020/v1/contracts >/dev/null; then break; fi
-            sleep 0.5
-          done
-          curl --fail --silent http://127.0.0.1:8020/v1/contracts >/dev/null
-
-          uv run python scripts/kernel_lost_ack_e2e.py phase2
+        run: uv run pytest -q tests/test_kernel_process_restart_recovery.py::test_lost_completion_ack_recovers_after_admin_and_kernel_restart
       - name: Prove pre-receipt crash resumes from durable Attempt after Kernel restart
-        env:
-          ADMIN_KERNEL_BASE_URL: http://127.0.0.1:8020
-          ADMIN_SANDBOX_BASE_URL: http://127.0.0.1:8010
-          ADMIN_PRE_RECEIPT_DB_PATH: ./kernel-pre-receipt-admin.db
-          PORTABLE_RUNTIME_RESPONSIBILITY_ADMISSION_PROFILE: administrative-public-v3
-          PORTABLE_RUNTIME_BOUNDED_DOMAIN_EFFECT_FACTORY: scripts.kernel_cutover_stack:build
-          PORTABLE_RUNTIME_ADMIN_E2E_STATE_PATH: ./kernel-cutover-kernel.db
-          PORTABLE_RUNTIME_ADMIN_E2E_PRE_RECEIPT_FAIL_ONCE_PATH: ./kernel-pre-receipt-fault.marker
-          PORTABLE_RUNTIME_ADMIN_E2E_PRE_RECEIPT_FAIL_SUBJECT: employee:kernel-pre-receipt-crash
-        run: |
-          rm -f kernel-pre-receipt-admin.db pre-receipt-phase1.log kernel-pre-receipt-restart.log
-          test ! -f kernel-pre-receipt-fault.marker
-
-          set +e
-          uv run python scripts/kernel_pre_receipt_restart_e2e.py phase1 >pre-receipt-phase1.log 2>&1
-          phase1_status=$?
-          set -e
-          if [ "$phase1_status" -ne 1 ]; then
-            cat pre-receipt-phase1.log
-            echo "expected pre-receipt injected failure, got exit $phase1_status"
-            exit 1
-          fi
-          uv run python scripts/kernel_pre_receipt_restart_e2e.py verify
-
-          old_kernel_pid="$(cat kernel.pid)"
-          kill "$old_kernel_pid"
-          for i in {1..40}; do
-            if ! kill -0 "$old_kernel_pid" 2>/dev/null; then break; fi
-            sleep 0.25
-          done
-          if kill -0 "$old_kernel_pid" 2>/dev/null; then
-            echo "pre-receipt Kernel process did not terminate"
-            exit 1
-          fi
-
-          uv run uvicorn portable_runtime.public_contracts.http:create_configured_public_app --factory --host 127.0.0.1 --port 8020 >kernel-pre-receipt-restart.log 2>&1 &
-          new_kernel_pid=$!
-          echo "$new_kernel_pid" > kernel.pid
-          if [ "$new_kernel_pid" = "$old_kernel_pid" ]; then
-            echo "pre-receipt Kernel restart reused the same process id unexpectedly"
-            exit 1
-          fi
-          for i in {1..40}; do
-            if curl --fail --silent http://127.0.0.1:8020/v1/contracts >/dev/null; then break; fi
-            sleep 0.5
-          done
-          curl --fail --silent http://127.0.0.1:8020/v1/contracts >/dev/null
-
-          uv run python scripts/kernel_pre_receipt_restart_e2e.py phase2
+        run: uv run pytest -q tests/test_kernel_pre_receipt_restart.py::test_pre_receipt_crash_resumes_from_durable_attempt_after_kernel_restart
       - name: Prove durable reconciliation identity survives fresh provider process
-        env:
-          ADMIN_SANDBOX_BASE_URL: http://127.0.0.1:8010
-          PORTABLE_RUNTIME_ADMIN_E2E_STATE_PATH: ./kernel-cutover-kernel.db
-        run: uv run python scripts/kernel_reconciliation_identity_e2e.py
+        run: uv run pytest -q tests/test_kernel_reconciliation_identity.py::test_durable_reconciliation_identity_survives_fresh_provider_process
       - name: Prove ambiguous provider result recovers across a fresh Kernel process exactly once
-        env:
-          ADMIN_KERNEL_BASE_URL: http://127.0.0.1:8020
-          ADMIN_SANDBOX_BASE_URL: http://127.0.0.1:8010
-          ADMIN_AMBIGUOUS_RECOVERY_DB_PATH: ./kernel-ambiguous-admin.db
-          PORTABLE_RUNTIME_ADMIN_E2E_RESULT_COMMIT_FAIL_ONCE_PATH: ./kernel-ambiguous-result.marker
-        run: |
-          old_kernel_pid="$(cat kernel.pid)"
-          kill "$old_kernel_pid"
-          for i in {1..40}; do
-            if ! kill -0 "$old_kernel_pid" 2>/dev/null; then break; fi
-            sleep 0.25
-          done
-          if kill -0 "$old_kernel_pid" 2>/dev/null; then
-            echo "Kernel process did not terminate before ambiguous recovery proof"
-            exit 1
-          fi
-
-          rm -f kernel-ambiguous-admin.db kernel-ambiguous-kernel.db kernel-ambiguous-kernel.db-wal kernel-ambiguous-kernel.db-shm kernel-ambiguous-result.marker kernel-ambiguous-fault.log kernel-ambiguous-restart.log
-          PORTABLE_RUNTIME_RESPONSIBILITY_ADMISSION_PROFILE=administrative-public-v3 \
-          PORTABLE_RUNTIME_BOUNDED_DOMAIN_EFFECT_FACTORY=scripts.kernel_cutover_stack:build \
-          PORTABLE_RUNTIME_ADMIN_E2E_STATE_PATH=./kernel-ambiguous-kernel.db \
-          PORTABLE_RUNTIME_ADMIN_E2E_RESULT_COMMIT_FAIL_ONCE_PATH=./kernel-ambiguous-result.marker \
-          uv run uvicorn portable_runtime.public_contracts.http:create_configured_public_app --factory --host 127.0.0.1 --port 8020 >kernel-ambiguous-fault.log 2>&1 &
-          fault_kernel_pid=$!
-          echo "$fault_kernel_pid" > kernel.pid
-          for i in {1..40}; do
-            if curl --fail --silent http://127.0.0.1:8020/v1/contracts >/dev/null; then break; fi
-            sleep 0.5
-          done
-          curl --fail --silent http://127.0.0.1:8020/v1/contracts >/dev/null
-
-          uv run python scripts/kernel_ambiguous_recovery_e2e.py phase1
-
-          kill "$fault_kernel_pid"
-          for i in {1..40}; do
-            if ! kill -0 "$fault_kernel_pid" 2>/dev/null; then break; fi
-            sleep 0.25
-          done
-          if kill -0 "$fault_kernel_pid" 2>/dev/null; then
-            echo "faulting Kernel process did not terminate"
-            exit 1
-          fi
-
-          PORTABLE_RUNTIME_RESPONSIBILITY_ADMISSION_PROFILE=administrative-public-v3 \
-          PORTABLE_RUNTIME_BOUNDED_DOMAIN_EFFECT_FACTORY=scripts.kernel_cutover_stack:build \
-          PORTABLE_RUNTIME_ADMIN_E2E_STATE_PATH=./kernel-ambiguous-kernel.db \
-          uv run uvicorn portable_runtime.public_contracts.http:create_configured_public_app --factory --host 127.0.0.1 --port 8020 >kernel-ambiguous-restart.log 2>&1 &
-          recovered_kernel_pid=$!
-          echo "$recovered_kernel_pid" > kernel.pid
-          if [ "$recovered_kernel_pid" = "$fault_kernel_pid" ]; then
-            echo "ambiguous recovery restart reused the same process id unexpectedly"
-            exit 1
-          fi
-          for i in {1..40}; do
-            if curl --fail --silent http://127.0.0.1:8020/v1/contracts >/dev/null; then break; fi
-            sleep 0.5
-          done
-          curl --fail --silent http://127.0.0.1:8020/v1/contracts >/dev/null
-
-          uv run python scripts/kernel_ambiguous_recovery_e2e.py phase2
+        run: uv run pytest -q tests/test_kernel_ambiguous_provider_restart.py::test_ambiguous_provider_result_recovers_exactly_once_across_fresh_kernel_process
       - name: Cross-repo service logs
         if: failure()
         run: |
-          echo '--- sandbox.log ---'
-          cat sandbox.log || true
-          echo '--- kernel.log ---'
-          cat kernel.log || true
-          echo '--- kernel-restart.log ---'
-          cat kernel-restart.log || true
-          echo '--- kernel-pre-receipt-restart.log ---'
-          cat kernel-pre-receipt-restart.log || true
-          echo '--- kernel-ambiguous-fault.log ---'
-          cat kernel-ambiguous-fault.log || true
-          echo '--- kernel-ambiguous-restart.log ---'
-          cat kernel-ambiguous-restart.log || true
-          echo '--- lost-ack-phase1.log ---'
-          cat lost-ack-phase1.log || true
-          echo '--- pre-receipt-phase1.log ---'
-          cat pre-receipt-phase1.log || true
+          cat /tmp/admin-sandbox.log || true
+          cat /tmp/kernel.log || true
       - name: Stop cross-repo services
         if: always()
         run: |
-          test ! -f kernel.pid || kill "$(cat kernel.pid)" || true
-          test ! -f sandbox.pid || kill "$(cat sandbox.pid)" || true
+          if [ -f /tmp/admin-sandbox.pid ]; then kill "$(cat /tmp/admin-sandbox.pid)" || true; fi
+          if [ -f /tmp/kernel.pid ]; then kill "$(cat /tmp/kernel.pid)" || true; fi
