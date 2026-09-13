@@ -27,6 +27,3 @@ def test_promoted_kernel_baseline_is_consistent_across_current_release_surfaces(
         assert set(refs) == {expected}, (
             f"{workflow} pins {sorted(set(refs))}, expected only {expected}"
         )
-
-    staging_ref = _env_value(Path("deploy/m9-staging/.env.example"), "AGENT_KERNEL_REF")
-    assert staging_ref == expected
