@@ -22,7 +22,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: xiongweilin/agent-kernel
-          ref: 729082888f5a875db2df2a2e59517ca6d80e4be8
+          ref: 706cb3514c7edd030518f016a8f9b232b98f8166
           path: .integration/agent-kernel
       - name: Install
         run: |
@@ -122,7 +122,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: xiongweilin/agent-kernel
-          ref: 729082888f5a875db2df2a2e59517ca6d80e4be8
+          ref: 706cb3514c7edd030518f016a8f9b232b98f8166
           path: .integration/agent-kernel
       - uses: astral-sh/setup-uv@v6
         with:
