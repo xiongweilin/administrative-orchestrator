@@ -15,16 +15,26 @@ def test_existing_execution_inheritance_surface_is_preserved() -> None:
     assert issubclass(OffboardingExecutionEngine, OnboardingExecutionEngine)
 
 
-def test_child_domains_compose_the_verified_obligation_executor() -> None:
+def test_onboarding_facade_delegates_generic_lifecycle() -> None:
+    run_source = inspect.getsource(OnboardingExecutionEngine.run)
+    dispatch_source = inspect.getsource(OnboardingExecutionEngine._drive_dispatch)
+    verify_source = inspect.getsource(OnboardingExecutionEngine._verify_all)
+
+    assert "self._verified_executor.run" in run_source
+    assert "self._verified_executor.drive_dispatch" in dispatch_source
+    assert "self._verified_executor.verify_all" in verify_source
+
+
+def test_child_domain_compatibility_paths_remain_super_based() -> None:
     financial_run = inspect.getsource(FinancialExecutionEngine.run)
     offboarding_run = inspect.getsource(OffboardingExecutionEngine.run)
     offboarding_dispatch = inspect.getsource(OffboardingExecutionEngine._drive_dispatch)
     offboarding_verify = inspect.getsource(OffboardingExecutionEngine._verify_all)
 
-    assert "VerifiedObligationExecutor(self).run" in financial_run
-    assert "VerifiedObligationExecutor(self).run" in offboarding_run
-    assert "VerifiedObligationExecutor(self).drive_dispatch" in offboarding_dispatch
-    assert "VerifiedObligationExecutor(self).verify_all" in offboarding_verify
+    assert "return super().run(case_id)" in financial_run
+    assert "return super().run(case_id)" in offboarding_run
+    assert "super()._drive_dispatch" in offboarding_dispatch
+    assert "super()._verify_all" in offboarding_verify
 
 
 def test_generic_executor_does_not_own_domain_interpretation() -> None:
