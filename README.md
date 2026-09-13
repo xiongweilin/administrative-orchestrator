@@ -202,7 +202,9 @@ The current repository contains one coherent Administrative language across thes
 - bounded advisory investigation and authority-epoch reopen paths with stale-authorization fencing;
 - Operations API/Console, observability, PostgreSQL DR, Kernel-state recovery, and production preflight.
 
-Not currently claimed by the accepted system include ASR/meeting bots, proof of human read, external-recipient or broadcast communication, delegated commitment assignment, payment/settlement, an independently deployed meta-controller service, or real-provider adaptive-investigation staging acceptance.
+Not currently claimed by the accepted system include ASR/meeting bots, proof of human read, external-recipient or broadcast communication, delegated commitment assignment, payment/settlement, or an independently deployed meta-controller service.
+
+Adaptive investigation has a recorded isolated staging acceptance in `docs/acceptance/adaptive-investigation-staging-acceptance.md`; that record does not claim production-provider deployment or an independently deployed meta-controller.
 
 ## Authority and completion model
 
