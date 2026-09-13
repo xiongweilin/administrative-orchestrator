@@ -51,6 +51,20 @@ class Settings(BaseSettings):
     # credential pair above and the dynamic tenant-token provider.
     feishu_access_token: SecretStr | None = None
     feishu_artifact_root: str = "./data/intake-artifacts"
+    # M9 outbound communication is a separate governed transport.  Its
+    # credential is intentionally distinct from the M6 ingress secret and the
+    # legacy notification key.
+    communication_gateway_base_url: str = ""
+    communication_transport_secret: SecretStr | None = None
+    communication_transport_secret_file: str = ""
+    communication_transport_secret_env: str = "ADMIN_COMMUNICATION_TRANSPORT_SECRET"
+    communication_gateway_timeout_seconds: float = 10.0
+    communication_verifier_app_id: str = ""
+    communication_verifier_app_id_file: str = ""
+    communication_verifier_app_secret: SecretStr | None = None
+    communication_verifier_app_secret_file: str = ""
+    communication_verifier_app_secret_env: str = "ADMIN_COMMUNICATION_VERIFIER_APP_SECRET"
+    communication_verifier_gateway_secret_env: str = "ADMIN_COMMUNICATION_TRANSPORT_SECRET"
     intake_model_url: str = ""
     intake_model_api_key: SecretStr | None = None
     intake_model_protocol: Literal["json", "openai-chat", "openai-responses"] = "json"
@@ -193,6 +207,8 @@ class Settings(BaseSettings):
             raise ValueError("kernel_contract_timeout_seconds must be positive")
         if self.connector_timeout_seconds <= 0:
             raise ValueError("connector_timeout_seconds must be positive")
+        if self.communication_gateway_timeout_seconds <= 0:
+            raise ValueError("communication_gateway_timeout_seconds must be positive")
         if self.authoritative_fact_max_age_seconds <= 0:
             raise ValueError("authoritative_fact_max_age_seconds must be positive")
         if self.intake_model_max_tokens <= 0:

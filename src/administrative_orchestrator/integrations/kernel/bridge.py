@@ -10,6 +10,7 @@ from ...governance import GovernanceBasis, GovernanceRepository
 from ...obligations import AdministrativeObligation, ObligationRepository
 from ...persistence import SqlStore
 from .capabilities import (
+    ADMINISTRATIVE_COMMUNICATION_MESSAGE_SEND,
     ADMINISTRATIVE_HRIS_EMPLOYEE_CREATE,
     ADMINISTRATIVE_IAM_IDENTITY_CREATE,
     FINANCIAL_CUTOVER_CAPABILITIES,
@@ -27,7 +28,11 @@ from .compatibility import (
 )
 from .evidence import HttpKernelEvidenceClient, KernelEvidenceClient
 from .mapper import capability_for, derive_effect_intent, derive_execution_grant, project_to_kernel
-from .models import KernelProjectionStatus, KernelShadowProjection
+from .models import (
+    KernelProjectionStatus,
+    KernelShadowProjection,
+    KernelWorkAdmissionStatus,
+)
 from .recovery import HttpKernelRecoveryClient, KernelRecoveryClient
 from .repository import KernelBridgeRepository
 
@@ -40,6 +45,7 @@ KERNEL_CUTOVER_CAPABILITIES = frozenset(
         ADMINISTRATIVE_IAM_IDENTITY_CREATE,
         *OFFBOARDING_CUTOVER_CAPABILITIES,
         *FINANCIAL_CUTOVER_CAPABILITIES,
+        ADMINISTRATIVE_COMMUNICATION_MESSAGE_SEND,
     }
 )
 
@@ -101,6 +107,21 @@ class KernelExecutionBridge:
 
     def owns(self, obligation: AdministrativeObligation) -> bool:
         return self.cutover and capability_for(obligation) in KERNEL_CUTOVER_CAPABILITIES
+
+    def should_retry_priority_rejection(
+        self,
+        projection: KernelShadowProjection,
+    ) -> bool:
+        """Report whether a rejected admission crossed a configured policy boundary."""
+
+        return (
+            self.requires_work_admission
+            and projection.status is KernelProjectionStatus.REJECTED
+            and projection.kernel_work_admission_status
+            is KernelWorkAdmissionStatus.PRIORITY_REJECTED
+            and projection.kernel_admission_policy_ref
+            != self.settings.kernel_responsibility_admission_policy_ref
+        )
 
     def compatibility(self) -> KernelContractIdentity:
         if not self.enabled:
@@ -215,6 +236,12 @@ class KernelExecutionBridge:
         )
         planned = project_to_kernel(grant, intent, identity)
         projection = self.repository.put_projection(planned)
+
+        if self.should_retry_priority_rejection(projection):
+            projection = self.repository.reopen_priority_rejected(
+                projection,
+                expected_policy_ref=self.settings.kernel_responsibility_admission_policy_ref,
+            )
 
         if projection.status is KernelProjectionStatus.SHADOW:
             receipt = self.client().submit(projection)

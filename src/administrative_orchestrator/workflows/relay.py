@@ -69,7 +69,11 @@ def execute_outbox_action(action: WorkflowWakeAction) -> None:
 
     from ..config import get_settings
     from ..persistence import SqlStore
-    from .definitions import offboarding_case_workflow, onboarding_case_workflow
+    from .definitions import (
+        meeting_commitment_case_workflow,
+        offboarding_case_workflow,
+        onboarding_case_workflow,
+    )
 
     case_kind = str(action.message.get("case_kind") or "").strip()
     if not case_kind:
@@ -84,6 +88,7 @@ def execute_outbox_action(action: WorkflowWakeAction) -> None:
         "procurement-request": onboarding_case_workflow,
         "invoice-ap-preparation": onboarding_case_workflow,
         "expense-reimbursement": onboarding_case_workflow,
+        "meeting-commitment": meeting_commitment_case_workflow,
     }
     workflow = workflows.get(case_kind)
     if workflow is None:
