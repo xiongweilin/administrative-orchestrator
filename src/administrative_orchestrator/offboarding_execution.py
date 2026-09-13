@@ -41,6 +41,7 @@ from .transfer import (
     TransferRequirementStatus,
     derive_transfer_requirements,
 )
+from .verified_obligation_execution import VerifiedObligationExecutor
 
 
 class OffboardingExecutionEngine(OnboardingExecutionEngine):
@@ -94,7 +95,7 @@ class OffboardingExecutionEngine(OnboardingExecutionEngine):
                 "case.effective_time_reached",
                 {"effective_at": effective_at.isoformat()},
             )
-        return super().run(case_id)
+        return VerifiedObligationExecutor(self).run(case_id)
 
     def _plan_current_effects(self, case: AdministrativeCase) -> None:
         if case.fact_snapshot is None or case.policy_ref is None:
@@ -306,10 +307,14 @@ class OffboardingExecutionEngine(OnboardingExecutionEngine):
 
     def _drive_dispatch(self, case, effects, obligation_set, links):
         ordered = sorted(effects, key=self._effect_order)
-        return super()._drive_dispatch(case, ordered, obligation_set, links)
+        return VerifiedObligationExecutor(self).drive_dispatch(
+            case, ordered, obligation_set, links
+        )
 
     def _verify_all(self, case, effects, obligation_set, links):
-        result = super()._verify_all(case, effects, obligation_set, links)
+        result = VerifiedObligationExecutor(self).verify_all(
+            case, effects, obligation_set, links
+        )
         if result == "verified" and obligation_set is not None:
             transfers = self.transfers.list_for_case(
                 case.case_id, case.authority_epoch
