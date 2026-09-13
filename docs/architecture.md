@@ -1,429 +1,349 @@
 # Architecture
 
-## 1. Product position
+`administrative-orchestrator` is the domain system for governed administrative automation. Its architecture is organized by semantic ownership, not by delivery milestone.
 
-`administrative-orchestrator` is the primary administrative digital-automation reference system. It owns durable organization-facing cases and the business meaning of facts, policy, approvals, obligations, semantic verification, and completion. It is not a second generic Agent runtime and it does not replace authoritative HR, finance, IAM, document, messaging, or calendar systems.
+The canonical noun definitions are in `docs/contracts/domain-model.md`; the authority composition rules are in `docs/contracts/workflow-authority.md`. ADRs explain why the ownership boundaries exist. Acceptance documents prove particular real executions but do not define current architecture.
 
-The current M5 trusted-action chain is:
+## 1. System boundary
+
+Administrative owns the durable organizational meaning of a matter: what was observed, what entered the formal model, which facts are current, which policy applies, who may decide, what obligations exist, which business effect is intended, what reality was verified, and whether the matter is complete or must reopen.
+
+Administrative does **not** own the generic agent runtime or the physical provider effect boundary.
 
 ```text
-authenticated ingress
+organizational reality
         |
         v
-AdministrativeRequest
-        |
-        v
-AdministrativeCase
-        |
-request claims / attestations / authoritative assertions / provenance
-        |
-        v
-persisted PolicyVersion -> PolicyEvaluation
-        |
-        v
-current identity / role / delegation qualification
-        |
-        v
-Decision set -> ApprovalSatisfaction
-        |
-        v
-dependency-scoped GovernanceBasis
++---------------- Administrative ----------------+
+|                                                |
+|  perception -> admission -> case              |
+|       -> facts / policy / authority            |
+|       -> governance / obligations              |
+|       -> business effect intent                |
+|                                                |
++----------------------|-------------------------+
+                       |
+                       v
+                  Agent Kernel
+        responsibility / Work / Run / Attempt
+        runtime authorization / capability
+        physical RealityBoundary / recovery
+                       |
+                       v
+                external systems
+                       |
+                       v
++---------------- Administrative ----------------+
+| authoritative read-back -> realization        |
+| -> ConfirmedOutcome -> completion/reopen       |
++------------------------------------------------+
+```
+
+DBOS schedules Administrative workflows durably. Transport gateways carry authenticated provider interaction. Neither DBOS nor a gateway becomes an alternate owner of business authority, completion, responsibility, or effect semantics.
+
+## 2. Semantic planes
+
+### 2.1 Perception plane
+
+The perception plane preserves the difference between what arrived and what the system thinks it means.
+
+```text
+provider/source event
+   -> IntakeReceipt
+   -> SourceArtifact
+   -> DocumentRepresentation
+   -> EvidenceSpan
+   -> InterpretationRecord
+```
+
+`IntakeReceipt` establishes durable receipt and bounded source-verification facts. `SourceArtifact` is immutable source material. `DocumentRepresentation` is derived. `EvidenceSpan` locates support. `InterpretationRecord` is model/parser interpretation.
+
+No object in this plane is an authoritative Administrative fact merely by existing.
+
+For provider-backed messaging, the first durable handoff contains metadata required to identify and fetch the canonical provider object. Message bodies and extracted content do not become transport-ledger authority. Provider-native sender identity remains source evidence until current `IdentityBinding` resolves it.
+
+### 2.2 Candidate and admission plane
+
+Interpretation may produce candidates:
+
+```text
+InterpretationRecord
+   -> CandidateAdministrativeRequest
+   -> CandidateFactAssertion
+   -> CandidateCaseUpdate
+   -> CandidateCommitment
+```
+
+Candidates remain proposals. `IntakeAssessment` decides how a candidate is handled. Only a final deterministic or authorized-human path may admit a supported candidate. `PromotionRecord` preserves the exact lineage into formal Administrative state.
+
+```text
+candidate
+  -> IntakeAssessment
+  -> PromotionRecord
+  -> AdministrativeRequest / AdministrativeCase
+```
+
+Human admission authorizes entry into the formal model; it does not convert candidate claims into `AUTHORITATIVE` facts. Authoritative facts come through approved fact owners/readers.
+
+Pre-admission supersession and post-admission case updates remain different operations. A later source event must not accidentally create a second case where the product semantics require an update to the existing one.
+
+### 2.3 Case and fact plane
+
+`AdministrativeRequest` is the formal trigger. `AdministrativeCase` is the durable business matter.
+
+The case references immutable fact history and a current fact projection. Field-level `FactAssertion` preserves claim, attestation, authoritative ownership, and provenance. A new current snapshot never erases historical snapshots.
+
+`case.version` tracks state/history concurrency. `authority_epoch` tracks authority-sensitive invalidation. They are related but non-equivalent clocks.
+
+Authoritative external facts are re-read before governed reality transitions when the product contract requires fresh truth. Changed decision-relevant facts can invalidate the current governance world and require re-evaluation or reopen.
+
+### 2.4 Policy and authority plane
+
+The authority plane converts current facts and organizational structure into bounded closure.
+
+```text
+FactSnapshot
+  -> PolicyRef / PolicyEvaluation
+  -> current Principal / RoleAssignment / Delegation eligibility
+  -> Decision set
+  -> ApprovalSatisfaction
+  -> GovernanceBasis
+```
+
+Authentication is upstream evidence about caller identity. `IdentityBinding` resolves external identity into an Administrative Principal. Roles/delegations establish eligibility. A `Decision` records judgment. `ApprovalSatisfaction` proves that the policy's required decision structure is closed. `GovernanceBasis` freezes the exact fact/policy/scope/qualification world relied upon.
+
+Before authority-sensitive action, verification, or completion, the relevant governance dependencies are revalidated. Stale governance fails closed.
+
+### 2.5 Obligation and effect-intent plane
+
+Administrative derives required business conditions before planning external action.
+
+```text
+current case + GovernanceBasis
         |
         v
 AdministrativeObligationSet
         |
-        v
-AdministrativeExecutionGrant / EffectIntent
+        +-> DOMAIN_STATE_VERIFIED
         |
-        v
-Agent Kernel StandingResponsibility
-        |
-        v
-WorkProposal -> admission -> Work / Run / Attempt
-        |
-        v
-Kernel runtime authorization
-        |
-        v
-unique physical RealityBoundary
-        |
-        v
-external system reality
-        |
-        v
-independent Kernel verification evidence / recovery
-        |
-        v
-Administrative semantic verification
-        |
-        v
-ConfirmedOutcome
-        |
-        v
-obligation-backed CompletionAssessment
-        |
-        +-> COMPLETED
-        +-> WAIT / RECONCILE / REASSESS / REOPEN
+        +-> EXTERNAL_EFFECT_VERIFIED
+                     |
+                     v
+             ExecutionAuthorization
+                     |
+                     v
+                EffectRecord
 ```
 
-M4 completed the lower-half runtime convergence onto `agent-kernel`: cut-over writes no longer have an Administrative physical-provider fallback, and ambiguous execution is recovered by Kernel canonical recovery rather than by Administrative redispatch. M5 keeps that ownership model intact while adding production identity, authoritative facts, real-system connector contracts, human exception operations, observability, and recovery/DR gates.
+`AdministrativeObligationSet` is frozen per case/authority epoch and governance basis. It is the completion contract. It is not reconstructed from successful effects after the fact.
 
-See `docs/adr/0001-domain-kernel-dbos-ownership.md` for semantic ownership and `docs/adr/0002-repository-and-deployment-boundaries.md` for repository/deployment boundaries.
+`ExecutionAuthorization` is the canonical Administrative exact-scope authorization. It binds current case/epoch, subject, target system, allowed operations, policy, authority class, issuer, and supporting approval/decision lineage. It is not Kernel runtime authorization.
 
-M6 adds an upstream perception/admission plane without changing that trusted
-action chain:
+`EffectRecord` is Administrative business effect intent/lineage. Once physically cut over, Administrative does not directly own provider retry/recovery; it submits bounded capability work through Kernel.
 
-```text
-provider event authenticity
-        |
-        v
-IntakeReceipt -> SourceArtifact -> EvidenceSpan
-        |
-        v
-InterpretationRecord
-        |
-        v
-candidate request / case update / candidate fact
-        |
-        v
-IntakeAssessment
-        |
-        v
-human-confirmed PromotionRecord
-        |
-        v
-existing IngressReceipt -> existing M5 AdministrativeRequest / Case path
-```
+### 2.6 Kernel runtime plane
 
-The current Feishu reference slice uses the official SDK long connection and
-makes the first handoff durable before any provider content is read:
+Agent Kernel is a separate semantic owner for generic runtime concerns:
 
-```text
-Feishu official SDK long connection
-  -> trusted metadata-only gateway handoff
-  -> gateway transport authentication at the Administrative boundary
-  -> optional provider callback-token verification when present
-  -> IntakeReceipt + intake.feishu.received outbox event (one transaction)
-  -> asynchronous canonical message fetch
-  -> ArtifactStore + SourceArtifact + EvidenceSpan
-  -> current IdentityBinding resolution
-  -> InterpretationRecord -> candidate/conversation records
-```
-
-The long-connection event does not reliably carry the HTTP callback token, so
-the gateway authenticates this internal handoff with a dedicated transport
-credential. A provider token is still verified whenever it is present, while
-direct callback mode retains its callback-token and optional signature checks.
-The receipt and outbox payload carry delivery metadata only; they do not carry
-the message body or extracted content. The configured runtime builds the
-metadata boundary and worker pipeline from deployment settings, and the relay
-fails closed when processing dependencies are absent. URL-verification and
-signed HTTP callback behavior are outside this reference slice unless a
-separate callback transport is enabled. This repository therefore documents
-the durable ingress and runtime boundary; the real Feishu long-connection path
-is recorded in `docs/acceptance/M6-staging-acceptance.md`.
-
-Inbox conversations are keyed by provider, tenant, and provider thread.
-Provider-native sender identity is resolved through the current Administrative
-`IdentityBinding`; displayed sender text remains untrusted source evidence.
-Before admission, a later candidate may explicitly supersede an earlier
-candidate. After admission, a later message becomes a reviewable
-`CandidateCaseUpdate` on the existing case rather than a second case.
-
-The intake plane is not an authority plane. Source authenticity is not
-content truth, interpretation is not an authoritative fact, candidate state
-is not an AdministrativeRequest, and model confidence is not admission
-authority. The complete contract is recorded in ADR 0003.
-
-Human confirmation is also not an authoritative-source refresh. The Operations
-review path may finalize an `IntakeAssessment(ADMIT)` and explicitly request
-`bridge_to_m5` for the supported `employee-onboarding` case with a selected
-`subject_ref`. The admission service then creates the normal promotion and M5
-request/case lineage, evaluates the existing onboarding policy, and preserves
-all bridged candidate facts as `FactAuthority.CLAIM`. It does not create Kernel
-Work or bypass M5 authority, obligation, external-effect, verification, or
-completion gates. Current authoritative fields are obtained separately from
-the approved HRIS reader through the existing refresh/revalidation path;
-request-only fields remain claims, and stale or changed authoritative
-dependencies are handled by the existing `GOVERNANCE_STALE` reopen boundary.
-
-For M8 transaction cases the same admission service accepts `bridge_to_m8` and
-selects the typed procurement, invoice/AP, or expense contract. Candidate
-financial values remain claims; qualification assessments, current policy, and
-approval/governance are separate durable dependencies before an ERP effect.
-
-M8 adds a document-driven transaction preparation plane above this chain. A
-raw source artifact is immutable evidence; parser output is a separate
-`DocumentRepresentation`; spans identify the exact representation and locator
-used for a claim. Human admission preserves transaction facts as claims until
-qualification assessments and current governance permit the case to proceed.
-The three M8 case kinds are typed policy inputs, not generic document tasks:
-
-```text
-procurement-request       -> ERP purchase-order draft / bounded confirmation
-invoice-ap-preparation    -> ERP vendor-bill draft
-expense-reimbursement     -> ERP expense-report preparation
-```
-
-Each ERP write is represented as an Administrative obligation and mapped to a
-Kernel capability. The ERP connector uses a durable request/subject identity,
-and an independent verifier reads back the external draft. Completion cannot
-be established by an unrelated outcome, an HTTP success, or a settlement
-record; payment, bank transfer, and settlement capabilities are outside M8.
-M8's current document and transaction migrations start at the actual repository
-head (`0023_outbox_replay_audit`) and are not a rewrite of M5–M7 history.
-
-## 2. Ownership boundaries
-
-### administrative-orchestrator owns
-
-- `AdministrativeRequest`, `AdministrativeCase`, case-specific business state;
-- request claims, human attestations, authoritative fact projections/assertions, provenance, and immutable fact history;
-- administrative policy versions, lifecycle, deterministic policy evaluation, and business applicability;
-- organization-domain identity projection, roles, delegation, decision eligibility, decisions, and `ApprovalSatisfaction`;
-- dependency-scoped `GovernanceBasis` and current-governance revalidation;
-- business obligations and frozen expected postconditions;
-- administrative business execution grants/effect intents;
-- authoritative domain-read ports and product-specific connector contracts;
-- administrative semantic verification, completion, audit, review, exception, and reassessment surfaces.
-- the M6 Intake Plane's receipts, source/evidence lineage, interpretations,
-  candidate records, assessments, promotion lineage, and the
-  content-addressed `ArtifactStore` port/adapter contract.
-- M8 `DocumentRepresentation`, transaction evidence links, qualification
-  assessments, typed financial facts/policies, and the draft-only ERP
-  connector contract.
-
-### agent-kernel owns
-
-- persistent responsibility (`StandingResponsibility`) and responsibility assessment;
-- `WorkProposal`, priority/admission/reservation/commitment, Work materialization;
+- persistent responsibility;
+- WorkProposal/admission/materialization;
 - Work / Run / Step / Attempt;
 - generic runtime authorization and authorization use;
-- capability routing, invocation permit, provider execution, and the unique physical `RealityBoundary`;
-- execution-level retry permission, recovery, and reconciliation;
-- generic execution evidence, Outcome/revision contracts, and canonical resolution of ambiguous provider results.
+- capability routing and invocation permit;
+- provider execution through the unique physical `RealityBoundary`;
+- retry permission, outcome ambiguity, recovery, and reconciliation identity;
+- generic execution evidence and Outcome/revision contracts.
 
-Downstream administrative code may consume Kernel contracts and retain references/projections, but it must not mint or reconstruct Kernel authority, directly retry cut-over providers, or create a second generic runtime semantic owner.
+Administrative may persist references/projections to Kernel objects. It must not reconstruct Kernel authority locally, mint a second Work/Run model, or bypass Kernel with a second cut-over provider path.
 
-### DBOS owns
+## 3. Return path from reality
 
-- durable workflow scheduling;
-- wait, wake-up, replay, resume, and crash recovery of administrative orchestration.
-
-DBOS does not own administrative policy, business authority, obligations, completion, or the physical effect boundary.
-
-### external systems own
-
-Business reality remains with its authoritative source. A local projection, adapter result, HTTP 2xx, or provider execution receipt never becomes authoritative merely because the orchestrator recorded it.
-
-## 3. Current governance invariants
+Provider or Kernel success is not Administrative completion.
 
 ```text
-Authentication != resource authorization
-External identity != Administrative authority
-RequestClaim != HumanAttestation != AuthoritativeFact
-Historical role assignment != current qualification
-PolicyVersion definition != PolicyEvaluation
+physical execution
+   -> authoritative external reality
+   -> independent read-back
+   -> EffectRealizationAssessment
+   -> ConfirmedOutcome
+   -> CompletionAssessment
+```
+
+`EffectRealizationAssessment` explicitly distinguishes verified, not verified, mismatch, and unknown. `ConfirmedOutcome` is a bounded Administrative semantic conclusion supported by realization evidence.
+
+`CompletionAssessment` evaluates the current `AdministrativeObligationSet`. External-effect obligations require matching effect/obligation lineage and verified outcome evidence. Domain-state obligations require verified Administrative state. The two proof modes do not substitute for one another.
+
+If current reality cannot be established, the system waits, reconciles, or reopens. It does not turn uncertainty into success.
+
+## 4. Persistent responsibility
+
+Persistent responsibility belongs to Kernel. Administrative determines business obligations and can create/reference responsibility under its Kernel contract, but responsibility state is not just another case column.
+
+The lifecycle is intentionally split:
+
+```text
+Administrative obligation or admitted commitment
+        |
+        v
+Kernel responsibility
+        |
+     ACTIVE
+        |
+        +-> OVERDUE-like temporal evidence where applicable
+        |
+Administrative CompletionAssessment / fulfillment evidence
+        |
+        v
+Kernel responsibility assessment
+        |
+        v
+discharge decision
+        |
+        v
+lifecycle transition -> DISCHARGED
+```
+
+Administrative case completion is evidence for responsibility discharge, not a substitute for it. The discharge service calls Kernel assessment/decision/transition/status contracts and does not create a new provider effect.
+
+## 5. Commitment architecture
+
+Meeting/transcript input reuses the perception and admission planes.
+
+```text
+SourceArtifact
+  -> DocumentRepresentation
+  -> EvidenceSpan
+  -> InterpretationRecord
+  -> CandidateCommitment
+  -> SpeakerPrincipalResolution
+  -> authorized admission
+  -> meeting-commitment AdministrativeCase
+  -> CommitmentRecord
+  -> persistent Kernel responsibility
+```
+
+The qualification contract is deliberately narrow:
+
+- speaker label/provider display identity is not a Principal;
+- ambiguous speaker resolution fails closed;
+- only explicit self-commitment enters the formal commitment path;
+- due time must be offset-aware and retain its interpretation basis;
+- suggestion, aspiration, information, and assignment-to-other remain non-commitment classes.
+
+Commitment creation does not directly create external Work/effects. Due revision/cancellation invalidates stale timers/reminders. `OVERDUE` records temporal status, not failure. Late authorized fulfillment may close the commitment while overdue history remains immutable.
+
+## 6. Governed communication architecture
+
+Outbound communication is an Administrative effect with frozen content integrity and a transport-only provider boundary.
+
+```text
+bounded/fixed-template generation
+   -> CommunicationDraftRecord
+   -> ArtifactStore reference + content digest
+   -> current Administrative authority
+   -> Kernel capability / durable execution identity
+   -> transport-only gateway
+   -> provider
+   -> canonical provider read-back
+   -> CommunicationEffectRecord
+```
+
+The transport gateway does not persist or reinterpret Administrative content as business truth. Administrative persists the draft artifact/digest and delivery metadata necessary for governance and reconciliation.
+
+Delivery state preserves:
+
+```text
+PREPARED
+TRANSPORT_ACCEPTED
+DELIVERY_CONFIRMED
+RETRYING
+PERMANENT_FAILED
+OUTCOME_UNKNOWN
+```
+
+`CommunicationReadState` is independent; delivery confirmation does not establish human read. Lost acknowledgement is reconciled under the same durable communication/execution identity rather than by generating a new identity and blindly sending again.
+
+## 7. Transaction architecture
+
+Document-driven financial cases reuse the same planes rather than forming a separate workflow language.
+
+Raw document evidence becomes a `DocumentRepresentation` with exact spans. Admission preserves extracted financial values as claims. Transaction qualification is a separate eligibility layer over current vendor/master-data, duplicate detection, amount/currency/match evidence, and policy inputs.
+
+Supported typed case families include procurement request, invoice/AP preparation, and expense reimbursement. Their ERP writes are bounded draft/preparation capabilities. Payment, bank transfer, and settlement are separate authority domains and are not implied by draft creation.
+
+A transaction qualification may enter `GovernanceBasis` as a dependency. If the qualification changes, old governance must not continue to authorize an effect.
+
+## 8. Employee lifecycle architecture
+
+Employee onboarding/offboarding are case kinds over the same case, fact, authority, obligation, execution, verification, and completion language.
+
+Lifecycle-specific facts such as active state/effective termination time are authoritative HR dependencies. Effective-time waiting is not failure. Ownership-transfer/domain-state requirements may be Administrative obligations even when they require no external provider effect.
+
+Offboarding effects such as IAM disablement or HRIS deactivation remain separately authorized and independently verified. Partial physical progress under verifier unavailability does not imply case completion.
+
+## 9. Reopen and reconciliation
+
+Reconciliation addresses uncertainty inside the represented procedure. Reopen addresses a framing/closure world that is no longer sufficient.
+
+Examples requiring explicit preservation include:
+
+- provider result ambiguous but recoverable under the same execution identity -> reconcile;
+- authoritative read-back temporarily unavailable -> wait/reconcile;
+- current fact/policy/authority dependency differs from the governance basis -> reopen/reassess;
+- observed external state contradicts the intended postcondition -> reopen or governed correction;
+- new scope/risk dimension not covered by current policy -> reopen.
+
+```text
+OUTCOME_UNKNOWN != retry permission
+REOPEN_REQUIRED != execution authorization
+compensation != hidden rollback
+```
+
+Correction/compensation is new governed action with fresh authority and evidence.
+
+## 10. Process and repository boundaries
+
+The repository is a product monorepo. API, Operations API, worker, DBOS workflows, product-specific integrations, migrations, Operations Console, deployment assets, DR, and product documentation share one Administrative semantic/versioning lifecycle.
+
+A process/container/language boundary is not by itself a repository boundary. A component should split only when it acquires an independent consumer/release/ownership/SLA/security/version contract.
+
+`agent-kernel` remains separate because it owns a genuinely independent generic runtime contract. Provider gateways remain separate where their transport/security lifecycle is independently useful, but they do not absorb Administrative semantics.
+
+## 11. Current invariants
+
+```text
+Authentication != Administrative authority
+Source authenticity != content truth
+Interpretation != authoritative fact
+Candidate != formal Administrative state
+External identity != Principal
+Principal eligibility != Decision
 Decision != ApprovalSatisfaction
-ApprovalSatisfaction != AdministrativeExecutionGrant
-AdministrativeExecutionGrant != Kernel runtime authorization
-case-local authority_epoch != organization/policy GovernanceBasis
+ApprovalSatisfaction != GovernanceBasis
+GovernanceBasis != ExecutionAuthorization
+ExecutionAuthorization != Kernel runtime authorization
 AdministrativeObligation != Kernel Work
-Kernel execution evidence != Administrative ConfirmedOutcome
-Effect dispatch != realized effect
+EffectRecord != external reality
 Provider success != ConfirmedOutcome
-execution-unknown != retry permission
-ABSENT != UNAVAILABLE != UNKNOWN != STALE
+Kernel execution evidence != Administrative semantic outcome
+OUTCOME_UNKNOWN != retry permission
 Object existence != semantic postcondition satisfaction
-planned effects complete != business obligations complete
-CaseStatus.COMPLETED != universal responsibility discharge
+Case completion != responsibility discharge
+Speaker label != Principal
+Suggestion != commitment
+TransportAccepted != DeliveryConfirmed != HumanRead
 ```
 
-`authority_epoch` invalidates case-local authority when case facts/evidence/policy/reassessment change. `GovernanceBasis` separately records the exact external governance dependencies relied on by an approval world: fact snapshot, policy definition, scope, selected principal qualifications, and any delegation basis. Execution, verification, and completion revalidate those dependencies even when the case itself has not changed.
+These invariants are the architecture's stable spine. Provider brands, staging directories, migration labels, acceptance tags, and milestone-named compatibility identifiers may change or remain historical without changing this ownership model.
 
-For M6, `CandidateFactAssertion.authority` is restricted to `CLAIM` or
-`ATTESTED_CANDIDATE`; `AUTHORITATIVE` is not a candidate value. A human
-reviewer authorizes admission of a request/case candidate, not the truth of
-the candidate's facts. The existing authoritative refresh endpoint reads the
-current HRIS record, overlays only approved authoritative fields, preserves
-request-only claims, and re-evaluates the onboarding policy. A successful
-candidate bridge is therefore not evidence that Odoo, Keycloak, or any other
-system of record was reached.
+## 12. Where truth lives
 
-## 4. Business obligations before effects
+Use the following order when documents disagree:
 
-Completion is not inferred from whatever the planner emitted.
+1. current code, migrations, and live runtime evidence for implemented behavior;
+2. `docs/contracts/domain-model.md` for current vocabulary and semantic distinctions;
+3. this document and ADRs for current ownership/topology;
+4. acceptance records for what a specific recorded real run proved;
+5. milestone documents for historical delivery intent and evidence location.
 
-```text
-facts + policy + current governance
-              |
-              v
-   AdministrativeObligationSet
-          /          \
-         v            v
-   effect intent     completion
-         |
-         v
-   Kernel Work
-```
-
-Required obligations must be covered by linked intents/Work and must each have semantically verified confirmed outcomes. A planner omission therefore blocks completion instead of creating a self-consistent false success.
-
-## 5. Reality observation semantics
-
-Observation uses independent epistemic dimensions:
-
-```text
-availability: AVAILABLE | UNAVAILABLE | UNKNOWN
-presence:     PRESENT   | ABSENT      | UNKNOWN
-freshness:    CURRENT   | STALE       | UNKNOWN
-```
-
-Examples:
-
-```text
-HTTP 404 from authoritative source
--> AVAILABLE + ABSENT + CURRENT
-
-network timeout
--> UNAVAILABLE + UNKNOWN + UNKNOWN
-```
-
-A network failure is never proof that an object is absent. An ambiguous prior effect result is never permission for a blind side-effect retry.
-
-Production integration preserves three different roles even when they target the same vendor system:
-
-```text
-Administrative authoritative reader
-!= Kernel writer provider
-!= Kernel independent verifier
-```
-
-The writer changes reality. The verifier independently observes declared postconditions. The Administrative reader supplies current business facts and governance dependencies. Sharing a vendor API does not merge these authorities.
-
-## 6. Closed versus open work
-
-Routine administrative work remains deterministic whenever current ontology, policy, authoritative facts, and governance are sufficient. Ordinary missing information is `GATHERING_FACTS`; waiting for a decision is `AWAITING_DECISION`.
-
-A closed deterministic administrative workflow does not fabricate `CognitiveClosure` merely to use `agent-kernel`. It hands a bounded administrative obligation/business grant into persistent responsibility and normal Work admission:
-
-```text
-AdministrativeObligation
--> AdministrativeExecutionGrant
--> StandingResponsibility / ResponsibilityAssessment
--> WorkProposal
--> priority/admission/reservation/commitment
--> Work / Run
--> runtime authorization
--> RealityBoundary
-```
-
-It may bypass cognition; it may not bypass responsibility, Work admission, runtime authorization, the unique RealityBoundary, or canonical recovery.
-
-Administrative reassessment is required when the current business frame becomes invalid, including stale governance, policy conflict, unresolved authority, incompatible subject/scope change, or reality contradiction. This is distinct from the Kernel's cognitive reopen semantics.
-
-## 7. Risk model
-
-Administrative effects retain independent reversibility and authority-sensitivity axes.
-
-Reversibility:
-
-```text
-READ_ONLY
-REVERSIBLE
-CORRECTABLE
-IRREVERSIBLE
-UNKNOWN
-```
-
-Authority sensitivity:
-
-```text
-NORMAL
-PII
-FINANCIAL
-PRIVILEGED_ACCESS
-EMPLOYMENT
-LEGAL
-REGULATED
-```
-
-Reversibility never implies weak authority. Granting administrator access is reversible but highly authority-sensitive.
-
-## 8. Runtime and deployment profiles
-
-```text
-test         -> compatibility/unit semantics may exercise historical paths
-development  -> explicit local sandbox conveniences
-governed     -> authority enforcement is mandatory and cannot be disabled by env toggle
-production   -> OIDC, PostgreSQL durability, explicit migrations, Kernel cutover,
-                pinned Kernel revision, HTTPS providers, credential separation,
-                production preflight and durable recovery storage
-```
-
-The development Docker Compose stack runs governed application semantics with reproducible local identity/provider conveniences. `compose.production.yaml` is the production-shaped reference topology and still requires real environment-specific staging/production credentials, network policy, backup policy, and acceptance evidence.
-
-The M6 document foundation stores raw source representations outside
-PostgreSQL through `ArtifactStore`. The current filesystem adapter uses
-content-addressed SHA-256 objects, atomic publication, and read/verify digest
-checks; PostgreSQL retains metadata, provenance, storage references, spans,
-and lineage. The Feishu adapter now fetches canonical file/image resources and
-passes them through the same attachment processor, while the production worker
-mounts a named durable artifact volume. A real provider attachment run is
-recorded in `docs/acceptance/M6-staging-acceptance.md`; OCR/document
-interpretation and document-to-Work behavior remain out of scope for that
-slice. Missing, corrupted, or
-unavailable artifacts fail closed without fabricating an interpretation or
-admission.
-
-Service/process boundaries do not imply repository boundaries. The Administrative API, Operations API, DBOS worker, product-specific integrations, migrations, deployment assets, and TypeScript Operations Console remain one repository because they share one Administrative semantic/versioning and acceptance lifecycle. See ADR 0002.
-
-## 9. Milestones
-
-- **M0 — semantic foundation:** case/policy/decision/effect distinctions.
-- **M1 — durable execution:** PostgreSQL, Alembic, outbox, DBOS wait/restart, authoritative sandbox.
-- **M2 — organizational authority and policy:** authenticated principals, scoped role/delegation, multi-party approval satisfaction, versioned Policy Plane.
-- **M3 — administrative correctness:** resource authorization, dependency-scoped GovernanceBasis, obligation-backed completion, reality epistemics, fact-authority distinction, explicit policy lifecycle.
-- **M4 — kernel convergence:** compatibility gate, persistent responsibility/Work admission, administrative business-grant/effect-intent split, HRIS/IAM physical cut-over, unique Kernel RealityBoundary, and canonical ambiguous-result recovery.
-- **M5 — production trust and reality integration:** OIDC/JWKS, field-level authoritative provenance, Odoo/Keycloak read/write/verification contracts, Operations Console, observability, production preflight, DR gates, pinned Kernel baseline plus `agent-kernel/main` recovery canary. **Repository implementation/CI, isolated real-staging Gates A–F, squash merge, and post-merge main CI are complete for the recorded scope.**
-- **M6 — trusted perception and admission:** authenticated non-structured source intake, evidence/provenance, candidate interpretation, identity/conversation semantics, explicit human-confirmed admission, the Feishu durable-ingress reference slice, M5 onboarding bridge, and document attachment foundation. **The real staging provider-to-M5 vertical slice, attachment path, and artifact restore evidence are complete for the recorded scope** in `docs/acceptance/M6-staging-acceptance.md`; broader Administrative domain expansion remains deferred.
-- **M7 — employee lifecycle responsibility (accepted for the recorded isolated staging scope):** employee-offboarding as a second case kind, authoritative termination facts, qualified effective-time waiting, Administrative authority revocation, continuity transfer with explicit successor requirements, Kernel-owned IAM/HRIS revocation effects, verified completion, and explicit persistent-responsibility discharge. The contract is ADR 0004, the plan is in `docs/milestones/M7.md`, and the evidence record is `docs/acceptance/M7-staging-acceptance.md`.
-- **M8 — document-driven organizational transactions (accepted for the recorded isolated staging scope):** immutable document representation lineage, bounded text-PDF handling, qualification-bound ERP preparation, exact effect/realization/outcome completion binding, and production-shaped recovery/DR checks. The contract is ADR 0005 and the evidence record is `docs/acceptance/M8-staging-acceptance.md`.
-- **M9 — meeting commitment intake and governed outbound communication (accepted for the recorded isolated staging scope):** candidate-only transcript interpretation, qualified speaker and due-time admission, persistent Kernel responsibility, fixed-template internal Feishu communication, independent delivery verification, fulfillment, completion, and explicit discharge. The contract is ADR 0006 and the evidence record is `docs/acceptance/M9-staging-acceptance.md`.
-
-M5 staging acceptance is intentionally external to repository CI. M6 adds the
-same evidence boundary for provider intake and the human-confirmed bridge; the
-no-secrets/no-body record is `docs/acceptance/M6-staging-acceptance.md`, with the
-empty template retained at `docs/acceptance/M6-staging-acceptance-template.md`.
-
-## 10. Repository and deployment topology
-
-Current repository ownership is intentionally coarse-grained around semantic/versioning ownership rather than process count:
-
-```text
-agent-kernel                         separate repository
-    generic responsibility / Work / runtime authority / RealityBoundary / recovery
-
-administrative-orchestrator          one product repository
-    Administrative domain + policy + authority + obligations + completion
-    Administrative API
-    Operations API
-    DBOS worker/orchestration
-    Odoo/Keycloak Administrative integration contracts/implementations
-    Operations Console (TypeScript)
-    migrations / deployment / observability / DR / docs
-```
-
-A component becomes a repository-split candidate only when it acquires an independently owned contract and lifecycle: multiple product consumers, independent release cadence/SLA/security boundary/team, or stable external versioning needs. Code size or having a separate process/container is not by itself a split trigger.
-
-## 11. System-self-operation boundary
-
-`control-plane` may monitor and repair the deployment of `administrative-orchestrator`, but it must not become the administrative business authority.
-
-```text
-administrative case authority
-!=
-platform repair authority
-```
-
-The same physical service may be observed by both systems without merging their responsibilities.
+Historical acceptance is preserved, not rewritten into current semantics.
