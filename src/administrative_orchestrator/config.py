@@ -185,6 +185,7 @@ class Settings(BaseSettings):
         "x_administrative_transaction_confirm_request_ref"
     )
     odoo_transaction_subject_ref_field: str = "x_administrative_transaction_subject_ref"
+    odoo_transaction_payload_field: str = "x_administrative_m8_payload_json"
 
     iam_source_kind: Literal["disabled", "keycloak"] = "disabled"
     keycloak_base_url: str = ""
