@@ -173,11 +173,12 @@ provider acceptance is recorded in
 `docs/acceptance/M8-staging-acceptance.md`; the template remains available for
 future isolated reruns. Admin PR #80 and Kernel PR #99 were merged after passing
 their required checks, including the cross-repository cutover/recovery lanes and
-SonarQube Quality Gate. This acceptance does not expand the milestone into M9.
+SonarQube Quality Gate. The recorded M8 acceptance did not expand that milestone
+into M9; M9 is recorded separately below.
 
 See:
 
-- `docs/architecture.md` for the current M4/M5 ownership topology;
+- `docs/architecture.md` for the current M5–M9 ownership topology;
 - `docs/adr/0001-domain-kernel-dbos-ownership.md` for canonical semantic ownership;
 - `docs/adr/0002-repository-and-deployment-boundaries.md` for why service/process separation does not currently imply more repositories;
 - `docs/milestones/M5.md` for milestone acceptance evidence, staging checklist, and SLO targets;
@@ -330,6 +331,14 @@ Keeping pinned-baseline and main-canary lanes separate prevents an upstream Kern
 
 ## Near-term direction
 
-M6 established trusted perception and admission, and M8 now extends that path into bounded document-driven transaction preparation without adding another intake or execution authority. Further work should deepen qualification/readback coverage and production calibration rather than broaden into payment, generic RAG, or another runtime; an Agent Kernel store-port implementation remains conditional on measured availability/concurrency needs.
+M6 established trusted perception and admission, M8 extended that path into
+bounded document-driven transaction preparation, and M9 now extends it into
+qualified meeting commitments and governed internal communication without
+adding another intake or execution authority. Further work should deepen
+qualification/readback coverage and production calibration rather than broaden
+into payment, generic RAG, arbitrary messaging, or another runtime; M10
+meta-controller scope remains explicitly deferred, and an Agent Kernel
+store-port implementation remains conditional on measured
+availability/concurrency needs.
 
 Natural-language and Agent-based intake remain above this governed execution core. They may improve interpretation and investigation, but they consume rather than bypass the same fact, policy, authority, effect, verification, reconciliation, and completion contracts.

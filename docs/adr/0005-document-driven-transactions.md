@@ -1,7 +1,8 @@
 # ADR 0005 — Document-Driven Organizational Transactions
 
 Status: **accepted for the recorded isolated-staging scope; Admin PR #80 and
-Kernel PR #99 merged; M9 remains out of scope**
+Kernel PR #99 merged. This ADR records the M8 decision boundary; M9 is governed
+separately by ADR 0006 and its acceptance record.**
 
 ## Decision
 

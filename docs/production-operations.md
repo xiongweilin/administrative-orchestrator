@@ -1,11 +1,12 @@
 # Production operations and disaster recovery
 
 This runbook describes the M5 production-shaped deployment, M6 intake
-additions, and M8 document-driven transaction preparation. It preserves the
-Administrative/Agent Kernel authority split and deliberately treats recovery
-as reconciliation of durable facts, not as permission to improvise or blindly
-replay provider writes. M6 intake is an upstream perception path; M8 adds
-bounded ERP preparation without creating another execution authority.
+additions, M8 document-driven transaction preparation, and M9 governed
+communication/commitment path. It preserves the Administrative/Agent Kernel
+authority split and deliberately treats recovery as reconciliation of durable
+facts, not as permission to improvise or blindly replay provider writes. M6
+intake is an upstream perception path; M8 and M9 add bounded domain slices
+without creating another execution authority.
 
 ## Reference topology
 
@@ -119,9 +120,9 @@ transport authentication header; a long-connection event may omit the HTTP
 callback token. A direct Feishu callback, if separately enabled, still uses the
 callback token and optional signature path.
 
-## M8 transaction operations
+## M8 transaction operations (historical acceptance boundary)
 
-M8 staging is isolated under `deploy/m8-staging/` and uses the Compose project
+The recorded M8 staging was isolated under `deploy/m8-staging/` and used the Compose project
 `administrative-m8-staging`, separate PostgreSQL/Odoo/Keycloak/Kernel/artifact
 volumes, and ports `18101`–`18105`. Its migration head is
 `0027_m8_current_qualification`.
@@ -161,6 +162,33 @@ uv run python scripts/production_preflight.py
 
 The command validates configuration and the presence of configured secret environment variables. It does not print secret values.
 
+## M9 commitment and communication operations
+
+M9 staging is isolated under `deploy/m9-staging/` and uses the Compose project
+`administrative-m9-staging`, separate PostgreSQL/Odoo/Keycloak/Kernel/artifact
+volumes, host ports `18201`–`18205`, and migration head
+`0030_m9_communications`. The current recorded scope is owned by
+`docs/acceptance/M9-staging-acceptance.md`; M8 staging remains a historical
+locator and is not a rollback target for M9.
+
+The M9 path is bounded to plain-text transcript metadata, immutable artifact
+and `EvidenceSpan` lineage, candidate-only interpretation, human/policy
+qualification, persistent responsibility, and one-to-one internal Feishu
+confirmation/reminder messages. The existing `feishu-dify-gateway` remains the
+single long-connection owner; the separate M9 Gateway process is transport-only
+and must not become a second Feishu WebSocket owner.
+
+Outbound message bodies remain in the content-addressed ArtifactStore. Admin
+and Gateway records retain references, digests, recipient/event identity, and
+transport/delivery state only. `transport_accepted`, `delivery_confirmed`, and
+`human_read` are distinct facts; an `outcome_unknown` result is reconciled
+using the same durable event identity and is never resolved by blind replay.
+
+Back up the Administrative database, DBOS database, Kernel state, and M9
+artifact store together. Keep the M9 transport credential in the existing
+external secret mount or task-scoped secret file; record only its locator and
+owner in recovery documentation, never its value.
+
 ## Credential separation
 
 Use separate service identities for these trust domains:
@@ -183,8 +211,8 @@ Secret values belong in the deployment secret manager/environment. Domain record
 
 ## Startup sequence
 
-1. Provision PostgreSQL, durable Kernel storage, and the durable M6 artifact
-   volume when intake is enabled.
+1. Provision PostgreSQL, durable Kernel storage, and the durable M6/M9 artifact
+   volume required by the selected staging or production profile.
 2. Restore required secrets from the platform secret manager.
 3. Run `alembic upgrade head` against the Administrative PostgreSQL database.
 4. Ensure the DBOS system database exists and is reachable.
@@ -235,6 +263,13 @@ For M6 intake staging, also verify:
 The recorded real-staging acceptance for this boundary is
 `docs/acceptance/M6-staging-acceptance.md` (Gate A–P, attachment, and artifact
 restore evidence).
+
+For M9 staging, also verify the recorded transcript-to-candidate lineage,
+qualified speaker and due time, human/policy admission, persistent Kernel
+responsibility, governed confirmation/reminder transport, independent provider
+readback, committer-only fulfillment, and the assessment → decision →
+transition discharge sequence. The current evidence record is
+`docs/acceptance/M9-staging-acceptance.md`.
 
 Employee-lifecycle staging (offboarding) uses its own isolated topology and
 records evidence in `docs/acceptance/M7-staging-acceptance.md` from the template
@@ -437,9 +472,11 @@ If any effect is execution-unknown, preserve the newer Kernel state until reconc
 ## Real staging acceptance
 
 Public CI cannot exercise enterprise credentials or provider delivery. The
-recorded M6 run is `docs/acceptance/M6-staging-acceptance.md`. Before a new
-deployment or a revalidation, execute the M5 checklist in
-`docs/milestones/M5.md` and fill
+current M9 recorded run is `docs/acceptance/M9-staging-acceptance.md`; before a
+new M9 deployment or revalidation, use `deploy/m9-staging/README.md` and the
+M9 acceptance template. Historical M6 and M8 records remain immutable evidence
+for their own scopes. Before a new M6 deployment or revalidation, execute the
+M5 checklist in `docs/milestones/M5.md` and fill
 `docs/acceptance/M6-staging-acceptance-template.md` against the actual
 Feishu/IdP/Odoo/Keycloak/Kernel staging topology and least-privilege accounts.
 
