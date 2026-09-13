@@ -19,6 +19,10 @@ class AdministrativePermission(StrEnum):
     AUDIT_READ = "audit.read"
     OPERATIONS_READ = "operations.read"
     INTAKE_REVIEW = "intake.review"
+    INVESTIGATION_READ = "investigation.read"
+    INVESTIGATION_REQUEST = "investigation.request"
+    INVESTIGATION_REVIEW = "investigation.review"
+    REOPEN_AUTHORIZE = "case.reopen.authorize"
     IDENTITY_MANAGE = "identity.manage"
     DEAD_LETTER_READ = "dead_letter.read"
     DEAD_LETTER_REPLAY = "dead_letter.replay"
@@ -58,6 +62,15 @@ _OPERATIONS_READ_ROLES = {
     "administrative_admin",
 }
 _INTAKE_REVIEW_ROLES = {"administrative_operator", "administrative_admin"}
+_INVESTIGATION_READ_ROLES = {
+    "administrative_operator",
+    "administrative_auditor",
+    "administrative_admin",
+    "platform_operator",
+}
+_INVESTIGATION_REQUEST_ROLES = {"administrative_operator", "administrative_admin"}
+_INVESTIGATION_REVIEW_ROLES = {"administrative_operator", "administrative_admin"}
+_REOPEN_AUTHORIZE_ROLES = {"administrative_operator", "administrative_admin"}
 _IDENTITY_MANAGE_ROLES = {"administrative_admin"}
 _PLATFORM_OPS_ROLES = {"platform_operator", "administrative_admin"}
 
@@ -131,6 +144,14 @@ class AdministrativeAccessPolicy:
             return bool(roles.intersection(_OPERATIONS_READ_ROLES))
         if permission == AdministrativePermission.INTAKE_REVIEW:
             return bool(roles.intersection(_INTAKE_REVIEW_ROLES))
+        if permission == AdministrativePermission.INVESTIGATION_READ:
+            return bool(roles.intersection(_INVESTIGATION_READ_ROLES))
+        if permission == AdministrativePermission.INVESTIGATION_REQUEST:
+            return bool(roles.intersection(_INVESTIGATION_REQUEST_ROLES))
+        if permission == AdministrativePermission.INVESTIGATION_REVIEW:
+            return bool(roles.intersection(_INVESTIGATION_REVIEW_ROLES))
+        if permission == AdministrativePermission.REOPEN_AUTHORIZE:
+            return bool(roles.intersection(_REOPEN_AUTHORIZE_ROLES))
         if permission == AdministrativePermission.IDENTITY_MANAGE:
             return bool(roles.intersection(_IDENTITY_MANAGE_ROLES))
         if permission in {

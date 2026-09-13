@@ -75,6 +75,24 @@ class Settings(BaseSettings):
     intake_model_version: str = "configured"
     intake_model_profile_ref: str = "feishu-onboarding-v1"
     intake_model_schema_ref: str = "candidate-interpretation-v1"
+    # Optional advisory-only investigation adapter.  A blank URL keeps the
+    # Administrative deployment available while investigation remains
+    # fail-closed and records the advisory failure.
+    investigation_client_url: str = ""
+    investigation_client_timeout_seconds: float = 10.0
+    investigation_client_api_key: SecretStr | None = None
+    investigation_client_api_key_file: str = ""
+    investigation_model_url: str = ""
+    # Direct model routing, when enabled, has its own credential owner. It is
+    # never populated from the advisory-service credential above.
+    investigation_model_api_key: SecretStr | None = None
+    investigation_model_api_key_file: str = ""
+    investigation_model_protocol: Literal["openai-chat", "openai-responses"] = "openai-chat"
+    investigation_model_name: str = ""
+    investigation_model_max_tokens: int = 2000
+    investigation_model_provider: str = "configured-model-gateway"
+    investigation_model_version: str = "configured"
+    investigation_model_prompt_ref: str = "adaptive-investigation-v1"
     intake_model_instruction: str = (
         "Extract a candidate administrative intent and candidate facts only. "
         "Never authorize, execute, or communicate on behalf of the system. "
@@ -209,6 +227,10 @@ class Settings(BaseSettings):
             raise ValueError("connector_timeout_seconds must be positive")
         if self.communication_gateway_timeout_seconds <= 0:
             raise ValueError("communication_gateway_timeout_seconds must be positive")
+        if self.investigation_client_timeout_seconds <= 0:
+            raise ValueError("investigation_client_timeout_seconds must be positive")
+        if self.investigation_model_max_tokens <= 0:
+            raise ValueError("investigation_model_max_tokens must be positive")
         if self.authoritative_fact_max_age_seconds <= 0:
             raise ValueError("authoritative_fact_max_age_seconds must be positive")
         if self.intake_model_max_tokens <= 0:

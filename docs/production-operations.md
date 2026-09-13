@@ -189,6 +189,46 @@ artifact store together. Keep the M9 transport credential in the existing
 external secret mount or task-scoped secret file; record only its locator and
 owner in recovery documentation, never its value.
 
+## Adaptive investigation and governed reopen operations
+
+Investigation is an Administrative business record, not DBOS-only workflow
+state. The following records must be included in the normal Administrative
+PostgreSQL backup and restore boundary:
+
+- `InvestigationTrigger` / `InvestigationRequest`;
+- `InvestigationProposal` and `ReframingProposal`;
+- `InvestigationEvidenceRequest` / `InvestigationEvidence`;
+- `ReopenAssessment` / `ReopenRecord`.
+
+The advisory client is optional. If it is unavailable, Administrative remains
+available for existing valid cases; the investigation is marked failed and
+the current case authority/epoch remains unchanged. Do not turn an advisory
+failure into a provider retry or a new effect.
+
+The safe sequence is:
+
+```text
+Kernel OUTCOME_UNKNOWN
+  -> Kernel historical reconciliation/read-back first
+  -> Administrative investigation only if a residual domain ambiguity remains
+  -> bounded proposal/evidence review
+  -> preserve closure or authorized reopen
+  -> authority_epoch + 1 on reopen
+  -> fresh fact/policy/authority/governance evaluation
+  -> new ExecutionAuthorization before any new effect
+```
+
+`ReopenRecord` preserves historical decisions, governance bases, obligations,
+authorizations, effects, outcomes, commitments, and responsibility references.
+It does not delete or rewrite them. Existing authorization and commitment
+paths must fail closed on the new epoch until they are explicitly revalidated.
+
+The advisory credential, if configured, is separate from OIDC, Administrative
+authority, Kernel, perception, verifier, and reality-write credentials. The
+advisory service receives bounded references and constraints only; it must not
+receive the Administrative database, provider-write credentials, or a Kernel
+action API.
+
 ## Credential separation
 
 Use separate service identities for these trust domains:
@@ -204,6 +244,8 @@ Use separate service identities for these trust domains:
 | Keycloak | reader | directory/identity facts required by Administrative logic |
 | Keycloak | writer | bounded IAM mutations delegated to Kernel |
 | Keycloak | verifier | read-only independent postcondition observation |
+| Investigation advisory service | `ADMIN_INVESTIGATION_CLIENT_API_KEY` or its secret-file reference | bounded advisory output only; no Administrative or provider mutation |
+| Investigation model gateway | `ADMIN_INVESTIGATION_MODEL_API_KEY` or its secret-file reference | model inference only; separate from advisory-service, Administrative, Kernel, and provider-write credentials |
 
 Writer and verifier accounts must not be aliases for the same account/client. Production preflight rejects that configuration.
 
@@ -304,6 +346,11 @@ administrative_authoritative_fact_refresh_total
 administrative_governance_revalidation_total
 administrative_connector_outcome_total
 administrative_identity_lifecycle_total
+administrative_investigations_total
+administrative_investigation_failures_total
+administrative_reopen_assessments_total
+administrative_reopens_total
+administrative_investigation_duration_seconds
 ```
 
 Metric labels are deliberately low-cardinality. Do not add `case_id`, `principal_id`, external subject, request UUID, or correlation ID as Prometheus labels. Those identifiers belong in structured logs and durable domain/Kernel records.

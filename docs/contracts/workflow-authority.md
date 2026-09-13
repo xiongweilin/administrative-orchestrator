@@ -221,7 +221,64 @@ transport_accepted != delivery_confirmed
 delivery_confirmed != human_read
 ```
 
-## 10. Invalid shortcuts
+## 10. Investigation and governed reframing path
+
+When the current case model cannot support safe closure, Administrative may
+open a bounded investigation without granting a new execution path:
+
+```text
+anomaly / conflict / missing qualification
+        |
+        v
+InvestigationTrigger
+        |
+        v
+InvestigationRequest
+        |
+        v
+bounded InvestigationClient / meta-controller adapter
+        |
+        v
+schema-validated InvestigationProposal
+        |
+        +-> read-only evidence request / human question
+        +-> ReframingProposal
+        +-> ReopenAssessment
+                    |
+          +---------+---------+
+          v                   v
+   PRESERVE_CLOSURE       authorized REOPEN
+                              |
+                              v
+                     authority_epoch + 1
+                              |
+                              v
+                    fresh facts / policy / authority
+                              |
+                              v
+                         new closure
+```
+
+The advisory boundary receives only bounded references and constraints. It
+does not receive provider-write credentials, unrestricted tenant data, the
+Administrative database, or Kernel action APIs. Its output is untrusted
+advice. `ReopenAssessment` is not a reopen; `ReopenRecord` is created only by
+an authorized Administrative path.
+
+`OUTCOME_UNKNOWN` first follows Kernel historical execution/read-back
+reconciliation. Investigation is allowed only when an explicit reconciliation
+reference shows that an Administrative-level ambiguity remains. A model
+opinion cannot substitute for provider evidence. The request boundary verifies
+the reference against the case's persisted Kernel execution projection and a
+terminal Kernel recovery resolution; an arbitrary caller-supplied string is not
+accepted as reconciliation evidence.
+
+Every reopen must advance the single existing `authority_epoch`, preserve old
+Effect/Outcome/Commitment history, and fence stale authorization by epoch.
+Case completion, responsibility discharge, and reopen remain separate
+transitions.
+
+## 11. Invalid shortcuts
 
 The implementation must reject or fail closed on at least these semantic shortcuts:
 
@@ -244,9 +301,14 @@ REOPEN_REQUIRED -> new effect without fresh closure
 commitment candidate -> persistent responsibility without qualification/admission
 transport accepted -> human read
 workflow return -> responsibility discharge
+investigation proposal -> Decision / Authorization / Work
+reframing proposal -> case mutation
+reopen recommendation -> RealityBoundary
+OUTCOME_UNKNOWN -> model guess
+old authority epoch -> new physical effect
 ```
 
-## 11. Evidence required for closure
+## 12. Evidence required for closure
 
 A case may be declared complete only when the current case kind's obligation set is satisfied with the required proof mode and no blocking reconciliation difference remains.
 
