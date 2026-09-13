@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from fastapi import FastAPI
 
+from .operations import projection as _projection
 from .operations.administration import build_administration_router
 from .operations.cases import build_case_router
 from .operations.commitments import build_commitment_router
@@ -33,14 +34,6 @@ from .operations.models import (
     ReopenAssessmentBody,
     ReopenCaseBody,
 )
-from .operations.projection import (
-    authority_snapshot as _authority_snapshot_impl,
-    case_completion_assessment as _case_completion_assessment,
-    dedupe_json_records as _dedupe_json_records,
-    kernel_projection_snapshot as _kernel_projection_snapshot,
-    responsibility_snapshot as _responsibility_snapshot_impl,
-    termination_snapshot as _termination_snapshot,
-)
 from .operations.runtime import OperationsRuntime, build_operations_runtime
 from .operations.transactions import build_transaction_router
 
@@ -70,6 +63,13 @@ _commitment_service = _runtime.commitment_service
 _investigations = _runtime.investigations
 _investigation_service = _runtime.investigation_service
 
+# Preserve helper names previously defined by operations_api.py without
+# keeping their implementation in the HTTP composition root.
+_case_completion_assessment = _projection.case_completion_assessment
+_dedupe_json_records = _projection.dedupe_json_records
+_kernel_projection_snapshot = _projection.kernel_projection_snapshot
+_termination_snapshot = _projection.termination_snapshot
+
 
 def _actor(request):
     return _runtime.actor(request)
@@ -84,11 +84,11 @@ def _require_intake_review(actor) -> None:
 
 
 def _authority_snapshot(case):
-    return _authority_snapshot_impl(_runtime, case)
+    return _projection.authority_snapshot(_runtime, case)
 
 
 def _responsibility_snapshot(case, obligation_set, completion, projections):
-    return _responsibility_snapshot_impl(
+    return _projection.responsibility_snapshot(
         _runtime,
         case,
         obligation_set,
