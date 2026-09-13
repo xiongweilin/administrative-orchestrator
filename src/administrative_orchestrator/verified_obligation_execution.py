@@ -27,17 +27,6 @@ if TYPE_CHECKING:
     from .onboarding_execution import OnboardingExecutionEngine
 
 
-class FinancialQualificationPending(TransitionError):
-    """Execution is authorized but must wait for current qualification evidence."""
-
-    def __init__(self, missing: tuple[str, ...]) -> None:
-        self.missing = missing
-        super().__init__(
-            "financial execution requires current qualified assessments: "
-            + ", ".join(missing)
-        )
-
-
 class VerifiedObligationExecutor:
     """Drive the generic verified-effect lifecycle through domain-owned hooks.
 
@@ -70,14 +59,7 @@ class VerifiedObligationExecutor:
             return owner._reopen_for_governance(case, governance)
 
         if case.status == CaseStatus.AUTHORIZED:
-            try:
-                owner._plan_current_effects(case)
-            except FinancialQualificationPending:
-                # Qualification is an expected asynchronous prerequisite. Keep
-                # the authorization intact and let the durable workflow wait;
-                # the qualification repository emits a case_changed wake-up
-                # when the evidence is committed.
-                return case
+            owner._plan_current_effects(case)
             executing = begin_execution(case)
             owner._persist_case_transition(case, executing, "case.execution_started")
             case = executing
@@ -372,4 +354,4 @@ class VerifiedObligationExecutor:
         return "incomplete" if incomplete else "verified"
 
 
-__all__ = ["FinancialQualificationPending", "VerifiedObligationExecutor"]
+__all__ = ["VerifiedObligationExecutor"]
