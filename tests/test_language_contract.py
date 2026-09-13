@@ -1,6 +1,5 @@
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[1]
 CANONICAL_LANGUAGE_FILES = (
     ROOT / "docs/contracts/domain-model.md",
