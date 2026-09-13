@@ -1,6 +1,37 @@
 # administrative-orchestrator
 
+[![CI](https://github.com/xiongweilin/administrative-orchestrator/actions/workflows/ci.yml/badge.svg)](https://github.com/xiongweilin/administrative-orchestrator/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE) [![Python 3.12+](https://img.shields.io/badge/Python-3.12%2B-blue.svg)](pyproject.toml)
+
 A reference system for governed administrative automation: trusted intake, organizational authority, durable execution, reality verification, completion, reconciliation, commitments, and governed communication.
+
+## Concrete workflow: employee onboarding
+
+Suppose a manager requests employee onboarding through an authenticated organizational channel.
+
+A useful automation system cannot safely jump from the request directly to "create accounts." It must determine what was actually requested, which facts are authoritative, whether the requester currently has the required organizational authority, which obligations must be satisfied, which external effects are permitted, and whether those effects really happened.
+
+This repository carries that workflow as an explicit chain:
+
+```text
+authenticated request
+  -> preserve source/evidence lineage
+  -> qualify the request into an AdministrativeCase
+  -> resolve current organizational identity and authority
+  -> evaluate current policy and approval requirements
+  -> derive onboarding obligations
+  -> mint bounded Administrative execution authorization
+  -> hand durable Work to Agent Kernel
+  -> execute approved HRIS/IAM effects
+  -> read authoritative external state back
+  -> verify required postconditions
+  -> complete only when the obligations are actually satisfied
+```
+
+A provider returning success is not enough. An approval is not execution authority. AI confidence is not an organizational fact. A completed workflow run is not proof that responsibility has been discharged.
+
+The same model is reused for offboarding, HRIS/IAM fact refresh, procurement and invoice preparation, expenses, commitments, governed communication, and Operations review.
+
+## What this repository owns
 
 The repository owns the **Administrative domain**. It turns organizational input into durable administrative matters and carries them through evidence, facts, policy, authority, obligations, bounded action, verification, completion, and reopen. It is not a chatbot, not a generic agent runtime, and not a replacement for authoritative HR, finance, IAM, messaging, document, or calendar systems.
 
@@ -280,3 +311,7 @@ Recorded staging evidence:
 The accepted M9 tag remains `m9-accepted-2026-09-13`. Later documentation or language cleanup does not move that acceptance boundary.
 
 For design rationale, see ADRs 0001–0006. For historical delivery plans, see `docs/milestones/`. For current product meaning, return to `docs/contracts/domain-model.md` and `docs/architecture.md`.
+
+## Contributing and security
+
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) for contribution boundaries and [`SECURITY.md`](SECURITY.md) for private security reporting guidance.
