@@ -287,7 +287,7 @@ Production does not derive the Kernel revision from prose. The deployment-level 
 Current promoted baseline:
 
 ```text
-706cb3514c7edd030518f016a8f9b232b98f8166
+17acfba8338683bdb0f3d1c93aa671778603482a
 ```
 
 Repository tests guard the mutable production/CI pin surfaces against drifting apart.

@@ -5,7 +5,6 @@ import os
 from pathlib import Path
 
 import httpx
-from kernel_cutover_stack import IAM_CAPABILITY, SandboxAdministrativeProvider
 from agent_kernel.core.models import Event
 from agent_kernel.core.reconciliation_repeatability import (
     ReconciliationRepeatabilityConfiguration,
@@ -22,6 +21,7 @@ from agent_kernel.responsibility.domain_effect_authorization import (
 from agent_kernel.stores.invocation_specification import (
     InvocationSpecificationSQLiteStateStore,
 )
+from kernel_cutover_stack import IAM_CAPABILITY, SandboxAdministrativeProvider
 
 EFFECT_PROVIDERS = {
     "provider:admin-e2e:hris": (
