@@ -230,6 +230,12 @@ services:
       args:
         AGENT_KERNEL_REF: ${AGENT_KERNEL_REF:?set AGENT_KERNEL_REF}
     image: administrative-agent-kernel:m9-staging
+    # Joining shared-net gives the kernel -- and therefore every service that
+    # shares its network namespace (operations-api, worker) -- a path to the
+    # observability collector by service name.
+    networks:
+      - default
+      - shared-net
     restart: unless-stopped
     environment:
       ADMIN_RUNTIME_PROFILE: staging
@@ -332,6 +338,8 @@ services:
     environment:
       <<: *admin-environment
       ADMIN_KERNEL_BASE_URL: http://127.0.0.1:8020
+      OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4318"
+      OTEL_SERVICE_NAME: "administrative-operations"
     volumes:
       - administrative-m9-intake-artifacts:/var/lib/administrative/intake-artifacts
       - feishu_secrets:/run/feishu-secrets:ro
