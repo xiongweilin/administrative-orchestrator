@@ -297,6 +297,16 @@ services:
 
   api:
     <<: *admin-common
+    # The api is the observed composition root. It joins shared-net so it can
+    # reach the observability stack's otel-collector by service name; the
+    # collector's OTLP ports are published on host loopback only.
+    networks:
+      - default
+      - shared-net
+    environment:
+      <<: *admin-environment
+      OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4318"
+      OTEL_SERVICE_NAME: "administrative-api"
     command: ["python", "-m", "uvicorn", "administrative_orchestrator.api_observed:app", "--host", "0.0.0.0", "--port", "8000"]
     env_file:
       - path: .env.m9-secrets
@@ -375,6 +385,10 @@ services:
     depends_on:
       operations-api:
         condition: service_healthy
+
+networks:
+  shared-net:
+    external: true
 
 volumes:
   administrative-m9-postgres:
