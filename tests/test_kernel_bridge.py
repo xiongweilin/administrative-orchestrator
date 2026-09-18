@@ -156,8 +156,8 @@ def _compatibility(
     evidence: bool = False,
 ) -> KernelContractIdentity:
     return KernelContractIdentity(
-        catalog_version="portable-runtime-contracts-v1",
-        owner="portable-runtime/contracts",
+        catalog_version="agent-kernel-contracts-v1",
+        owner="agent-kernel/contracts",
         runtime_protocol="2.0",
         persistent_responsibility_contract="persistent-responsibility-v1",
         domain_responsibility_proposal_contract="domain-responsibility-proposal-v1",
@@ -316,8 +316,8 @@ def _catalog(
             "resolution": "bounded-domain-effect-resolution-v1",
         }
     raw: dict[str, object] = {
-        "catalog_version": "portable-runtime-contracts-v1",
-        "owner": "portable-runtime/contracts",
+        "catalog_version": "agent-kernel-contracts-v1",
+        "owner": "agent-kernel/contracts",
         "runtime_protocol": "2.0",
         "contracts": contracts,
     }

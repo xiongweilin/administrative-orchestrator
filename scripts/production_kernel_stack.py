@@ -4,30 +4,30 @@ import os
 from pathlib import Path
 
 import httpx
-from portable_runtime.core.capabilities import (
+from agent_kernel.core.capabilities import (
     CapabilityRequest,
     CapabilityResult,
     InvocationContext,
     ProviderDescriptor,
     ProviderHealth,
 )
-from portable_runtime.core.capability_contract import CapabilityContract, CapabilityContractRegistry
-from portable_runtime.core.provider_semantics import ProviderSemanticContract
-from portable_runtime.core.reconciliation_repeatability import (
+from agent_kernel.core.capability_contract import CapabilityContract, CapabilityContractRegistry
+from agent_kernel.core.provider_semantics import ProviderSemanticContract
+from agent_kernel.core.reconciliation_repeatability import (
     ReconciliationRepeatabilityConfiguration,
 )
-from portable_runtime.core.registry import ProviderRegistry
-from portable_runtime.core.reliability import ReliabilityControls
-from portable_runtime.core.runtime import Runtime
-from portable_runtime.public_contracts.domain_effect import (
+from agent_kernel.core.registry import ProviderRegistry
+from agent_kernel.core.reliability import ReliabilityControls
+from agent_kernel.core.runtime import Runtime
+from agent_kernel.public_contracts.domain_effect import (
     BoundedDomainEffectExecutionProfile,
     BoundedDomainEffectExecutionService,
 )
-from portable_runtime.records.open_validation import ClosedVerificationResult
-from portable_runtime.responsibility.domain_effect_verified_outcome import (
+from agent_kernel.records.open_validation import ClosedVerificationResult
+from agent_kernel.responsibility.domain_effect_verified_outcome import (
     domain_effect_verification_capability,
 )
-from portable_runtime.stores.bounded_domain_effect_recovery import (
+from agent_kernel.stores.bounded_domain_effect_recovery import (
     BoundedDomainEffectRecoverySQLiteStateStore,
 )
 
@@ -314,9 +314,9 @@ def build() -> tuple[Runtime, BoundedDomainEffectExecutionService]:
         raise RuntimeError(
             "production Kernel stack requires ADMIN_RUNTIME_PROFILE=staging or production"
         )
-    state_path = os.getenv("PORTABLE_RUNTIME_ADMIN_PRODUCTION_STATE_PATH", "").strip()
+    state_path = os.getenv("AGENT_KERNEL_ADMIN_PRODUCTION_STATE_PATH", "").strip()
     if not state_path:
-        raise RuntimeError("PORTABLE_RUNTIME_ADMIN_PRODUCTION_STATE_PATH is required")
+        raise RuntimeError("AGENT_KERNEL_ADMIN_PRODUCTION_STATE_PATH is required")
     communication_gateway_base_url = getattr(
         settings, "communication_gateway_base_url", ""
     ).strip()

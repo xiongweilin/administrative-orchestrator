@@ -30,9 +30,9 @@ def main() -> int:
 
 
 def _validate_kernel_state_path() -> Path:
-    raw = os.getenv("PORTABLE_RUNTIME_ADMIN_PRODUCTION_STATE_PATH", "").strip()
+    raw = os.getenv("AGENT_KERNEL_ADMIN_PRODUCTION_STATE_PATH", "").strip()
     if not raw:
-        raise ProductionReadinessError("PORTABLE_RUNTIME_ADMIN_PRODUCTION_STATE_PATH is required")
+        raise ProductionReadinessError("AGENT_KERNEL_ADMIN_PRODUCTION_STATE_PATH is required")
     path = Path(raw).expanduser()
     if not path.is_absolute():
         raise ProductionReadinessError("production Kernel state path must be absolute")

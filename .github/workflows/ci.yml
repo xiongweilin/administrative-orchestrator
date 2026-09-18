@@ -137,11 +137,11 @@ jobs:
         env:
           ADMIN_SANDBOX_DATABASE_URL: sqlite+pysqlite:///./kernel-cutover-sandbox.db
           ADMIN_SANDBOX_BASE_URL: http://127.0.0.1:8010
-          PORTABLE_RUNTIME_RESPONSIBILITY_ADMISSION_PROFILE: administrative-public-v3
-          PORTABLE_RUNTIME_BOUNDED_DOMAIN_EFFECT_FACTORY: scripts.kernel_cutover_stack:build
-          PORTABLE_RUNTIME_ADMIN_E2E_STATE_PATH: ./kernel-cutover-kernel.db
-          PORTABLE_RUNTIME_ADMIN_E2E_PRE_RECEIPT_FAIL_ONCE_PATH: ./kernel-pre-receipt-fault.marker
-          PORTABLE_RUNTIME_ADMIN_E2E_PRE_RECEIPT_FAIL_SUBJECT: employee:kernel-pre-receipt-crash
+          AGENT_KERNEL_RESPONSIBILITY_ADMISSION_PROFILE: administrative-public-v3
+          AGENT_KERNEL_BOUNDED_DOMAIN_EFFECT_FACTORY: scripts.kernel_cutover_stack:build
+          AGENT_KERNEL_ADMIN_E2E_STATE_PATH: ./kernel-cutover-kernel.db
+          AGENT_KERNEL_ADMIN_E2E_PRE_RECEIPT_FAIL_ONCE_PATH: ./kernel-pre-receipt-fault.marker
+          AGENT_KERNEL_ADMIN_E2E_PRE_RECEIPT_FAIL_SUBJECT: employee:kernel-pre-receipt-crash
         run: |
           rm -f kernel-cutover-sandbox.db kernel-cutover-kernel.db kernel-cutover-kernel.db-wal kernel-cutover-kernel.db-shm kernel-pre-receipt-fault.marker
           uv run uvicorn administrative_orchestrator.sandbox:app --host 127.0.0.1 --port 8010 >sandbox.log 2>&1 &
@@ -151,7 +151,7 @@ jobs:
             sleep 0.5
           done
           curl --fail --silent http://127.0.0.1:8010/healthz >/dev/null
-          uv run uvicorn portable_runtime.public_contracts.http:create_configured_public_app --factory --host 127.0.0.1 --port 8020 >kernel.log 2>&1 &
+          uv run uvicorn agent_kernel.public_contracts.http:create_configured_public_app --factory --host 127.0.0.1 --port 8020 >kernel.log 2>&1 &
           echo $! > kernel.pid
           for i in {1..40}; do
             if curl --fail --silent http://127.0.0.1:8020/v1/contracts >/dev/null; then break; fi
@@ -169,11 +169,11 @@ jobs:
           ADMIN_SANDBOX_BASE_URL: http://127.0.0.1:8010
           ADMIN_LOST_ACK_DB_PATH: ./kernel-lost-ack-admin.db
           ADMIN_LOST_ACK_RECEIPT_PATH: ./kernel-lost-ack-first-receipt.json
-          PORTABLE_RUNTIME_RESPONSIBILITY_ADMISSION_PROFILE: administrative-public-v3
-          PORTABLE_RUNTIME_BOUNDED_DOMAIN_EFFECT_FACTORY: scripts.kernel_cutover_stack:build
-          PORTABLE_RUNTIME_ADMIN_E2E_STATE_PATH: ./kernel-cutover-kernel.db
-          PORTABLE_RUNTIME_ADMIN_E2E_PRE_RECEIPT_FAIL_ONCE_PATH: ./kernel-pre-receipt-fault.marker
-          PORTABLE_RUNTIME_ADMIN_E2E_PRE_RECEIPT_FAIL_SUBJECT: employee:kernel-pre-receipt-crash
+          AGENT_KERNEL_RESPONSIBILITY_ADMISSION_PROFILE: administrative-public-v3
+          AGENT_KERNEL_BOUNDED_DOMAIN_EFFECT_FACTORY: scripts.kernel_cutover_stack:build
+          AGENT_KERNEL_ADMIN_E2E_STATE_PATH: ./kernel-cutover-kernel.db
+          AGENT_KERNEL_ADMIN_E2E_PRE_RECEIPT_FAIL_ONCE_PATH: ./kernel-pre-receipt-fault.marker
+          AGENT_KERNEL_ADMIN_E2E_PRE_RECEIPT_FAIL_SUBJECT: employee:kernel-pre-receipt-crash
         run: |
           rm -f kernel-lost-ack-admin.db kernel-lost-ack-first-receipt.json lost-ack-phase1.log kernel-restart.log
           set +e
@@ -198,7 +198,7 @@ jobs:
             exit 1
           fi
 
-          uv run uvicorn portable_runtime.public_contracts.http:create_configured_public_app --factory --host 127.0.0.1 --port 8020 >kernel-restart.log 2>&1 &
+          uv run uvicorn agent_kernel.public_contracts.http:create_configured_public_app --factory --host 127.0.0.1 --port 8020 >kernel-restart.log 2>&1 &
           new_kernel_pid=$!
           echo "$new_kernel_pid" > kernel.pid
           if [ "$new_kernel_pid" = "$old_kernel_pid" ]; then
@@ -217,11 +217,11 @@ jobs:
           ADMIN_KERNEL_BASE_URL: http://127.0.0.1:8020
           ADMIN_SANDBOX_BASE_URL: http://127.0.0.1:8010
           ADMIN_PRE_RECEIPT_DB_PATH: ./kernel-pre-receipt-admin.db
-          PORTABLE_RUNTIME_RESPONSIBILITY_ADMISSION_PROFILE: administrative-public-v3
-          PORTABLE_RUNTIME_BOUNDED_DOMAIN_EFFECT_FACTORY: scripts.kernel_cutover_stack:build
-          PORTABLE_RUNTIME_ADMIN_E2E_STATE_PATH: ./kernel-cutover-kernel.db
-          PORTABLE_RUNTIME_ADMIN_E2E_PRE_RECEIPT_FAIL_ONCE_PATH: ./kernel-pre-receipt-fault.marker
-          PORTABLE_RUNTIME_ADMIN_E2E_PRE_RECEIPT_FAIL_SUBJECT: employee:kernel-pre-receipt-crash
+          AGENT_KERNEL_RESPONSIBILITY_ADMISSION_PROFILE: administrative-public-v3
+          AGENT_KERNEL_BOUNDED_DOMAIN_EFFECT_FACTORY: scripts.kernel_cutover_stack:build
+          AGENT_KERNEL_ADMIN_E2E_STATE_PATH: ./kernel-cutover-kernel.db
+          AGENT_KERNEL_ADMIN_E2E_PRE_RECEIPT_FAIL_ONCE_PATH: ./kernel-pre-receipt-fault.marker
+          AGENT_KERNEL_ADMIN_E2E_PRE_RECEIPT_FAIL_SUBJECT: employee:kernel-pre-receipt-crash
         run: |
           rm -f kernel-pre-receipt-admin.db pre-receipt-phase1.log kernel-pre-receipt-restart.log
           test ! -f kernel-pre-receipt-fault.marker
@@ -248,7 +248,7 @@ jobs:
             exit 1
           fi
 
-          uv run uvicorn portable_runtime.public_contracts.http:create_configured_public_app --factory --host 127.0.0.1 --port 8020 >kernel-pre-receipt-restart.log 2>&1 &
+          uv run uvicorn agent_kernel.public_contracts.http:create_configured_public_app --factory --host 127.0.0.1 --port 8020 >kernel-pre-receipt-restart.log 2>&1 &
           new_kernel_pid=$!
           echo "$new_kernel_pid" > kernel.pid
           if [ "$new_kernel_pid" = "$old_kernel_pid" ]; then
@@ -265,14 +265,14 @@ jobs:
       - name: Prove durable reconciliation identity survives fresh provider process
         env:
           ADMIN_SANDBOX_BASE_URL: http://127.0.0.1:8010
-          PORTABLE_RUNTIME_ADMIN_E2E_STATE_PATH: ./kernel-cutover-kernel.db
+          AGENT_KERNEL_ADMIN_E2E_STATE_PATH: ./kernel-cutover-kernel.db
         run: uv run python scripts/kernel_reconciliation_identity_e2e.py
       - name: Prove ambiguous provider result recovers across a fresh Kernel process exactly once
         env:
           ADMIN_KERNEL_BASE_URL: http://127.0.0.1:8020
           ADMIN_SANDBOX_BASE_URL: http://127.0.0.1:8010
           ADMIN_AMBIGUOUS_RECOVERY_DB_PATH: ./kernel-ambiguous-admin.db
-          PORTABLE_RUNTIME_ADMIN_E2E_RESULT_COMMIT_FAIL_ONCE_PATH: ./kernel-ambiguous-result.marker
+          AGENT_KERNEL_ADMIN_E2E_RESULT_COMMIT_FAIL_ONCE_PATH: ./kernel-ambiguous-result.marker
         run: |
           old_kernel_pid="$(cat kernel.pid)"
           kill "$old_kernel_pid"
@@ -286,11 +286,11 @@ jobs:
           fi
 
           rm -f kernel-ambiguous-admin.db kernel-ambiguous-kernel.db kernel-ambiguous-kernel.db-wal kernel-ambiguous-kernel.db-shm kernel-ambiguous-result.marker kernel-ambiguous-fault.log kernel-ambiguous-restart.log
-          PORTABLE_RUNTIME_RESPONSIBILITY_ADMISSION_PROFILE=administrative-public-v3 \
-          PORTABLE_RUNTIME_BOUNDED_DOMAIN_EFFECT_FACTORY=scripts.kernel_cutover_stack:build \
-          PORTABLE_RUNTIME_ADMIN_E2E_STATE_PATH=./kernel-ambiguous-kernel.db \
-          PORTABLE_RUNTIME_ADMIN_E2E_RESULT_COMMIT_FAIL_ONCE_PATH=./kernel-ambiguous-result.marker \
-          uv run uvicorn portable_runtime.public_contracts.http:create_configured_public_app --factory --host 127.0.0.1 --port 8020 >kernel-ambiguous-fault.log 2>&1 &
+          AGENT_KERNEL_RESPONSIBILITY_ADMISSION_PROFILE=administrative-public-v3 \
+          AGENT_KERNEL_BOUNDED_DOMAIN_EFFECT_FACTORY=scripts.kernel_cutover_stack:build \
+          AGENT_KERNEL_ADMIN_E2E_STATE_PATH=./kernel-ambiguous-kernel.db \
+          AGENT_KERNEL_ADMIN_E2E_RESULT_COMMIT_FAIL_ONCE_PATH=./kernel-ambiguous-result.marker \
+          uv run uvicorn agent_kernel.public_contracts.http:create_configured_public_app --factory --host 127.0.0.1 --port 8020 >kernel-ambiguous-fault.log 2>&1 &
           fault_kernel_pid=$!
           echo "$fault_kernel_pid" > kernel.pid
           for i in {1..40}; do
@@ -311,10 +311,10 @@ jobs:
             exit 1
           fi
 
-          PORTABLE_RUNTIME_RESPONSIBILITY_ADMISSION_PROFILE=administrative-public-v3 \
-          PORTABLE_RUNTIME_BOUNDED_DOMAIN_EFFECT_FACTORY=scripts.kernel_cutover_stack:build \
-          PORTABLE_RUNTIME_ADMIN_E2E_STATE_PATH=./kernel-ambiguous-kernel.db \
-          uv run uvicorn portable_runtime.public_contracts.http:create_configured_public_app --factory --host 127.0.0.1 --port 8020 >kernel-ambiguous-restart.log 2>&1 &
+          AGENT_KERNEL_RESPONSIBILITY_ADMISSION_PROFILE=administrative-public-v3 \
+          AGENT_KERNEL_BOUNDED_DOMAIN_EFFECT_FACTORY=scripts.kernel_cutover_stack:build \
+          AGENT_KERNEL_ADMIN_E2E_STATE_PATH=./kernel-ambiguous-kernel.db \
+          uv run uvicorn agent_kernel.public_contracts.http:create_configured_public_app --factory --host 127.0.0.1 --port 8020 >kernel-ambiguous-restart.log 2>&1 &
           recovered_kernel_pid=$!
           echo "$recovered_kernel_pid" > kernel.pid
           if [ "$recovered_kernel_pid" = "$fault_kernel_pid" ]; then

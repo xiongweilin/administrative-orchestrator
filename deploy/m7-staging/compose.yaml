@@ -22,7 +22,7 @@ x-admin-common: &admin-common
     ADMIN_EXTERNAL_EFFECTS_ENABLED: "true"
     ADMIN_KERNEL_BRIDGE_MODE: cutover
     ADMIN_KERNEL_BASE_URL: http://agent-kernel:8020
-    ADMIN_KERNEL_SUPPORTED_REVISION: ${AGENT_KERNEL_REF:-4a3a72c29b7b45dd164041e0baed3873b5a6d8c5}
+    ADMIN_KERNEL_SUPPORTED_REVISION: ${AGENT_KERNEL_REF:-17acfba8338683bdb0f3d1c93aa671778603482a}
     ADMIN_HRIS_SOURCE_KIND: odoo
     ADMIN_ODOO_BASE_URL: ${ADMIN_ODOO_BASE_URL:-http://odoo:8069}
     ADMIN_ODOO_DATABASE: ${ADMIN_ODOO_DATABASE:-m7_odoo}
@@ -194,7 +194,7 @@ services:
       context: ../..
       dockerfile: Dockerfile.kernel
       args:
-        AGENT_KERNEL_REF: ${AGENT_KERNEL_REF:-4a3a72c29b7b45dd164041e0baed3873b5a6d8c5}
+        AGENT_KERNEL_REF: ${AGENT_KERNEL_REF:-17acfba8338683bdb0f3d1c93aa671778603482a}
     image: administrative-agent-kernel:m7-staging
     restart: unless-stopped
     environment:
@@ -219,9 +219,9 @@ services:
       ADMIN_KEYCLOAK_VERIFIER_SECRET: ${ADMIN_KEYCLOAK_VERIFIER_SECRET:-m7-keycloak-verifier-secret}
       ADMIN_KEYCLOAK_REQUEST_REF_ATTRIBUTE: ${ADMIN_KEYCLOAK_REQUEST_REF_ATTRIBUTE:-administrative_request_ref}
       ADMIN_CONNECTOR_TIMEOUT_SECONDS: ${ADMIN_CONNECTOR_TIMEOUT_SECONDS:-10}
-      PORTABLE_RUNTIME_RESPONSIBILITY_ADMISSION_PROFILE: administrative-public-v2
-      PORTABLE_RUNTIME_BOUNDED_DOMAIN_EFFECT_FACTORY: scripts.production_kernel_stack:build
-      PORTABLE_RUNTIME_ADMIN_PRODUCTION_STATE_PATH: /var/lib/agent-kernel/bounded-effects.db
+      AGENT_KERNEL_RESPONSIBILITY_ADMISSION_PROFILE: administrative-public-v2
+      AGENT_KERNEL_BOUNDED_DOMAIN_EFFECT_FACTORY: scripts.production_kernel_stack:build
+      AGENT_KERNEL_ADMIN_PRODUCTION_STATE_PATH: /var/lib/agent-kernel/bounded-effects.db
     volumes:
       - administrative-m7-kernel-state:/var/lib/agent-kernel
     depends_on:

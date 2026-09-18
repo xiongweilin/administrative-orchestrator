@@ -18,10 +18,10 @@ This record separates evidence from the isolated task-scoped staging deployment,
 | PR #19 | MERGED — squash merge commit `e75d40b3ee867af6d9d3b8849b6259c271695a9c`; post-merge main CI and M5 Production Trust both passed |
 | Repository CI before PR #95 promotion | PASS; a new full Administrative CI/M5 run is required on the `fe4b3f4b…` pin |
 | Isolated real staging deployment | PASS — Administrative/API/worker/Operations/Kernel plus Odoo, Keycloak, gateway, and PostgreSQL services running during the recorded staging exercise |
-| Gate A exact production image/provenance | PASS — `administrative-agent-kernel:production` image `sha256:644bbf4f043021a1faab724d3a8b940afa1bcb4bdb1d4e09e9cbcbcdeb4f8910`; installed `portable-runtime` provenance resolves exactly to `fe4b3f4bf2e376bd7105caf7d15d77e2483c7197`; `/v1/contracts` returned `200` |
+| Gate A exact production image/provenance | PASS — `administrative-agent-kernel:production` image `sha256:644bbf4f043021a1faab724d3a8b940afa1bcb4bdb1d4e09e9cbcbcdeb4f8910`; installed `agent-kernel` provenance resolves exactly to `fe4b3f4bf2e376bd7105caf7d15d77e2483c7197`; `/v1/contracts` returned `200` |
 | Final Administrative app image | PASS — `administrative-orchestrator:production` image `sha256:03d8faa42fabb49fd15b0210597c33fdeea8156cbe18eb256b68d96b13f3e425`; API/Operations/worker were recreated from it and report the supported revision `fe4b3f4b…` |
 | Staging configuration | PRESENT in a task-scoped ignored file; secret values intentionally omitted from this record |
-| Historical promoted Kernel runtime | PASS for deployment identity — the tested healthy container resolved `portable-runtime` to `0233ba4e576b60a0702637bd93c764df9b0848d5` |
+| Historical promoted Kernel runtime | PASS for deployment identity — the tested healthy container resolved `agent-kernel` to `0233ba4e576b60a0702637bd93c764df9b0848d5` |
 | Current promoted Kernel runtime | PASS — final healthy container uses the exact fe4 image and the exact installed provenance above; production preflight passed with `kernel_revision=fe4b3f4b…` |
 | Existing local infrastructure | PRESERVED — no existing commerce, Dify, gateway, observability, or Odoo stack was stopped, replaced, or deleted |
 | Production preflight | PASS on the final Administrative app image and final staging configuration |
@@ -87,7 +87,7 @@ The following references are present only as names in the task-scoped local conf
 - `ADMIN_DATABASE_URL`
 - `ADMIN_WORKER_DATABASE_URL`
 - `ADMIN_DBOS_SYSTEM_DATABASE_URL`
-- `PORTABLE_RUNTIME_ADMIN_PRODUCTION_STATE_PATH`
+- `AGENT_KERNEL_ADMIN_PRODUCTION_STATE_PATH`
 
 ### Odoo reader/writer/verifier
 

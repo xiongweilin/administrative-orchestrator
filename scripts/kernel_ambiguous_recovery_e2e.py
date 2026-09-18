@@ -153,7 +153,7 @@ def _database_path() -> Path:
 
 
 def _fault_marker_path() -> Path:
-    return Path(os.environ["PORTABLE_RUNTIME_ADMIN_E2E_RESULT_COMMIT_FAIL_ONCE_PATH"]).resolve()
+    return Path(os.environ["AGENT_KERNEL_ADMIN_E2E_RESULT_COMMIT_FAIL_ONCE_PATH"]).resolve()
 
 
 def _store() -> SqlStore:

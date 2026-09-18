@@ -77,13 +77,13 @@ async def test_production_stack_registers_irreversible_reconcilable_profiles(
     monkeypatch, tmp_path
 ) -> None:
     domain_effect = pytest.importorskip(
-        "portable_runtime.public_contracts.domain_effect"
+        "agent_kernel.public_contracts.domain_effect"
     )
     import scripts.production_kernel_stack as stack
 
     monkeypatch.setattr(stack, "get_settings", _production_settings)
     monkeypatch.setenv(
-        "PORTABLE_RUNTIME_ADMIN_PRODUCTION_STATE_PATH",
+        "AGENT_KERNEL_ADMIN_PRODUCTION_STATE_PATH",
         str(tmp_path / "kernel-state.db"),
     )
     runtime, service = stack.build()

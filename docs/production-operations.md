@@ -67,7 +67,7 @@ The production control plane must satisfy all of these before startup:
 - `ADMIN_EXTERNAL_EFFECTS_ENABLED=true`;
 - `AGENT_KERNEL_REF` is the single deployment-level Kernel revision source;
 - `ADMIN_KERNEL_SUPPORTED_REVISION`, the Kernel image build argument, and
-  `PORTABLE_RUNTIME_BUILD_REVISION` all resolve from that same value;
+  `AGENT_KERNEL_BUILD_REVISION` all resolve from that same value;
 - readiness proves the running Kernel `/v1/contracts.build_revision` equals
   `AGENT_KERNEL_REF`; missing or mismatched revision fails closed;
 - `ADMIN_AUTO_CREATE_SCHEMA=false`; migrations run explicitly through Alembic;
@@ -76,7 +76,7 @@ The production control plane must satisfy all of these before startup:
 - authoritative reader, writer, and verifier credential references are configured;
 - writer and verifier identities/secrets are distinct;
 - durable external request-identity fields/attributes are configured;
-- `PORTABLE_RUNTIME_ADMIN_PRODUCTION_STATE_PATH` is an absolute path on durable single-writer storage.
+- `AGENT_KERNEL_ADMIN_PRODUCTION_STATE_PATH` is an absolute path on durable single-writer storage.
 
 The isolated M6 staging topology is separate from this production contract. It
 uses `ADMIN_RUNTIME_PROFILE=staging`, still requires OIDC and authority
@@ -269,8 +269,8 @@ Secret values belong in the deployment secret manager/environment. Domain record
 6. Start Agent Kernel at the exact `AGENT_KERNEL_REF` revision using the production bounded-effect factory:
 
    ```bash
-   PORTABLE_RUNTIME_BOUNDED_DOMAIN_EFFECT_FACTORY=scripts.production_kernel_stack:build \
-   python -m uvicorn portable_runtime.public_contracts.http:create_configured_public_app \
+   AGENT_KERNEL_BOUNDED_DOMAIN_EFFECT_FACTORY=scripts.production_kernel_stack:build \
+   python -m uvicorn agent_kernel.public_contracts.http:create_configured_public_app \
      --factory --host 0.0.0.0 --port 8020
    ```
 
@@ -394,7 +394,7 @@ Create an online consistent backup while the Kernel is running:
 
 ```bash
 uv run python scripts/kernel_state_backup.py backup \
-  "$PORTABLE_RUNTIME_ADMIN_PRODUCTION_STATE_PATH" \
+  "$AGENT_KERNEL_ADMIN_PRODUCTION_STATE_PATH" \
   /secure-backups/kernel-$(date -u +%Y%m%dT%H%M%SZ).db
 ```
 
@@ -420,7 +420,7 @@ Do not restore into a live Kernel writer.
    ```bash
    uv run python scripts/kernel_state_backup.py restore \
      /secure-backups/kernel-approved.db \
-     "$PORTABLE_RUNTIME_ADMIN_PRODUCTION_STATE_PATH" \
+     "$AGENT_KERNEL_ADMIN_PRODUCTION_STATE_PATH" \
      --force
    ```
 

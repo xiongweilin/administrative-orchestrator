@@ -4,8 +4,8 @@ ARG AGENT_KERNEL_REF
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PORTABLE_RUNTIME_BOUNDED_DOMAIN_EFFECT_FACTORY=scripts.production_kernel_stack:build \
-    PORTABLE_RUNTIME_BUILD_REVISION=${AGENT_KERNEL_REF}
+    AGENT_KERNEL_BOUNDED_DOMAIN_EFFECT_FACTORY=scripts.production_kernel_stack:build \
+    AGENT_KERNEL_BUILD_REVISION=${AGENT_KERNEL_REF}
 
 WORKDIR /app
 
@@ -22,4 +22,4 @@ RUN pip install --no-cache-dir . \
 
 EXPOSE 8020
 
-CMD ["python", "-m", "uvicorn", "portable_runtime.public_contracts.http:create_configured_public_app", "--factory", "--host", "0.0.0.0", "--port", "8020"]
+CMD ["python", "-m", "uvicorn", "agent_kernel.public_contracts.http:create_configured_public_app", "--factory", "--host", "0.0.0.0", "--port", "8020"]

@@ -37,7 +37,7 @@ def _projection() -> KernelShadowProjection:
         grant_id=uuid4(),
         intent_id=uuid4(),
         obligation_id=uuid4(),
-        contract_catalog="portable-runtime-contracts-v1",
+        contract_catalog="agent-kernel-contracts-v1",
         runtime_protocol="2.0",
         persistent_responsibility_contract="persistent-responsibility-v1",
         responsibility_payload={"id": "responsibility:admin:1"},

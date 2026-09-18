@@ -79,8 +79,8 @@
 ## Fix A — runtime revision invariant
 
 - Canonical deployment source: `AGENT_KERNEL_REF`.
-- Production wiring: `compose.production.yaml` requires `AGENT_KERNEL_REF` for Administrative expected revision, Kernel build arg, and runtime `PORTABLE_RUNTIME_BUILD_REVISION`; `Dockerfile.kernel` has no independent revision default; application Python has no hardcoded supported revision.
-- Runtime proof: Kernel `/v1/contracts` returned `build_revision=0bb90afa4cf8517018e3e5b3715da12d28908c79`, `owner=portable-runtime/contracts`, `catalog_version=portable-runtime-contracts-v1`, and `runtime_protocol=2.0`.
+- Production wiring: `compose.production.yaml` requires `AGENT_KERNEL_REF` for Administrative expected revision, Kernel build arg, and runtime `AGENT_KERNEL_BUILD_REVISION`; `Dockerfile.kernel` has no independent revision default; application Python has no hardcoded supported revision.
+- Runtime proof: Kernel `/v1/contracts` returned `build_revision=0bb90afa4cf8517018e3e5b3715da12d28908c79`, `owner=agent-kernel/contracts`, `catalog_version=agent-kernel-contracts-v1`, and `runtime_protocol=2.0`.
 - Readiness proof: Administrative API and Operations API `/readyz` both returned `status=ready` with `kernel_revision=0bb90afa4cf8517018e3e5b3715da12d28908c79`.
 - Discriminating tests: expected A/runtime A passes; expected A/runtime B fails; missing runtime revision fails in production; missing deployment revision fails closed.
 - Historical M6/M7 pins were left unchanged because they are recorded historical staging/workflow baselines, not the promoted M8 runtime source.

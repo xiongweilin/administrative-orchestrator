@@ -71,8 +71,8 @@ def test_production_control_plane_rejects_non_cutover_or_sqlite():
 
 def _kernel_identity(build_revision: str | None) -> KernelContractIdentity:
     return KernelContractIdentity(
-        catalog_version="portable-runtime-contracts-v1",
-        owner="portable-runtime/contracts",
+        catalog_version="agent-kernel-contracts-v1",
+        owner="agent-kernel/contracts",
         runtime_protocol="2.0",
         persistent_responsibility_contract="persistent-responsibility-v1",
         domain_responsibility_proposal_contract="domain-responsibility-proposal-v1",

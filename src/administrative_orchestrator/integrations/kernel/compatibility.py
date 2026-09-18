@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 
-EXPECTED_CATALOG_VERSION = "portable-runtime-contracts-v1"
-EXPECTED_OWNER = "portable-runtime/contracts"
+EXPECTED_CATALOG_VERSION = "agent-kernel-contracts-v1"
+EXPECTED_OWNER = "agent-kernel/contracts"
 EXPECTED_RUNTIME_PROTOCOL = "2.0"
 EXPECTED_PERSISTENT_RESPONSIBILITY = "persistent-responsibility-v1"
 EXPECTED_DOMAIN_RESPONSIBILITY_PROPOSAL = "domain-responsibility-proposal-v1"

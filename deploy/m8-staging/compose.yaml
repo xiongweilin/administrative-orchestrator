@@ -241,10 +241,10 @@ services:
       ADMIN_KEYCLOAK_VERIFIER_SECRET: ${ADMIN_KEYCLOAK_VERIFIER_SECRET:-m8-keycloak-verifier-secret}
       ADMIN_KEYCLOAK_REQUEST_REF_ATTRIBUTE: ${ADMIN_KEYCLOAK_REQUEST_REF_ATTRIBUTE:-administrative_request_ref}
       ADMIN_CONNECTOR_TIMEOUT_SECONDS: ${ADMIN_CONNECTOR_TIMEOUT_SECONDS:-10}
-      PORTABLE_RUNTIME_RESPONSIBILITY_ADMISSION_PROFILE: administrative-public-v3
-      PORTABLE_RUNTIME_BOUNDED_DOMAIN_EFFECT_FACTORY: scripts.production_kernel_stack:build
-      PORTABLE_RUNTIME_ADMIN_PRODUCTION_STATE_PATH: /var/lib/agent-kernel/bounded-effects.db
-      PORTABLE_RUNTIME_BUILD_REVISION: ${AGENT_KERNEL_REF:?set AGENT_KERNEL_REF}
+      AGENT_KERNEL_RESPONSIBILITY_ADMISSION_PROFILE: administrative-public-v3
+      AGENT_KERNEL_BOUNDED_DOMAIN_EFFECT_FACTORY: scripts.production_kernel_stack:build
+      AGENT_KERNEL_ADMIN_PRODUCTION_STATE_PATH: /var/lib/agent-kernel/bounded-effects.db
+      AGENT_KERNEL_BUILD_REVISION: ${AGENT_KERNEL_REF:?set AGENT_KERNEL_REF}
     volumes:
       - administrative-m8-kernel-state:/var/lib/agent-kernel
     depends_on:

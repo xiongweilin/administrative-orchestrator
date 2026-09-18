@@ -6,20 +6,20 @@ from pathlib import Path
 
 import httpx
 from kernel_cutover_stack import IAM_CAPABILITY, SandboxAdministrativeProvider
-from portable_runtime.core.models import Event
-from portable_runtime.core.reconciliation_repeatability import (
+from agent_kernel.core.models import Event
+from agent_kernel.core.reconciliation_repeatability import (
     ReconciliationRepeatabilityConfiguration,
     reconciliation_repeatability_authority_from_dispatch,
 )
-from portable_runtime.core.registry import ProviderRegistry
-from portable_runtime.governance.dispatch import DISPATCH_COMMIT_EVENT
-from portable_runtime.governance.provider_execution_binding import (
+from agent_kernel.core.registry import ProviderRegistry
+from agent_kernel.governance.dispatch import DISPATCH_COMMIT_EVENT
+from agent_kernel.governance.provider_execution_binding import (
     provider_execution_binding_from_dispatch,
 )
-from portable_runtime.responsibility.domain_effect_authorization import (
+from agent_kernel.responsibility.domain_effect_authorization import (
     ADMINISTRATIVE_HRIS_EMPLOYEE_CREATE,
 )
-from portable_runtime.stores.invocation_specification import (
+from agent_kernel.stores.invocation_specification import (
     InvocationSpecificationSQLiteStateStore,
 )
 
@@ -40,9 +40,9 @@ EFFECT_PROVIDERS = {
 
 
 def _kernel_state_path() -> Path:
-    value = os.environ.get("PORTABLE_RUNTIME_ADMIN_E2E_STATE_PATH")
+    value = os.environ.get("AGENT_KERNEL_ADMIN_E2E_STATE_PATH")
     if not value:
-        raise AssertionError("PORTABLE_RUNTIME_ADMIN_E2E_STATE_PATH is required")
+        raise AssertionError("AGENT_KERNEL_ADMIN_E2E_STATE_PATH is required")
     return Path(value).resolve()
 
 

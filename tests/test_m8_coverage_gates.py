@@ -377,8 +377,8 @@ def test_kernel_runtime_readiness_requires_the_pinned_revision() -> None:
         kernel_supported_revision="expected",
     )
     identity = KernelContractIdentity(
-        catalog_version="portable-runtime-contracts-v1",
-        owner="portable-runtime/contracts",
+        catalog_version="agent-kernel-contracts-v1",
+        owner="agent-kernel/contracts",
         runtime_protocol="2.0",
         persistent_responsibility_contract="persistent-responsibility-v1",
         domain_responsibility_proposal_contract="domain-responsibility-proposal-v1",

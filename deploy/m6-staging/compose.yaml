@@ -180,7 +180,7 @@ services:
       context: ../..
       dockerfile: Dockerfile.kernel
       args:
-        AGENT_KERNEL_REF: ${AGENT_KERNEL_REF:-fe4b3f4bf2e376bd7105caf7d15d77e2483c7197}
+        AGENT_KERNEL_REF: ${AGENT_KERNEL_REF:-17acfba8338683bdb0f3d1c93aa671778603482a}
     image: administrative-agent-kernel:m6-staging
     restart: unless-stopped
     environment:
@@ -205,9 +205,9 @@ services:
       ADMIN_KEYCLOAK_VERIFIER_SECRET: ${ADMIN_KEYCLOAK_VERIFIER_SECRET:-m6-keycloak-verifier-secret}
       ADMIN_KEYCLOAK_REQUEST_REF_ATTRIBUTE: ${ADMIN_KEYCLOAK_REQUEST_REF_ATTRIBUTE:-administrative_request_ref}
       ADMIN_CONNECTOR_TIMEOUT_SECONDS: ${ADMIN_CONNECTOR_TIMEOUT_SECONDS:-10}
-      PORTABLE_RUNTIME_RESPONSIBILITY_ADMISSION_PROFILE: administrative-public-v2
-      PORTABLE_RUNTIME_BOUNDED_DOMAIN_EFFECT_FACTORY: scripts.production_kernel_stack:build
-      PORTABLE_RUNTIME_ADMIN_PRODUCTION_STATE_PATH: /var/lib/agent-kernel/bounded-effects.db
+      AGENT_KERNEL_RESPONSIBILITY_ADMISSION_PROFILE: administrative-public-v2
+      AGENT_KERNEL_BOUNDED_DOMAIN_EFFECT_FACTORY: scripts.production_kernel_stack:build
+      AGENT_KERNEL_ADMIN_PRODUCTION_STATE_PATH: /var/lib/agent-kernel/bounded-effects.db
     volumes:
       - administrative-m6-kernel-state:/var/lib/agent-kernel
     depends_on:

@@ -6,41 +6,41 @@ from typing import Any
 from uuid import NAMESPACE_URL, UUID, uuid5
 
 import httpx
-from portable_runtime.core.capabilities import (
+from agent_kernel.core.capabilities import (
     CapabilityRequest,
     CapabilityResult,
     InvocationContext,
     ProviderDescriptor,
     ProviderHealth,
 )
-from portable_runtime.core.capability_contract import CapabilityContract, CapabilityContractRegistry
-from portable_runtime.core.models import StepAttempt
-from portable_runtime.core.provider_semantics import ProviderSemanticContract
-from portable_runtime.core.reconciliation_repeatability import (
+from agent_kernel.core.capability_contract import CapabilityContract, CapabilityContractRegistry
+from agent_kernel.core.models import StepAttempt
+from agent_kernel.core.provider_semantics import ProviderSemanticContract
+from agent_kernel.core.reconciliation_repeatability import (
     ReconciliationRepeatabilityConfiguration,
 )
-from portable_runtime.core.registry import ProviderRegistry
-from portable_runtime.core.reliability import ReliabilityControls
-from portable_runtime.core.runtime import Runtime
-from portable_runtime.public_contracts.domain_effect import (
+from agent_kernel.core.registry import ProviderRegistry
+from agent_kernel.core.reliability import ReliabilityControls
+from agent_kernel.core.runtime import Runtime
+from agent_kernel.public_contracts.domain_effect import (
     BoundedDomainEffectExecutionProfile,
     BoundedDomainEffectExecutionService,
 )
-from portable_runtime.records.open_validation import ClosedVerificationResult
-from portable_runtime.responsibility.domain_effect_authorization import (
+from agent_kernel.records.open_validation import ClosedVerificationResult
+from agent_kernel.responsibility.domain_effect_authorization import (
     ADMINISTRATIVE_HRIS_EMPLOYEE_CREATE,
 )
-from portable_runtime.responsibility.domain_effect_verified_outcome import (
+from agent_kernel.responsibility.domain_effect_verified_outcome import (
     domain_effect_verification_capability,
 )
-from portable_runtime.stores.bounded_domain_effect_recovery import (
+from agent_kernel.stores.bounded_domain_effect_recovery import (
     BoundedDomainEffectRecoveryInMemoryStateStore,
     BoundedDomainEffectRecoverySQLiteStateStore,
 )
 
 SANDBOX_BASE_URL = os.getenv("ADMIN_SANDBOX_BASE_URL", "http://127.0.0.1:8010").rstrip("/")
 IAM_CAPABILITY = "administrative.iam.identity.create.v1"
-RESULT_COMMIT_FAIL_ONCE_ENV = "PORTABLE_RUNTIME_ADMIN_E2E_RESULT_COMMIT_FAIL_ONCE_PATH"
+RESULT_COMMIT_FAIL_ONCE_ENV = "AGENT_KERNEL_ADMIN_E2E_RESULT_COMMIT_FAIL_ONCE_PATH"
 
 
 def sandbox_effect_id(capability: str, subject_ref: str) -> UUID:
@@ -303,8 +303,8 @@ class PreReceiptCrashBoundedDomainEffectExecutionService(BoundedDomainEffectExec
     """CI-only later crash seam after durable effect success but before bounded receipt."""
 
     async def _verify_and_complete(self, command, *args, **kwargs):
-        marker_path = os.getenv("PORTABLE_RUNTIME_ADMIN_E2E_PRE_RECEIPT_FAIL_ONCE_PATH")
-        target_subject = os.getenv("PORTABLE_RUNTIME_ADMIN_E2E_PRE_RECEIPT_FAIL_SUBJECT")
+        marker_path = os.getenv("AGENT_KERNEL_ADMIN_E2E_PRE_RECEIPT_FAIL_ONCE_PATH")
+        target_subject = os.getenv("AGENT_KERNEL_ADMIN_E2E_PRE_RECEIPT_FAIL_SUBJECT")
         if marker_path and target_subject and command.subject_ref == target_subject:
             marker = Path(marker_path)
             if not marker.exists():
@@ -344,7 +344,7 @@ def _repeat_safe_reconciliation() -> ReconciliationRepeatabilityConfiguration:
 
 
 def build() -> tuple[Runtime, BoundedDomainEffectExecutionService]:
-    state_path = os.getenv("PORTABLE_RUNTIME_ADMIN_E2E_STATE_PATH")
+    state_path = os.getenv("AGENT_KERNEL_ADMIN_E2E_STATE_PATH")
     store = (
         ResultCommitFailOnceSQLiteStateStore(Path(state_path))
         if state_path
