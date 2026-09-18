@@ -187,14 +187,14 @@ jobs:
           rm -f kernel-cutover-sandbox.db kernel-cutover-kernel.db kernel-cutover-kernel.db-wal kernel-cutover-kernel.db-shm kernel-pre-receipt-fault.marker
           uv run uvicorn administrative_orchestrator.sandbox:app --host 127.0.0.1 --port 8010 >sandbox.log 2>&1 &
           echo $! > sandbox.pid
-          for i in {1..40}; do
+          for _ in {1..40}; do
             if curl --fail --silent http://127.0.0.1:8010/healthz >/dev/null; then break; fi
             sleep 0.5
           done
           curl --fail --silent http://127.0.0.1:8010/healthz >/dev/null
           uv run uvicorn agent_kernel.public_contracts.http:create_configured_public_app --factory --host 127.0.0.1 --port 8020 >kernel.log 2>&1 &
           echo $! > kernel.pid
-          for i in {1..40}; do
+          for _ in {1..40}; do
             if curl --fail --silent http://127.0.0.1:8020/v1/contracts >/dev/null; then break; fi
             sleep 0.5
           done
@@ -230,7 +230,7 @@ jobs:
 
           old_kernel_pid="$(cat kernel.pid)"
           kill "$old_kernel_pid"
-          for i in {1..40}; do
+          for _ in {1..40}; do
             if ! kill -0 "$old_kernel_pid" 2>/dev/null; then break; fi
             sleep 0.25
           done
@@ -246,7 +246,7 @@ jobs:
             echo "Kernel restart reused the same process id unexpectedly"
             exit 1
           fi
-          for i in {1..40}; do
+          for _ in {1..40}; do
             if curl --fail --silent http://127.0.0.1:8020/v1/contracts >/dev/null; then break; fi
             sleep 0.5
           done
@@ -280,7 +280,7 @@ jobs:
 
           old_kernel_pid="$(cat kernel.pid)"
           kill "$old_kernel_pid"
-          for i in {1..40}; do
+          for _ in {1..40}; do
             if ! kill -0 "$old_kernel_pid" 2>/dev/null; then break; fi
             sleep 0.25
           done
@@ -296,7 +296,7 @@ jobs:
             echo "pre-receipt Kernel restart reused the same process id unexpectedly"
             exit 1
           fi
-          for i in {1..40}; do
+          for _ in {1..40}; do
             if curl --fail --silent http://127.0.0.1:8020/v1/contracts >/dev/null; then break; fi
             sleep 0.5
           done
@@ -317,7 +317,7 @@ jobs:
         run: |
           old_kernel_pid="$(cat kernel.pid)"
           kill "$old_kernel_pid"
-          for i in {1..40}; do
+          for _ in {1..40}; do
             if ! kill -0 "$old_kernel_pid" 2>/dev/null; then break; fi
             sleep 0.25
           done
@@ -334,7 +334,7 @@ jobs:
           uv run uvicorn agent_kernel.public_contracts.http:create_configured_public_app --factory --host 127.0.0.1 --port 8020 >kernel-ambiguous-fault.log 2>&1 &
           fault_kernel_pid=$!
           echo "$fault_kernel_pid" > kernel.pid
-          for i in {1..40}; do
+          for _ in {1..40}; do
             if curl --fail --silent http://127.0.0.1:8020/v1/contracts >/dev/null; then break; fi
             sleep 0.5
           done
@@ -343,7 +343,7 @@ jobs:
           uv run python scripts/kernel_ambiguous_recovery_e2e.py phase1
 
           kill "$fault_kernel_pid"
-          for i in {1..40}; do
+          for _ in {1..40}; do
             if ! kill -0 "$fault_kernel_pid" 2>/dev/null; then break; fi
             sleep 0.25
           done
@@ -362,7 +362,7 @@ jobs:
             echo "ambiguous recovery restart reused the same process id unexpectedly"
             exit 1
           fi
-          for i in {1..40}; do
+          for _ in {1..40}; do
             if curl --fail --silent http://127.0.0.1:8020/v1/contracts >/dev/null; then break; fi
             sleep 0.5
           done

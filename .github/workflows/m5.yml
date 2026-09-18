@@ -147,14 +147,14 @@ jobs:
           rm -f m5-pinned-sandbox.db m5-pinned-kernel.db m5-pinned-kernel.db-wal m5-pinned-kernel.db-shm
           uv run uvicorn administrative_orchestrator.sandbox:app --host 127.0.0.1 --port 8010 >m5-pinned-sandbox.log 2>&1 &
           echo $! > m5-pinned-sandbox.pid
-          for i in {1..40}; do
+          for _ in {1..40}; do
             if curl --fail --silent http://127.0.0.1:8010/healthz >/dev/null; then break; fi
             sleep 0.5
           done
           curl --fail --silent http://127.0.0.1:8010/healthz >/dev/null
           uv run uvicorn agent_kernel.public_contracts.http:create_configured_public_app --factory --host 127.0.0.1 --port 8020 >m5-pinned-kernel.log 2>&1 &
           echo $! > m5-pinned-kernel.pid
-          for i in {1..40}; do
+          for _ in {1..40}; do
             if curl --fail --silent http://127.0.0.1:8020/v1/contracts >/dev/null; then break; fi
             sleep 0.5
           done
